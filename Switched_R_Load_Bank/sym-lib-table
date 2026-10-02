@@ -1,0 +1,4 @@
+(sym_lib_table
+  (version 7)
+  (lib (name "switched_R_load_symlib")(type "KiCad")(uri "${KIPRJMOD}/project_components/switched_R_load_symlib.kicad_sym")(options "")(descr ""))
+)
