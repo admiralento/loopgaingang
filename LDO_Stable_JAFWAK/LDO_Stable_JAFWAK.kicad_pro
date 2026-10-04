@@ -60,9 +60,15 @@
           "hatch_smoothing_level": 0,
           "hatch_smoothing_value": 0.1,
           "hatch_thickness": 1.0,
+<<<<<<< Updated upstream
           "min_clearance": 0.5,
           "min_island_area": 10.0,
           "min_thickness": 0.25,
+=======
+          "min_clearance": 0.254,
+          "min_island_area": 9.99999999996,
+          "min_thickness": 0.254,
+>>>>>>> Stashed changes
           "pad_connection": 1,
           "remove_islands": 0,
           "thermal_relief_gap": 0.5,
@@ -147,7 +153,7 @@
       "rules": {
         "max_error": 0.005,
         "min_clearance": 0.2032,
-        "min_connection": 0.0,
+        "min_connection": 0.2032,
         "min_copper_edge_clearance": 0.5,
         "min_groove_width": 0.0,
         "min_hole_clearance": 0.25,
@@ -159,7 +165,7 @@
         "min_text_height": 0.8,
         "min_text_thickness": 0.08,
         "min_through_hole_diameter": 0.3,
-        "min_track_width": 0.0,
+        "min_track_width": 0.2032,
         "min_via_annular_width": 0.1,
         "min_via_diameter": 0.5,
         "solder_mask_to_copper_clearance": 0.0,
@@ -213,6 +219,7 @@
         0.0,
         0.254,
         0.508,
+        0.762,
         1.016
       ],
       "tuning_pattern_settings": {
@@ -725,6 +732,12 @@
           "label": "Distrbuter Link 2",
           "name": "Distrbuter Link 2",
           "show": false
+        },
+        {
+          "group_by": false,
+          "label": "KiLib_Generator",
+          "name": "KiLib_Generator",
+          "show": false
         }
       ],
       "filter_string": "",
@@ -775,7 +788,11 @@
         "uuid": "e797984e-8841-4b55-a934-93c9429b6b10"
       }
     ],
+<<<<<<< Updated upstream
     "used_designators": "AD2,H1-8,JP1-12,R1-30,C1-16,Q1-10,#PWR1-51,J1-25,TP1-14,U1-8,#FLG1-9",
+=======
+    "used_designators": "AD2,H1-8,JP1-12,#FLG1-9,R1-30,J1-25,C1-19,Q1-10,#PWR1-53,TP1-15,U1-8",
+>>>>>>> Stashed changes
     "variants": []
   },
   "sheets": [
