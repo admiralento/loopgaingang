@@ -1485,7 +1485,7 @@
 		)
 		(uuid "50eb9b20-f04f-4968-b662-588ebe209eca")
 	)
-	(hierarchical_label "VIN"
+	(hierarchical_label "VS_BUFF"
 		(shape input)
 		(at 96.52 69.85 180)
 		(effects

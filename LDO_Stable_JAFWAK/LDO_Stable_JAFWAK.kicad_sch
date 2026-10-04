@@ -3586,7 +3586,7 @@
 			)
 		)
 	)
-	(global_label "VIN"
+	(global_label "VS_BUFF"
 		(shape input)
 		(at 116.84 140.97 0)
 		(fields_autoplaced yes)
@@ -3598,7 +3598,7 @@
 		)
 		(uuid "1ea252c8-1a46-4988-a352-e50bcb9dd3c1")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 122.8491 140.97 0)
+			(at 127.8686 140.97 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -5588,7 +5588,6 @@
 		(on_board yes)
 		(in_pos_files yes)
 		(dnp no)
-		(fields_autoplaced yes)
 		(uuid "9295b687-013e-4164-b93d-6b9a5be50a5e")
 		(property "Reference" "#PWR050"
 			(at 74.93 143.51 0)
@@ -5602,7 +5601,7 @@
 			)
 		)
 		(property "Value" "GND"
-			(at 74.93 142.24 0)
+			(at 78.232 138.176 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -7101,7 +7100,7 @@
 				(justify left)
 			)
 		)
-		(pin "VIN" input
+		(pin "VS_BUFF" input
 			(at 114.3 140.97 0)
 			(uuid "4fcfa66e-65c6-461e-a376-a50d6e009e4f")
 			(effects

@@ -1902,19 +1902,18 @@
 			(on_board yes)
 			(in_pos_files yes)
 			(duplicate_pin_numbers_are_jumpers no)
-			(property "Reference" "U"
-				(at 13.462 23.114 0)
+			(property "Reference" "U1"
+				(at 0 26.67 0)
 				(show_name no)
 				(do_not_autoplace no)
 				(effects
 					(font
 						(size 1.27 1.27)
 					)
-					(justify right)
 				)
 			)
 			(property "Value" "SU272AFJK_LDO"
-				(at 0.508 -23.622 0)
+				(at 0 24.13 0)
 				(show_name no)
 				(do_not_autoplace no)
 				(effects
@@ -1923,7 +1922,7 @@
 					)
 				)
 			)
-			(property "Footprint" ""
+			(property "Footprint" "Package_DFN_QFN:QFN-32-1EP_7x7mm_P0.65mm_EP5.4x5.4mm"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -2560,6 +2559,26 @@
 						)
 					)
 					(number "31"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+			(symbol "SU272AFJK_LDO_1_1"
+				(pin passive line
+					(at 0 -24.13 90)
+					(length 2.54)
+					(name "EP"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "33"
 						(effects
 							(font
 								(size 1.27 1.27)
@@ -4822,6 +4841,16 @@
 			(justify left bottom)
 		)
 		(uuid "de495e9f-722b-407f-80fd-410e54bd23ff")
+	)
+	(label "EP"
+		(at 167.64 110.49 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "e8ae292d-f2a4-41dd-9c7c-0455b66af3da")
 	)
 	(global_label "OUTA"
 		(shape input)
@@ -7771,6 +7800,9 @@
 		)
 		(pin "18"
 			(uuid "4da3818e-a138-4641-829f-bff70a8d159f")
+		)
+		(pin "33"
+			(uuid "db2e4bf5-221a-49a4-8d19-4a1e0078a273")
 		)
 		(instances
 			(project "LDO_Stable_JAFWAK"
