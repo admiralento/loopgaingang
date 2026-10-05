@@ -1497,6 +1497,17 @@
 				)
 			)
 		)
+		(property "KiLib_Generator" "SMD_2terminal_chip_molded"
+			(at 113.03 68.58 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "2"
 			(uuid "26171fcc-ea26-4d94-a783-845625665cf3")
 		)
@@ -1602,7 +1613,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "2e807b2c-9a5d-47d7-a34f-506b6184827c")
-		(property "Reference" "R18"
+		(property "Reference" "R11"
 			(at 105.41 114.2999 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -1701,6 +1712,17 @@
 				)
 			)
 		)
+		(property "KiLib_Generator" "SMD_2terminal_chip_molded"
+			(at 102.87 115.57 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "2"
 			(uuid "6e4bfb01-1e77-4c3e-b2de-419060f550b4")
 		)
@@ -1710,7 +1732,7 @@
 		(instances
 			(project "LDO_Stable_JAFWAK"
 				(path "/e797984e-8841-4b55-a934-93c9429b6b10/dc9a158e-4ee1-42ad-aacb-b9976914ef03"
-					(reference "R18")
+					(reference "R11")
 					(unit 1)
 				)
 			)
@@ -1806,7 +1828,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "4c22af17-6290-4007-8b3d-1d72b405fb47")
-		(property "Reference" "R25"
+		(property "Reference" "R16"
 			(at 158.75 67.3099 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -1905,6 +1927,17 @@
 				)
 			)
 		)
+		(property "KiLib_Generator" "SMD_2terminal_chip_molded"
+			(at 156.21 68.58 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "2"
 			(uuid "3f7b4779-33a8-4a80-9d21-3a86bd510ba7")
 		)
@@ -1914,7 +1947,7 @@
 		(instances
 			(project "LDO_Stable_JAFWAK"
 				(path "/e797984e-8841-4b55-a934-93c9429b6b10/dc9a158e-4ee1-42ad-aacb-b9976914ef03"
-					(reference "R25")
+					(reference "R16")
 					(unit 1)
 				)
 			)
@@ -1932,7 +1965,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "4f245eda-bb86-4b5c-a727-f04213e8c825")
-		(property "Reference" "Q9"
+		(property "Reference" "Q2"
 			(at 160.02 77.4699 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -1954,7 +1987,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "FDV305N:SOT95P240X111-3N"
+		(property "Footprint" "Package_TO_SOT_SMD:TSOT-23"
 			(at 153.67 78.74 0)
 			(hide yes)
 			(show_name no)
@@ -2081,7 +2114,7 @@
 		(instances
 			(project "LDO_Stable_JAFWAK"
 				(path "/e797984e-8841-4b55-a934-93c9429b6b10/dc9a158e-4ee1-42ad-aacb-b9976914ef03"
-					(reference "Q9")
+					(reference "Q2")
 					(unit 1)
 				)
 			)
@@ -2099,7 +2132,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "60f5b043-c437-4930-9b1b-354667bb6826")
-		(property "Reference" "R22"
+		(property "Reference" "R18"
 			(at 129.54 67.3099 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2198,6 +2231,17 @@
 				)
 			)
 		)
+		(property "KiLib_Generator" "SMD_2terminal_chip_molded"
+			(at 127 68.58 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "2"
 			(uuid "882936e0-dbee-41af-a72d-59979048f947")
 		)
@@ -2207,7 +2251,7 @@
 		(instances
 			(project "LDO_Stable_JAFWAK"
 				(path "/e797984e-8841-4b55-a934-93c9429b6b10/dc9a158e-4ee1-42ad-aacb-b9976914ef03"
-					(reference "R22")
+					(reference "R18")
 					(unit 1)
 				)
 			)
@@ -2225,7 +2269,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "74738e45-6778-4484-8cda-1f4b4e841e1b")
-		(property "Reference" "Q8"
+		(property "Reference" "Q3"
 			(at 137.16 77.4699 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2247,7 +2291,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "FDV305N:SOT95P240X111-3N"
+		(property "Footprint" "Package_TO_SOT_SMD:TSOT-23"
 			(at 130.81 78.74 0)
 			(hide yes)
 			(show_name no)
@@ -2374,7 +2418,7 @@
 		(instances
 			(project "LDO_Stable_JAFWAK"
 				(path "/e797984e-8841-4b55-a934-93c9429b6b10/dc9a158e-4ee1-42ad-aacb-b9976914ef03"
-					(reference "Q8")
+					(reference "Q3")
 					(unit 1)
 				)
 			)
@@ -2392,7 +2436,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "765731ff-239b-4860-baa8-af5151578933")
-		(property "Reference" "Q10"
+		(property "Reference" "Q1"
 			(at 180.34 77.4699 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2414,7 +2458,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "FDV305N:SOT95P240X111-3N"
+		(property "Footprint" "Package_TO_SOT_SMD:TSOT-23"
 			(at 173.99 78.74 0)
 			(hide yes)
 			(show_name no)
@@ -2541,7 +2585,7 @@
 		(instances
 			(project "LDO_Stable_JAFWAK"
 				(path "/e797984e-8841-4b55-a934-93c9429b6b10/dc9a158e-4ee1-42ad-aacb-b9976914ef03"
-					(reference "Q10")
+					(reference "Q1")
 					(unit 1)
 				)
 			)
@@ -2559,7 +2603,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "885628d8-34cb-4b0e-b820-fe9fc648a02f")
-		(property "Reference" "R23"
+		(property "Reference" "R8"
 			(at 139.7 114.2999 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2658,6 +2702,17 @@
 				)
 			)
 		)
+		(property "KiLib_Generator" "SMD_2terminal_chip_molded"
+			(at 137.16 115.57 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "2"
 			(uuid "0d892031-16ff-45e5-9e21-e6329f60c23d")
 		)
@@ -2667,7 +2722,7 @@
 		(instances
 			(project "LDO_Stable_JAFWAK"
 				(path "/e797984e-8841-4b55-a934-93c9429b6b10/dc9a158e-4ee1-42ad-aacb-b9976914ef03"
-					(reference "R23")
+					(reference "R8")
 					(unit 1)
 				)
 			)
@@ -2685,7 +2740,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "a234e1b7-c39f-4a4a-84f8-7c1d71abe288")
-		(property "Reference" "R17"
+		(property "Reference" "R20"
 			(at 93.98 67.3099 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2784,6 +2839,17 @@
 				)
 			)
 		)
+		(property "KiLib_Generator" "SMD_2terminal_chip_molded"
+			(at 91.44 68.58 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "2"
 			(uuid "ad1b1b9c-0776-414e-ba77-d650cf1cef44")
 		)
@@ -2793,7 +2859,7 @@
 		(instances
 			(project "LDO_Stable_JAFWAK"
 				(path "/e797984e-8841-4b55-a934-93c9429b6b10/dc9a158e-4ee1-42ad-aacb-b9976914ef03"
-					(reference "R17")
+					(reference "R20")
 					(unit 1)
 				)
 			)
@@ -2811,7 +2877,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "a5a4d2fd-b8e4-416d-969a-0bd12cd8c1dd")
-		(property "Reference" "Q7"
+		(property "Reference" "Q4"
 			(at 116.84 77.4699 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2833,7 +2899,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "FDV305N:SOT95P240X111-3N"
+		(property "Footprint" "Package_TO_SOT_SMD:TSOT-23"
 			(at 110.49 78.74 0)
 			(hide yes)
 			(show_name no)
@@ -2960,7 +3026,7 @@
 		(instances
 			(project "LDO_Stable_JAFWAK"
 				(path "/e797984e-8841-4b55-a934-93c9429b6b10/dc9a158e-4ee1-42ad-aacb-b9976914ef03"
-					(reference "Q7")
+					(reference "Q4")
 					(unit 1)
 				)
 			)
@@ -2978,7 +3044,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "aaaf6e15-8525-48cc-8db6-d1381d429569")
-		(property "Reference" "R21"
+		(property "Reference" "R9"
 			(at 128.27 114.2999 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3077,6 +3143,17 @@
 				)
 			)
 		)
+		(property "KiLib_Generator" "SMD_2terminal_chip_molded"
+			(at 125.73 115.57 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "2"
 			(uuid "04f4cb94-cdcc-407b-a874-935f9deefead")
 		)
@@ -3086,7 +3163,7 @@
 		(instances
 			(project "LDO_Stable_JAFWAK"
 				(path "/e797984e-8841-4b55-a934-93c9429b6b10/dc9a158e-4ee1-42ad-aacb-b9976914ef03"
-					(reference "R21")
+					(reference "R9")
 					(unit 1)
 				)
 			)
@@ -3182,7 +3259,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "cb798f93-bc73-4ff5-a619-439c72931f3b")
-		(property "Reference" "Q6"
+		(property "Reference" "Q5"
 			(at 95.25 77.4699 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3204,7 +3281,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "FDV305N:SOT95P240X111-3N"
+		(property "Footprint" "Package_TO_SOT_SMD:TSOT-23"
 			(at 88.9 78.74 0)
 			(hide yes)
 			(show_name no)
@@ -3331,7 +3408,7 @@
 		(instances
 			(project "LDO_Stable_JAFWAK"
 				(path "/e797984e-8841-4b55-a934-93c9429b6b10/dc9a158e-4ee1-42ad-aacb-b9976914ef03"
-					(reference "Q6")
+					(reference "Q5")
 					(unit 1)
 				)
 			)
@@ -3505,7 +3582,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "e0cdd6c8-8a2d-4158-9429-2ca202221d14")
-		(property "Reference" "R16"
+		(property "Reference" "R12"
 			(at 92.71 114.2999 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3604,6 +3681,17 @@
 				)
 			)
 		)
+		(property "KiLib_Generator" "SMD_2terminal_chip_molded"
+			(at 90.17 115.57 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "2"
 			(uuid "0c7f3064-f27c-402f-955d-897c5adf40e4")
 		)
@@ -3613,7 +3701,7 @@
 		(instances
 			(project "LDO_Stable_JAFWAK"
 				(path "/e797984e-8841-4b55-a934-93c9429b6b10/dc9a158e-4ee1-42ad-aacb-b9976914ef03"
-					(reference "R16")
+					(reference "R12")
 					(unit 1)
 				)
 			)
@@ -3631,7 +3719,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "e179e2da-a66c-43bb-9cca-7f4c442d8b93")
-		(property "Reference" "R20"
+		(property "Reference" "R10"
 			(at 115.57 114.2999 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3730,6 +3818,17 @@
 				)
 			)
 		)
+		(property "KiLib_Generator" "SMD_2terminal_chip_molded"
+			(at 113.03 115.57 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "2"
 			(uuid "cacc7960-afc1-4b95-8ab3-eca2eb4195a0")
 		)
@@ -3739,7 +3838,7 @@
 		(instances
 			(project "LDO_Stable_JAFWAK"
 				(path "/e797984e-8841-4b55-a934-93c9429b6b10/dc9a158e-4ee1-42ad-aacb-b9976914ef03"
-					(reference "R20")
+					(reference "R10")
 					(unit 1)
 				)
 			)
@@ -3757,7 +3856,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "e1d297fe-50c6-4beb-af4a-d454b5e7e0b5")
-		(property "Reference" "R26"
+		(property "Reference" "R15"
 			(at 179.07 67.3099 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3856,6 +3955,17 @@
 				)
 			)
 		)
+		(property "KiLib_Generator" "SMD_2terminal_chip_molded"
+			(at 176.53 68.58 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "2"
 			(uuid "21d827b7-1e9d-444f-a1ed-e9f50603f58d")
 		)
@@ -3865,7 +3975,7 @@
 		(instances
 			(project "LDO_Stable_JAFWAK"
 				(path "/e797984e-8841-4b55-a934-93c9429b6b10/dc9a158e-4ee1-42ad-aacb-b9976914ef03"
-					(reference "R26")
+					(reference "R15")
 					(unit 1)
 				)
 			)
@@ -3883,7 +3993,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "ecb31ae7-1296-45f4-b7b7-1d56cdab889b")
-		(property "Reference" "R24"
+		(property "Reference" "R17"
 			(at 140.97 67.3099 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3982,6 +4092,17 @@
 				)
 			)
 		)
+		(property "KiLib_Generator" "SMD_2terminal_chip_molded"
+			(at 138.43 68.58 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "2"
 			(uuid "9b830896-abee-4f50-a2e4-afcb9d3e1bcd")
 		)
@@ -3991,7 +4112,7 @@
 		(instances
 			(project "LDO_Stable_JAFWAK"
 				(path "/e797984e-8841-4b55-a934-93c9429b6b10/dc9a158e-4ee1-42ad-aacb-b9976914ef03"
-					(reference "R24")
+					(reference "R17")
 					(unit 1)
 				)
 			)
