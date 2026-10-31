@@ -3278,6 +3278,12 @@
 		(uuid "08d18483-fca3-40f7-af61-2c737b9a0d23")
 	)
 	(junction
+		(at 236.22 110.49)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "10ba9586-7fd1-4bf0-b6a4-c1a5fd8be941")
+	)
+	(junction
 		(at 248.92 73.66)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -3845,6 +3851,16 @@
 	)
 	(wire
 		(pts
+			(xy 236.22 110.49) (xy 241.3 110.49)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "b30d733c-4ef1-4236-8f65-b90cbb768b9d")
+	)
+	(wire
+		(pts
 			(xy 99.06 43.18) (xy 139.7 43.18)
 		)
 		(stroke
@@ -4045,6 +4061,16 @@
 	)
 	(wire
 		(pts
+			(xy 236.22 110.49) (xy 236.22 121.92)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "f4c16768-8904-4d7f-8bf9-9b03c2314c32")
+	)
+	(wire
+		(pts
 			(xy 254 121.92) (xy 254 125.73)
 		)
 		(stroke
@@ -4085,7 +4111,7 @@
 	)
 	(wire
 		(pts
-			(xy 236.22 107.95) (xy 236.22 121.92)
+			(xy 236.22 107.95) (xy 236.22 110.49)
 		)
 		(stroke
 			(width 0)
@@ -5433,6 +5459,97 @@
 		)
 	)
 	(symbol
+		(lib_id "JAFWAK:SMA_FivePin")
+		(at 246.38 110.49 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "4e21a868-d16e-40e5-940d-8a0ccdae0c9a")
+		(property "Reference" "J14"
+			(at 248.92 109.5131 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "VIN"
+			(at 248.92 112.0531 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "TPS7A7001_Evaluation_Board_footprint_lib:SAMTEC_SMA-J-P-H-ST-TH1"
+			(at 246.38 110.49 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 246.38 110.49 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "coaxial connector (BNC, SMA, SMB, SMC, Cinch/RCA, LEMO, ...)"
+			(at 246.38 110.49 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "5"
+			(uuid "138be59d-c743-4f50-84ea-1571f7d686f2")
+		)
+		(pin "3"
+			(uuid "fd4e8182-f61f-48d5-9791-74996912ef9d")
+		)
+		(pin "4"
+			(uuid "09d33ba7-59e9-441c-a63b-acf9e16c60fb")
+		)
+		(pin "1"
+			(uuid "7e8a2d94-a0cc-4fed-bf6a-2ca875814437")
+		)
+		(pin "2"
+			(uuid "d829ca14-4e65-4ec9-a27a-bfa1d6970614")
+		)
+		(instances
+			(project "LDO_Stable_JAFWAK"
+				(path "/e797984e-8841-4b55-a934-93c9429b6b10"
+					(reference "J14")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
 		(lib_id "power:GND")
 		(at 107.95 121.92 90)
 		(mirror x)
@@ -6057,6 +6174,85 @@
 			(project "LDO_Stable_JAFWAK"
 				(path "/e797984e-8841-4b55-a934-93c9429b6b10"
 					(reference "H3")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 246.38 115.57 0)
+		(mirror y)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "68650e20-1b8f-4318-b426-103b2123a382")
+		(property "Reference" "#PWR08"
+			(at 246.38 121.92 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "GND"
+			(at 246.38 120.65 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 246.38 115.57 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 246.38 115.57 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
+			(at 246.38 115.57 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "3bf116b7-933a-4f76-b5d7-5ff619229071")
+		)
+		(instances
+			(project "LDO_Stable_JAFWAK"
+				(path "/e797984e-8841-4b55-a934-93c9429b6b10"
+					(reference "#PWR08")
 					(unit 1)
 				)
 			)
