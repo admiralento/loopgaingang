@@ -199,7 +199,8 @@ class SimAnalogDiscovery:
         dvin = vin1 - vin0
         amp = -m.z_peak * di + m.k_line * dvin
         ts = np.where(after, t, 0.0)
-        ring = amp * np.exp(-ts / m.tau) * np.cos(2 * math.pi * m.f_ring * ts)
+        # starts at zero and builds up, like a real loop (peak ~ a quarter ring period after the step)
+        ring = amp * np.exp(-ts / m.tau) * np.sin(2 * math.pi * m.f_ring * ts)
         vout = np.where(after, v1 + ring, v0) + m.noise(n_samples)
         if 0 <= i_trig < n_samples:
             vout[i_trig] += m.glitch * (1 if (di < 0 or dvin > 0) else -1)

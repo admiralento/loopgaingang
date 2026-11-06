@@ -140,3 +140,145 @@ def line_regulation(
         dropout_voltage=d_vin - d_vout,
         dropout_fraction=dropout_fraction,
     )
+
+
+# --- transient settling (port of AD_workspaces/load_tran_script.js) -------------------------------
+@dataclass(frozen=True)
+class SettlingResult:
+    """Step response metrics, same definitions as the WaveForms custom measurements.
+
+    nominal: mean VOUT before the step. peak: largest excursion of the smoothed trace
+    within `peak_window` after the step. band: settle_fraction * |peak - nominal|.
+    settling_time: from the step until the smoothed trace enters [level - band,
+    level + band] for the last time, where level is `nominal` ('pre', like the
+    WaveForms script) or the final VOUT ('post'). NaN if it never settles in the
+    capture. noise: RMS of the smoothed trace before the step; should be <= band / 3.
+    """
+
+    nominal: float
+    peak: float
+    band: float
+    settle_level: float
+    settling_time: float
+    noise: float
+    final: float
+    sample_rate: float
+    step_index: int
+    reference: str
+
+    @property
+    def deviation(self) -> float:
+        return self.peak - self.nominal
+
+    @property
+    def upper(self) -> float:
+        return self.settle_level + self.band
+
+    @property
+    def lower(self) -> float:
+        return self.settle_level - self.band
+
+    @property
+    def trustworthy(self) -> bool:
+        """Noise well inside the band, else noise sets the settling time (see AD_workspaces/README)."""
+        return bool(np.isfinite(self.noise) and np.isfinite(self.band) and self.noise <= self.band / 3)
+
+    def as_dict(self) -> dict:
+        return {
+            **asdict(self),
+            "deviation": self.deviation,
+            "upper": self.upper,
+            "lower": self.lower,
+            "trustworthy": self.trustworthy,
+        }
+
+
+def _js_round(x: float) -> int:
+    """JavaScript Math.round (half up), not Python's banker's rounding."""
+    return int(np.floor(x + 0.5))
+
+
+def find_step(ref, edge: str) -> int:
+    """First crossing of the ref channel's midpoint in the given direction, or -1."""
+    s = np.asarray(ref, float)
+    mid = (s.min() + s.max()) / 2
+    if edge == "rising":
+        idx = np.nonzero((s[:-1] < mid) & (s[1:] >= mid))[0]
+    else:
+        idx = np.nonzero((s[:-1] > mid) & (s[1:] <= mid))[0]
+    return int(idx[0]) + 1 if len(idx) else -1
+
+
+def smooth(x, h: int) -> np.ndarray:
+    """Centred moving average over i-h..i+h, shrinking at the ends (as in the JS)."""
+    x = np.asarray(x, float)
+    n = len(x)
+    p = np.concatenate([[0.0], np.cumsum(x)])
+    i = np.arange(n)
+    a, b = np.maximum(0, i - h), np.minimum(n, i + h + 1)
+    return (p[b] - p[a]) / (b - a)
+
+
+def settling_analysis(
+    vout,
+    ref,
+    sample_rate: float,
+    edge: str,
+    *,
+    settle_fraction: float = 0.1,
+    smooth_time: float = 1e-6,
+    peak_window: float = 20e-6,
+    blank_time: float = 0.5e-6,
+    reference: str = "pre",
+) -> tuple[SettlingResult, np.ndarray]:
+    """Return (metrics, smoothed VOUT). Step numbers match load_tran_script.js."""
+    d = np.asarray(vout, float)
+    n = len(d)
+    dt = 1.0 / sample_rate
+    nan = float("nan")
+
+    # 1. step = ref channel edge through its midpoint
+    i_step = find_step(ref, edge)
+    nb = max(1, _js_round(blank_time / dt))
+    i_a, i_b = i_step - nb, min(n - 1, i_step + nb)
+    if i_step < 0 or i_a <= 10:
+        return SettlingResult(nan, nan, nan, nan, nan, nan, nan, sample_rate, i_step, reference), d.copy()
+
+    # 2. nominal = mean of raw VOUT before the step (excluding the glitch)
+    v0 = float(d[:i_a].mean())
+
+    # 3. replace the switching glitch with a straight line
+    x = d.copy()
+    k = np.arange(i_a + 1, i_b)
+    x[k] = d[i_a] + (d[i_b] - d[i_a]) * (k - i_a) / (i_b - i_a)
+
+    # 4. centred moving average
+    h = max(1, int(np.floor(smooth_time / dt / 2)))
+    f = smooth(x, h)
+
+    # 5. noise = RMS of smoothed VOUT around nominal, before the step
+    pre = f[h : i_a - h]
+    noise = float(np.sqrt(np.mean((pre - v0) ** 2))) if len(pre) else nan
+
+    # 6. peak = largest deviation from nominal within peak_window after the step
+    i_end = min(n, i_step + _js_round(peak_window / dt))
+    i_pk = i_b + int(np.argmax(np.abs(f[i_b:i_end] - v0))) if i_end > i_b else i_b
+    v_pk = float(f[i_pk])
+    band = settle_fraction * abs(v_pk - v0)
+
+    # 7. settling time = after the last smoothed sample outside the band
+    i_stop = n - h  # the end, where the average is one-sided, is ignored
+    tail = f[max(i_stop - max(1, n // 10), i_step) : i_stop]
+    final = float(tail.mean()) if len(tail) else nan
+    level = v0 if reference == "pre" else final
+    outside = np.nonzero(np.abs(f[i_step:i_stop] - level) > band)[0]
+    if not len(outside):
+        t_set = 0.0
+    else:
+        i_last = i_step + int(outside[-1])
+        t_set = (i_last + 1 - i_step) * dt if i_last < i_stop - 1 else nan
+
+    return (
+        SettlingResult(v0, v_pk, band, level, t_set, noise, final, sample_rate, i_step, reference),
+        f,
+    )
