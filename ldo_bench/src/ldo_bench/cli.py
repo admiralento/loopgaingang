@@ -226,6 +226,50 @@ def load_tran(
     typer.secho(f"Saved to {path}", fg="green")
 
 
+@app.command("line-tran")
+def line_tran(
+    config: ConfigOpt,
+    low: Annotated[float | None, typer.Option("--low", help="VIN low level (V)")] = None,
+    high: Annotated[float | None, typer.Option("--high", help="VIN high level (V)")] = None,
+    load: Annotated[str | None, typer.Option(help="Load as a code or current, e.g. 4 or 19mA")] = None,
+    averages: Annotated[int | None, typer.Option("--avg", help="Captures averaged per edge")] = None,
+    out: OutOpt = Path("results"),
+    sim: SimOpt = False,
+    psu: PsuOpt = None,
+    ad_serial: AdOpt = None,
+    yes: YesOpt = False,
+    verbose: VerboseOpt = False,
+) -> None:
+    """Line transient: step VIN with W1 through the BUF634, report VOUT peak and settling time."""
+    from ldo_bench.loadbank import LoadBank, parse_load
+    from ldo_bench.procedures import line_tran as proc
+
+    _logging(verbose)
+    cfg = _load(config)
+    lt = _section(cfg, "line-tran")
+    update: dict = {}
+    if low is not None:
+        update["vin_low"] = low
+    if high is not None:
+        update["vin_high"] = high
+    if averages is not None:
+        update["averages"] = averages
+    if load is not None:
+        try:
+            update["load_code"] = parse_load(load, LoadBank(cfg.loadbank, None), cfg.dut.vout_nominal)
+        except ValueError as e:
+            typer.secho(str(e), fg="red", err=True)
+            raise typer.Exit(2) from e
+    if update:
+        cfg = _load_with(cfg, line_tran=lt.model_copy(update=update))
+        lt = cfg.line_tran
+    with _bench(cfg, sim, psu, ad_serial, yes, use_dmm=False) as bench:
+        res = proc.run(bench, lt, cfg.analysis)
+        path = _save(bench, cfg, config, out, proc, res)
+    typer.echo(res.report())
+    typer.secho(f"Saved to {path}", fg="green")
+
+
 @app.command("loadbank-check")
 def loadbank_check(
     config: ConfigOpt,

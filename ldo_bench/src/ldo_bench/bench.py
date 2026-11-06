@@ -99,6 +99,7 @@ class Bench:
         ref_probe: RefProbe,
         dmm_probe: Literal["vout", "psu"] = "vout",
         bank_on_psu: bool = False,
+        psu_to: Literal["vin", "rail"] = "vin",
     ) -> None:
         """Show the wiring a test needs and wait for the user to confirm it.
 
@@ -108,6 +109,7 @@ class Bench:
             self.sim_model.ref_probe = ref_probe
             self.sim_model.dmm_probe = dmm_probe
             self.sim_model.bank_on_psu = bank_on_psu
+            self.sim_model.psu_to = psu_to
         text = "\n".join([f"Wiring for {title}:", *(f"  - {s}" for s in lines)])
         if self.is_sim or self.assume_yes or self._confirm is None:
             log.info(text)  # not asking: still record what the run assumed
@@ -161,6 +163,10 @@ class Bench:
             raise InstrumentError(f"refusing to drive VIN to {volts} V from the wavegen (limit {limit} V)")
         self.awg.set_dc(self.cfg.ad2.wavegen_channel, volts)
         self._awg_on = True
+
+    def wavegen_off(self) -> None:
+        self.awg.off(self.cfg.ad2.wavegen_channel)
+        self._awg_on = False
 
     # --- Measurements -------------------------------------------------------
     def scope_setups(self) -> dict[int, ChannelSetup]:

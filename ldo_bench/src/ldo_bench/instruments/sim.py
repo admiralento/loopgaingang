@@ -58,10 +58,17 @@ class LdoModel:
         self.rng = np.random.default_rng(self.seed)
 
     # --- DC model -----------------------------------------------------------
+    buffer_offset: float = -0.015  # V, BUF634 output minus input (line tran calibrates it out)
+    psu_to: str = "vin"  # where the PSU is wired: "vin" (DC tests) or "rail" (BUF634 supply, line tran)
+    buffer_dropout: float = 1.5  # V, the BUF634 output can't get closer than this to its rail
+
     @property
     def vin(self) -> float:
-        if self.awg_v:
-            return next(iter(self.awg_v.values()))
+        if self.psu_to == "rail":  # VIN = buffer output: W1 + offset, only while the rail is powered
+            if not (self.psu_on and self.awg_v):
+                return 0.0
+            out = next(iter(self.awg_v.values())) + self.buffer_offset
+            return max(0.0, min(out, self.psu_v - self.buffer_dropout))
         return self.psu_v if self.psu_on else 0.0
 
     def conductance(self) -> float:

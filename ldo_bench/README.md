@@ -80,6 +80,7 @@ uv run ldo-bench loadbank-check -c configs/demo_board.toml  # load bank straight
 uv run ldo-bench load-reg  -c configs/demo_board.toml   # load regulation (all 32 load codes)
 uv run ldo-bench line-reg  -c configs/demo_board.toml   # line regulation + dropout (--load 30mA)
 uv run ldo-bench load-tran -c configs/demo_board.toml   # load steps: peak + settling (--from 4mA --to 67mA --avg 32)
+uv run ldo-bench line-tran -c configs/jafwak.toml       # VIN steps via W1 + BUF634 (--low 1.8 --high 2.0 --load 19mA)
 ```
 
 Each run writes a folder under `results/`:
@@ -127,4 +128,15 @@ If VOUT's final level after the step is outside the band (DC load regulation), i
 
 The run folder also contains `waveform_rising.csv` and `waveform_falling.csv` (averaged and smoothed VOUT, plus the trigger channel).
 
-Work in progress: line transient is next.
+### Line transient
+
+VIN is driven by the AD2 wavegen through the board's BUF634 buffer:
+- **Signal path:** W1 → VIN_FG / V_SIG SMA → BUF634 → VIN (JP4 set to the buffer).
+- **Power:** the supply powers the **buffer rail** (VS_BUFF / VDD_BUF), not VIN. The rail must sit about 2 V above `vin_high`, which can be above the LDO's own VIN limit.
+- **Interlock:** before raising the rail, the test powers it at only 1.0 V with W1 off and checks that VIN stays low. If VIN follows the supply, the leads are on VIN. The test then stops before applying the full rail voltage.
+- **Calibration:** the buffer's offset is calibrated out from VIN measured at the board (scope ch2), so the steps land on `vin_low` / `vin_high` within 5 mV. If the buffer can't reach a level, the test says to check headroom, JP4 and the W1 wiring.
+- **Measurement:** the scope triggers on VIN itself. Each edge is averaged and analysed like load transient. The report also gives the peak VOUT deviation per volt of VIN step (mV/V).
+
+### Load current limit
+
+`dut.i_max` caps the load any test may switch in. It's estimated at `vout_nominal`, and both the config check and the load bank enforce it. JAFWAK is limited to 20 mA (codes 0–4). `loadbank-check` lifts the limit, because no DUT is connected in that test.

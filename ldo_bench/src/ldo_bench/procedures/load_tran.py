@@ -14,12 +14,11 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from ldo_bench import plotting
 from ldo_bench.analysis import SettlingResult, settling_analysis
 from ldo_bench.bench import Bench
 from ldo_bench.config import AnalysisConfig, LoadTranConfig
 from ldo_bench.instruments.base import ChannelSetup, InstrumentError
-from ldo_bench.procedures.transient import averaged_step
+from ldo_bench.procedures.transient import averaged_step, plot_edges
 
 log = logging.getLogger(__name__)
 
@@ -212,73 +211,8 @@ def run(bench: Bench, lt: LoadTranConfig, an: AnalysisConfig) -> LoadTranResult:
 
 
 def plot(res: LoadTranResult, dut: str):
-    n = len(res.edges)
-    fig, axes = plotting.figure(1, n, size=(5.2 * n, 4.4), squeeze=False)
-    for ax, e in zip(axes[0], res.edges, strict=True):
-        m = e.metrics
-        us = e.t * 1e6
-        dev = (e.vout - m.nominal) * 1e3
-        dev_s = (e.vout_smoothed - m.nominal) * 1e3
-        # Show from a little before the step to well past settling.
-        t_end = (m.settling_time * 1e6 * 2.5 + 10) if np.isfinite(m.settling_time) else us[-1]
-        view = (us >= -0.15 * t_end) & (us <= t_end)
-        if np.isfinite(m.band):
-            lvl = (m.settle_level - m.nominal) * 1e3
-            ax.axhspan(lvl - m.band * 1e3, lvl + m.band * 1e3, color=plotting.GRID, alpha=0.8, lw=0, zorder=0)
-        ax.axvline(0, color=plotting.AXIS, lw=0.8, zorder=1)
-        ax.plot(us[view], dev[view], color=plotting.SERIES[0], lw=0.8, alpha=0.35, zorder=2, label="Averaged")
-        ax.plot(us[view], dev_s[view], color=plotting.SERIES[0], lw=1.8, zorder=3, label="Smoothed (1 µs)")
-        if np.isfinite(m.settling_time):
-            ax.axvline(m.settling_time * 1e6, color=plotting.INK_2, lw=1, ls=(0, (3, 2)), zorder=2)
-            ax.annotate(
-                f"settled {m.settling_time * 1e6:.1f} µs",
-                (m.settling_time * 1e6, 1.0),
-                xycoords=("data", "axes fraction"),
-                xytext=(4, -12),
-                textcoords="offset points",
-                fontsize=8,
-                color=plotting.INK_2,
-            )
-        i_pk = int(np.argmin(np.abs(e.vout_smoothed - m.peak))) if np.isfinite(m.peak) else None
-        if i_pk is not None:
-            ax.plot(
-                us[i_pk],
-                dev_s[i_pk],
-                "o",
-                ms=6,
-                color=plotting.SERIES[0],
-                mec=plotting.SURFACE,
-                mew=1.5,
-                zorder=4,
-            )
-            ax.annotate(
-                f"{m.deviation * 1e3:+.1f} mV",
-                (us[i_pk], dev_s[i_pk]),
-                xytext=(8, 0),
-                textcoords="offset points",
-                fontsize=8,
-                color=plotting.INK,
-                va="center",
-            )
-        # Scale to the smoothed response and band; the 1-sample switching glitch in the raw
-        # trace would otherwise set the axis and squash the response.
-        span = [dev_s[view].min(), dev_s[view].max()]
-        if np.isfinite(m.band):
-            span += [lvl - m.band * 1e3, lvl + m.band * 1e3]
-        lo, hi = min(span), max(span)
-        pad = 0.15 * (hi - lo or 1.0)
-        ax.set_ylim(lo - pad, hi + pad)
-        ax.set_xlabel("Time from step (µs)")
-        ax.set_ylabel(f"VOUT minus {m.nominal:.4f} V (mV)" if np.isfinite(m.nominal) else "VOUT (mV)")
-        ax.set_title(e.title, fontsize=10, pad=6)
-        ax.legend(loc="lower right" if m.deviation > 0 else "upper right")
-    fig.suptitle(
+    return plot_edges(
+        res.edges,
         f"Load transient: {dut}  ·  VIN {res.vin:.2f} V  ·  {res.averages} averages  ·  "
         "shaded = settling band",
-        x=0.01,
-        ha="left",
-        fontsize=11,
-        fontweight="bold",
-        color=plotting.INK,
     )
-    return fig
