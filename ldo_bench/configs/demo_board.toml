@@ -1,0 +1,80 @@
+# Demo board: TPS7A7001_Evaluation_Board (TPS7A7001, 1.0 V out via R1/R2 = 30k/30k),
+# loaded by the separate Switched_R_Load_Bank board.
+#
+# Wiring:
+#   AD2 DIO 0..4  -> load bank J0..J4 (VG0..VG4)
+#   Scope 1+      -> VOUT,  1- -> GND
+#   Scope 2+      -> VIN (DC tests) / J4 (load tran) / VIN (line tran),  2- -> GND
+#   W1            -> V_SIG SMA (J13) -> BUF634 -> VIN   (line tran only)
+#   E3638A        -> VIN, or VDD_BUF during line tran
+
+[dut]
+name = "TPS7A7001 demo board"
+vout_nominal = 1.0
+vin_max = 5.5                # TPS7A7001 recommended max is 6.5 V
+
+[psu]
+resource = ""
+gpib_address = 5
+current_limit = 0.3
+v_max = 5.5
+ovp = 6.0
+settle_time = 0.3
+
+[ad2]
+serial = ""
+vout_channel = 1
+ref_channel = 2
+wavegen_channel = 1
+vout = { range = 5.0, offset = 0.0 }
+ref  = { range = 50.0, offset = 0.0 }
+
+[loadbank]
+# Switched_R_Load_Bank: R1..R6, B0 = LSB. 125 ohm || 125 ohm on bit 2.
+# Current per bit at 1.0 V: 4.0, 8.0, 16.0, 31.6, 64.9 mA  (all on: ~125 mA)
+dio_pins = [0, 1, 2, 3, 4]
+resistors = [250.0, 125.0, 62.5, 31.6, 15.4]
+switch_resistance = 0.0
+active_high = true
+
+[analysis]
+settle_fraction = 0.1
+smooth_time = 1e-6
+peak_window = 20e-6
+blank_time = 0.5e-6
+settle_reference = "pre"
+
+[load_reg]
+vin = 1.8                    # TODO: confirm the Vin you use for the demo board
+codes = []
+settle_time = 0.05
+dc_window = 0.1
+
+[line_reg]
+vin_start = 1.05
+vin_stop = 5.0
+vin_step = 0.05
+load_code = 8
+
+[load_tran]                  # matches AD_workspaces/demo_board_load_tran_*.dwf3work
+vin = 1.8
+code_low = 1                 # 4 mA
+code_high = 17               # ~69 mA (README: 67 mA measured)
+trigger_pin = 4              # Scope 2+ on DIO 4 / J4, as in the WaveForms workspaces
+sample_rate = 10e6
+n_samples = 8192
+pre_trigger = 0.2
+averages = 16
+edges = ["rising", "falling"]
+
+[line_tran]
+psu_voltage = 5.0            # on VDD_BUF
+vin_low = 1.8
+vin_high = 2.3
+load_code = 8
+buffer_headroom = 2.0
+sample_rate = 10e6
+n_samples = 8192
+pre_trigger = 0.2
+averages = 16
+edges = ["rising", "falling"]

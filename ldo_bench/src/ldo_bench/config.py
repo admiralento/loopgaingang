@@ -26,6 +26,7 @@ class _Model(BaseModel):
 class DutConfig(_Model):
     name: str = "LDO"
     vout_nominal: float = Field(gt=0, description="Expected LDO output voltage (V)")
+    vin_max: float = Field(gt=0, description="Highest voltage any test may put on the LDO's VIN (V)")
 
 
 class PsuConfig(_Model):
@@ -41,14 +42,20 @@ class PsuConfig(_Model):
     voltage_range: Literal["LOW", "HIGH"] | None = Field(None, description="E3638A output range")
     current_limit: float = Field(gt=0, description="Applied before the output is enabled (A)")
     ovp: float | None = Field(None, gt=0, description="Over-voltage protection level (V)")
-    vin_max: float = Field(gt=0, description="No test may ever program the PSU above this (V)")
+    v_max: float = Field(
+        gt=0,
+        description=(
+            "The PSU is never programmed above this (V). Usually equals dut.vin_max; it is higher only "
+            "when line_tran powers the buffer rail from the PSU."
+        ),
+    )
     ramp_step: float = Field(0.25, gt=0, description="Max voltage step when ramping (V)")
     settle_time: float = Field(0.3, ge=0, description="Wait after each PSU voltage change (s)")
 
     @model_validator(mode="after")
-    def _ovp_above_vin_max(self) -> PsuConfig:
-        if self.ovp is not None and self.ovp <= self.vin_max:
-            raise ValueError(f"psu.ovp ({self.ovp} V) must be above psu.vin_max ({self.vin_max} V)")
+    def _ovp_above_v_max(self) -> PsuConfig:
+        if self.ovp is not None and self.ovp <= self.v_max:
+            raise ValueError(f"psu.ovp ({self.ovp} V) must be above psu.v_max ({self.v_max} V)")
         return self
 
 
@@ -185,35 +192,41 @@ class BenchConfig(_Model):
 
     @model_validator(mode="after")
     def _cross_checks(self) -> BenchConfig:
-        vmax = self.psu.vin_max
+        # When the PSU drives VIN directly, both ceilings apply.
+        vin_ceiling = min(self.dut.vin_max, self.psu.v_max)
         max_code = self.loadbank.max_code
 
         def code_ok(name: str, code: int) -> None:
             if not 0 <= code <= max_code:
                 raise ValueError(f"{name} = {code} is outside the load bank range 0..{max_code}")
 
+        def vin_ok(name: str, v: float) -> None:
+            if v > vin_ceiling:
+                raise ValueError(f"{name} = {v} V exceeds dut.vin_max / psu.v_max ({vin_ceiling} V)")
+
         if self.load_reg:
-            if self.load_reg.vin > vmax:
-                raise ValueError(f"load_reg.vin exceeds psu.vin_max ({vmax} V)")
+            vin_ok("load_reg.vin", self.load_reg.vin)
             for c in self.load_reg.codes:
                 code_ok("load_reg.codes", c)
         if self.line_reg:
             lr = self.line_reg
-            if max(lr.vin_start, lr.vin_stop) > vmax:
-                raise ValueError(f"line_reg sweep exceeds psu.vin_max ({vmax} V)")
+            vin_ok("line_reg sweep", max(lr.vin_start, lr.vin_stop))
             code_ok("line_reg.load_code", lr.load_code)
         if self.load_tran:
             lt = self.load_tran
-            if lt.vin > vmax:
-                raise ValueError(f"load_tran.vin exceeds psu.vin_max ({vmax} V)")
+            vin_ok("load_tran.vin", lt.vin)
             code_ok("load_tran.code_low", lt.code_low)
             code_ok("load_tran.code_high", lt.code_high)
             if lt.code_low >= lt.code_high:
                 raise ValueError("load_tran.code_low must be below code_high")
         if self.line_tran:
-            if self.line_tran.psu_voltage > vmax:
-                raise ValueError(f"line_tran.psu_voltage exceeds psu.vin_max ({vmax} V)")
-            code_ok("line_tran.load_code", self.line_tran.load_code)
+            lt = self.line_tran
+            # Here the PSU feeds the buffer rail; VIN comes from the wavegen through the buffer.
+            if lt.psu_voltage > self.psu.v_max:
+                raise ValueError(f"line_tran.psu_voltage exceeds psu.v_max ({self.psu.v_max} V)")
+            if lt.vin_high > self.dut.vin_max:
+                raise ValueError(f"line_tran.vin_high exceeds dut.vin_max ({self.dut.vin_max} V)")
+            code_ok("line_tran.load_code", lt.load_code)
         return self
 
 

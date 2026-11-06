@@ -1,32 +1,39 @@
-# Bench config for the LDO_Stable_JAFWAK board (SU272AFJK LDO).
-# Values marked TODO still need checking on the bench.
+# Custom LDO: LDO_Stable_JAFWAK board (SU272AFJK), on-board load cell.
+#
+# Wiring:
+#   AD2 DIO 0..4  -> J13 B0..B4 (load cell gates)
+#   Scope 1+      -> VOUT,  1- -> GND
+#   Scope 2+      -> VIN (DC tests) / B4 (load tran) / VIN (line tran),  2- -> GND
+#   W1            -> VIN_FG SMA (J3) -> BUF634 -> VIN   (line tran only; JP4 to buffer)
+#   E3638A        -> VIN_DC (JP4 to DC), or VS_BUFF during line tran
 
 [dut]
 name = "JAFWAK"
-vout_nominal = 1.8          # TODO: confirm the LDO output voltage
+vout_nominal = 1.2
+vin_max = 3.6                # TODO: confirm the custom LDO's max VIN
 
 [psu]                        # Agilent E3638A over GPIB
 resource = ""                # "" = auto-discover. Or "GPIB0::5::INSTR", or "prologix:COM5:5"
 gpib_address = 5             # E363xA factory default
-current_limit = 0.4          # A, applied before the output turns on
-ovp = 6.0                    # V
-vin_max = 5.5                # V, hard ceiling for every test
-settle_time = 0.3            # s after each voltage change
+current_limit = 0.3          # A, applied before the output turns on
+v_max = 5.5                  # PSU ceiling; above dut.vin_max only so line_tran can power VS_BUFF
+ovp = 6.0
+settle_time = 0.3
 
 [ad2]                        # Analog Discovery 2
 serial = ""                  # "" = first AD2 found
-vout_channel = 1             # Scope 1+ on VOUT, 1- on GND
-ref_channel = 2              # Scope 2+ on VIN (DC tests) or the stimulus (transients), 2- on GND
-wavegen_channel = 1          # W1 -> VIN_FG SMA -> BUF634 -> VIN (line transient)
+vout_channel = 1
+ref_channel = 2
+wavegen_channel = 1
 vout = { range = 5.0, offset = 0.0 }
 ref  = { range = 50.0, offset = 0.0 }
 
 [loadbank]
-# Binary-weighted load cell (load_cell.kicad_sch), bits B0 (LSB) .. B4 (MSB) on header J13.
-# Current per bit = Vout / R:  at 1.8 V -> 7.2, 14.4, 28.8, 57, 117 mA  (max ~224 mA)
-dio_pins = [0, 1, 2, 3, 4]   # TODO: AD2 DIO pins wired to B0..B4
+# Binary-weighted load cell (load_cell.kicad_sch), B0 = LSB.
+# Current per bit at 1.2 V: 4.8, 9.6, 19.2, 38.0, 77.9 mA  (all on: ~150 mA)
+dio_pins = [0, 1, 2, 3, 4]
 resistors = [250.0, 125.0, 62.5, 31.6, 15.4]   # R20, R19, R17||R18, R16, R15
-switch_resistance = 0.0      # FDV305N Rds(on), ohm (add if you want it in the current estimate)
+switch_resistance = 0.0      # FDV305N Rds(on) (ohm), if you want it in the current estimate
 active_high = true
 
 [analysis]                   # same defaults as AD_workspaces/load_tran_script.js
@@ -37,21 +44,21 @@ blank_time = 0.5e-6
 settle_reference = "pre"
 
 [load_reg]
-vin = 3.3
+vin = 1.8
 codes = []                   # [] = all 32 codes
 settle_time = 0.05
 dc_window = 0.1
 
 [line_reg]
-vin_start = 1.9
-vin_stop = 5.0
-vin_step = 0.1
+vin_start = 1.25
+vin_stop = 3.3
+vin_step = 0.05
 load_code = 8
 
 [load_tran]
-vin = 3.3
-code_low = 1
-code_high = 16
+vin = 1.8
+code_low = 1                 # 4.8 mA
+code_high = 17               # 82.7 mA
 sample_rate = 10e6
 n_samples = 8192
 pre_trigger = 0.2
@@ -59,9 +66,9 @@ averages = 16
 edges = ["rising", "falling"]
 
 [line_tran]
-psu_voltage = 5.5            # on VS_BUFF; must be >= vin_high + buffer_headroom
-vin_low = 2.8
-vin_high = 3.3
+psu_voltage = 4.5            # on VS_BUFF; >= vin_high + buffer_headroom
+vin_low = 1.6
+vin_high = 2.0
 load_code = 8
 buffer_headroom = 2.0
 sample_rate = 10e6
