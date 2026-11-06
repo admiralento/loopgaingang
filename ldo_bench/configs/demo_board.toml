@@ -54,7 +54,7 @@ blank_time = 0.5e-6
 settle_reference = "pre"
 
 [load_reg]
-vin = 1.8                    # TODO: confirm the Vin you use for the demo board
+vin = 2.0
 codes = []
 settle_time = 0.05
 dc_window = 0.1
