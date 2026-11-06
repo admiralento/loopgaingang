@@ -73,7 +73,14 @@ def _serial_ports() -> list[str]:
         from serial.tools import list_ports
     except ImportError:
         return []
-    return [p.device for p in list_ports.comports()]
+    ports = []
+    for p in list_ports.comports():
+        if p.vid is None:
+            continue  # not USB (Bluetooth, debug console, motherboard COM1, ...)
+        if "digilent" in f"{p.manufacturer} {p.description}".lower():
+            continue  # the Analog Discovery's own FTDI port: never send it ++ commands
+        ports.append(p.device)
+    return ports
 
 
 def _prologix_candidates(preferred_address: int) -> list[Found]:
