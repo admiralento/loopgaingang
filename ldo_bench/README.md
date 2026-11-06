@@ -5,6 +5,7 @@ Bench automation for characterizing the LDO on the JAFWAK board. It covers load 
 Hardware:
 - Agilent E3648A (dual output) or E3638A power supply over GPIB (XyphroLabs UsbGpib adapter)
 - Digilent Analog Discovery 2
+- Agilent 34401A DMM (optional) on its RS-232 port through a USB-serial adapter. It measures VOUT in the DC tests.
 
 ## Setup
 
@@ -28,6 +29,17 @@ The LED shows the adapter's state:
 The adapter finds the instrument's GPIB address on its own.
 
 Close the WaveForms GUI before running tests, because only one program can open the AD2.
+
+### 34401A DMM (RS-232)
+
+On the meter's front panel (**Shift > I/O MENU**), set:
+- INTERFACE: **RS-232**
+- BAUD RATE: **9600** (or match `dmm.baud`)
+- PARITY: **NONE: 8 BITS**
+
+The cable must be **null-modem** (e.g. Agilent 34398A); a straight-through DB9 cable won't work. The script puts the meter in remote mode while it runs and returns it to local afterwards, so the front panel works again.
+
+When `[dmm]` is enabled, the DC tests read VOUT from the DMM (10 NPLC, autozero, >10 GΩ input) and VIN from the AD2. The AD2's own VOUT reading is still saved as `vout_ad2_v` for comparison. Use `--no-dmm` or `dmm.enabled = false` to use the AD2 for VOUT instead.
 
 ```
 uv run ldo-bench --help
@@ -58,6 +70,7 @@ All commands take `-c <config>`. They also accept:
 ```
 uv run ldo-bench smoke     -c configs/demo_board.toml   # power up, read VOUT at no / full load
 uv run ldo-bench load-reg  -c configs/demo_board.toml   # load regulation (all 32 load codes)
+uv run ldo-bench line-reg  -c configs/demo_board.toml   # line regulation + dropout (--load 30mA)
 ```
 
 Each run writes a folder under `results/`:
@@ -74,4 +87,12 @@ Load current is estimated as VOUT / R from the bank resistors. The PSU current r
 
 The result is the slope dVOUT/dI_load (mV/mA, equal to the output resistance) and the total ΔVOUT (mV and %).
 
-Work in progress: line regulation and the transient tests are next.
+### Line regulation
+
+At a fixed load, VIN sweeps upward from `vin_start` to `vin_stop`. Starting below VOUT + dropout means the same run captures the dropout knee as well as the regulation slope.
+
+- **Measured VIN:** the analysis uses VIN measured at the board, not the supply setpoint.
+- **Dropout:** the point where VOUT falls `dropout_fraction` (1 %) below its value at the highest VIN, interpolated between points.
+- **Slope:** dVOUT/dVIN in mV/V and %/V, fitted from 3 steps above the knee (or from `fit_vin_min`).
+
+Work in progress: the transient tests are next.

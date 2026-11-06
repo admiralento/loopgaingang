@@ -80,6 +80,23 @@ class Ad2Config(_Model):
         return self
 
 
+class DmmConfig(_Model):
+    """Bench DMM (Agilent 34401A) measuring VOUT in the DC tests."""
+
+    enabled: bool = True
+    resource: str = Field(
+        "",
+        description=(
+            "'' = auto-discover (USB serial ports, then VISA). Or 'serial:/dev/cu.usbserial-XXXX', "
+            "'serial:COM3', or a VISA resource if it is on GPIB."
+        ),
+    )
+    baud: int = Field(9600, description="Must match the 34401A's RS-232 baud rate setting")
+    nplc: Literal[0.02, 0.2, 1, 10, 100] = Field(10, description="Integration time in power-line cycles")
+    range: float | None = Field(None, gt=0, description="Fixed DCV range (V); None = auto range")
+    samples: int = Field(1, ge=1, description="Readings averaged per point")
+
+
 class LoadBankConfig(_Model):
     dio_pins: list[int] = Field(description="AD2 DIO pin for each bank bit, LSB first")
     resistors: list[float] = Field(description="Load resistor for each bit, LSB first (ohm)")
@@ -139,6 +156,13 @@ class LineRegConfig(_Model):
         0.01, gt=0, lt=1, description="Dropout = Vout falls this fraction below its max-Vin value"
     )
     dc_window: float = Field(0.1, gt=0)
+    psu_readback: bool = Field(True, description="Also record the PSU's V/I readback (~0.8 s per point)")
+
+    @model_validator(mode="after")
+    def _check(self) -> LineRegConfig:
+        if self.vin_stop <= self.vin_start:
+            raise ValueError("line_reg.vin_stop must be above vin_start (the sweep goes up)")
+        return self
 
 
 class TransientCaptureConfig(_Model):
@@ -185,6 +209,7 @@ class BenchConfig(_Model):
     dut: DutConfig
     psu: PsuConfig
     ad2: Ad2Config = Ad2Config()
+    dmm: DmmConfig | None = None
     loadbank: LoadBankConfig
     analysis: AnalysisConfig = AnalysisConfig()
     load_reg: LoadRegConfig | None = None

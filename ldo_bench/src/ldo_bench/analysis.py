@@ -71,3 +71,72 @@ def load_regulation(i_load, vout) -> LoadRegulation:
         intercept=fit.intercept,
         r2=fit.r2,
     )
+
+
+@dataclass(frozen=True)
+class LineRegulation:
+    """Line regulation over the in-regulation part of a VIN sweep.
+
+    `slope` is dVOUT/dVIN from a fit over [fit_vin_min, fit_vin_max] (V/V).
+    Dropout: VOUT reference = VOUT at the highest VIN; the dropout point is
+    where VOUT falls `dropout_fraction` below it (interpolated), and
+    `dropout_voltage` = VIN - VOUT there. NaN if the sweep never reached it.
+    """
+
+    v_ref: float
+    slope: float
+    intercept: float
+    r2: float
+    fit_vin_min: float
+    fit_vin_max: float
+    delta_v: float  # VOUT change across the fit range (fit line)
+    percent_per_v: float  # slope / v_ref * 100
+    dropout_vin: float
+    dropout_voltage: float
+    dropout_fraction: float
+
+    def as_dict(self) -> dict:
+        return asdict(self)
+
+
+def find_dropout(vin, vout, fraction: float) -> tuple[float, float]:
+    """(VIN, VOUT) where VOUT first stays within `fraction` of its max-VIN value (interpolated)."""
+    order = np.argsort(vin)
+    x, y = np.asarray(vin, float)[order], np.asarray(vout, float)[order]
+    threshold = (1.0 - fraction) * y[-1]
+    below = np.nonzero(y < threshold)[0]
+    if not len(below):
+        return float("nan"), float("nan")  # in regulation over the whole sweep
+    k = int(below[-1]) + 1  # first point of the final in-regulation run
+    if k >= len(x):
+        return float("nan"), float("nan")  # never regulated
+    x0, x1, y0, y1 = x[k - 1], x[k], y[k - 1], y[k]
+    xc = x0 + (threshold - y0) * (x1 - x0) / (y1 - y0) if y1 != y0 else x1
+    return float(xc), float(threshold)
+
+
+def line_regulation(
+    vin, vout, *, dropout_fraction: float = 0.01, fit_vin_min: float | None = None, knee_margin: float = 0.0
+) -> LineRegulation:
+    """`knee_margin`: how far above the dropout point the fit starts when fit_vin_min is not given."""
+    x, y = np.asarray(vin, float), np.asarray(vout, float)
+    v_ref = float(y[np.argmax(x)])
+    d_vin, d_vout = find_dropout(x, y, dropout_fraction)
+    if fit_vin_min is None:
+        fit_vin_min = d_vin + knee_margin if np.isfinite(d_vin) else float(x.min())
+    mask = x >= fit_vin_min - 1e-9
+    fit = linear_fit(x[mask], y[mask])
+    lo, hi = (float(x[mask].min()), float(x[mask].max())) if mask.any() else (float("nan"),) * 2
+    return LineRegulation(
+        v_ref=v_ref,
+        slope=fit.slope,
+        intercept=fit.intercept,
+        r2=fit.r2,
+        fit_vin_min=lo,
+        fit_vin_max=hi,
+        delta_v=fit.slope * (hi - lo),
+        percent_per_v=100.0 * fit.slope / v_ref if v_ref else float("nan"),
+        dropout_vin=d_vin,
+        dropout_voltage=d_vin - d_vout,
+        dropout_fraction=dropout_fraction,
+    )

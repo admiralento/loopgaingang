@@ -11,16 +11,30 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Literal
 
+import numpy as np
+
 from ldo_bench.config import AD2_WAVEGEN_MAX_V, BenchConfig
-from ldo_bench.instruments.base import ChannelSetup, DcReading, InstrumentError, PowerSupply
+from ldo_bench.instruments.base import ChannelSetup, DcReading, InstrumentError, PowerSupply, Voltmeter
 from ldo_bench.loadbank import LoadBank
 
 log = logging.getLogger(__name__)
 
 RefProbe = tuple[Literal["vin", "dio"], int]
 ConfirmFn = Callable[[str], bool]
+
+
+@dataclass(frozen=True)
+class DcPoint:
+    """One DC operating point. VOUT comes from the DMM when there is one, else the AD2."""
+
+    vout: float
+    vout_std: float
+    vin: float
+    vout_ad2: float
+    source: Literal["dmm", "ad2"]
 
 
 class Bench:
@@ -30,12 +44,14 @@ class Bench:
         psu: PowerSupply,
         ad2,  # implements Oscilloscope, DigitalOut and Wavegen
         *,
+        dmm: Voltmeter | None = None,
         sim_model=None,
         assume_yes: bool = False,
         confirm: ConfirmFn | None = None,
     ) -> None:
         self.cfg = cfg
         self.psu = psu
+        self.dmm = dmm
         self.scope = ad2
         self.dio = ad2
         self.awg = ad2
@@ -62,7 +78,18 @@ class Bench:
             time.sleep(seconds)
 
     def idns(self) -> dict[str, str]:
-        return {"psu": self.psu.idn, "ad2": self.scope.idn}
+        out = {"psu": self.psu.idn, "ad2": self.scope.idn}
+        if self.dmm is not None:
+            out["dmm"] = self.dmm.idn
+        return out
+
+    def vout_wiring(self) -> str:
+        """Wiring line for whatever measures VOUT in the DC tests."""
+        a = self.cfg.ad2
+        line = f"Scope {a.vout_channel}+ -> VOUT at the output pins, {a.vout_channel}- -> GND"
+        if self.dmm is not None:
+            line += "; DMM V+/COM -> VOUT / GND at the output pins (DMM is the VOUT reference)"
+        return line
 
     # --- Wiring -------------------------------------------------------------
     def confirm_wiring(self, title: str, lines: list[str], ref_probe: RefProbe) -> None:
@@ -128,9 +155,18 @@ class Bench:
         }
 
     def measure_dc(self, duration: float) -> tuple[DcReading, DcReading]:
-        """Return (vout, ref) averaged over `duration`."""
+        """Return (vout, ref) from the AD2, averaged over `duration`."""
         r = self.scope.measure_dc(duration, self.scope_setups())
         return r[self.cfg.ad2.vout_channel], r[self.cfg.ad2.ref_channel]
+
+    def measure_point(self, duration: float) -> DcPoint:
+        """VIN from the AD2; VOUT from the DMM if present (more accurate), else the AD2."""
+        vout_ad2, vin = self.measure_dc(duration)
+        if self.dmm is None:
+            return DcPoint(vout_ad2.mean, vout_ad2.std, vin.mean, vout_ad2.mean, "ad2")
+        n = self.cfg.dmm.samples if self.cfg.dmm else 1
+        x = np.array([self.dmm.read_dcv() for _ in range(n)])
+        return DcPoint(float(x.mean()), float(x.std()), vin.mean, vout_ad2.mean, "dmm")
 
     # --- Shutdown -----------------------------------------------------------
     def shutdown(self) -> None:
@@ -142,6 +178,7 @@ class Bench:
             ("PSU output off", lambda: self.psu.output(False)),
             ("PSU 0 V", lambda: self.psu.set_voltage(0.0)),
             ("close PSU", self.psu.close),
+            ("close DMM", lambda: self.dmm.close() if self.dmm is not None else None),
             ("close AD2", self.scope.close),
         ]
         for name, fn in steps:
@@ -160,28 +197,44 @@ def open_bench(
     ad_serial: str | None = None,
     assume_yes: bool = False,
     confirm: ConfirmFn | None = None,
+    use_dmm: bool = True,
 ) -> Bench:
+    want_dmm = use_dmm and cfg.dmm is not None and cfg.dmm.enabled
     if sim:
         from ldo_bench.instruments.sim import LdoModel, SimAnalogDiscovery, SimPowerSupply
 
         lb = cfg.loadbank
         model = LdoModel(cfg.dut.vout_nominal, lb.resistors, lb.dio_pins, lb.active_high)
+        from ldo_bench.instruments.sim import SimDmm
+
         return Bench(
             cfg,
             SimPowerSupply(model),
             SimAnalogDiscovery(model, cfg.ad2.vout_channel),
+            dmm=SimDmm(model) if want_dmm else None,
             sim_model=model,
             assume_yes=True,
         )
 
-    from ldo_bench.instruments.discovery import open_ad2, open_psu
+    from ldo_bench.instruments.discovery import open_ad2, open_dmm, open_psu
 
     psu = open_psu(
         psu_resource or cfg.psu.resource, gpib_address=cfg.psu.gpib_address, channel=cfg.psu.channel
     )
+    opened: list = [psu]
     try:
         ad2 = open_ad2(ad_serial or cfg.ad2.serial)
+        opened.append(ad2)
+        dmm = None
+        if want_dmm:
+            dmm = open_dmm(cfg.dmm.resource, baud=cfg.dmm.baud)
+            opened.append(dmm)
+            dmm.configure_dcv(range=cfg.dmm.range, nplc=cfg.dmm.nplc)
     except BaseException:
-        psu.close()
+        for inst in reversed(opened):
+            try:
+                inst.close()
+            except Exception as e:
+                log.debug("close after failed open: %s", e)
         raise
-    return Bench(cfg, psu, ad2, assume_yes=assume_yes, confirm=confirm)
+    return Bench(cfg, psu, ad2, dmm=dmm, assume_yes=assume_yes, confirm=confirm)

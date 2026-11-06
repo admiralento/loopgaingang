@@ -20,6 +20,8 @@ Resource strings:
     "GPIB0::5::INSTR@py"         VISA via pyvisa-py
     "prologix:COM5:5"            Prologix adapter on COM5, GPIB address 5
     "prologix:/dev/tty.usbserial-A1B2:5"
+    "serial:/dev/cu.usbserial-ABB83W3S"   instrument on its own RS-232 port (e.g. 34401A)
+    "serial:COM3"
 """
 
 from __future__ import annotations
@@ -34,6 +36,7 @@ from ldo_bench.instruments.base import InstrumentError
 log = logging.getLogger(__name__)
 
 PROLOGIX_PREFIX = "prologix:"
+SERIAL_PREFIX = "serial:"
 
 
 class Transport(Protocol):
@@ -53,7 +56,9 @@ def parse_prologix(resource: str) -> tuple[str, int]:
     return port, int(addr)
 
 
-def open_transport(resource: str, *, timeout: float = 5.0) -> Transport:
+def open_transport(resource: str, *, timeout: float = 5.0, baud: int = 9600) -> Transport:
+    if resource.lower().startswith(SERIAL_PREFIX):
+        return SerialTransport(resource[len(SERIAL_PREFIX) :], baud=baud, timeout=timeout)
     if resource.lower().startswith(PROLOGIX_PREFIX):
         port, addr = parse_prologix(resource)
         return PrologixTransport(port, addr, timeout=timeout)
@@ -171,3 +176,52 @@ class PrologixTransport:
             time.sleep(0.05)
         finally:
             self._ser.close()
+
+
+class SerialTransport:
+    """An instrument's own RS-232 port (SCPI over serial), e.g. the 34401A's DB9.
+
+    HP/Agilent bench instruments use 8 data bits, no parity, 2 stop bits and a
+    DTR/DSR handshake. We assert DTR (so the instrument may send) but don't
+    block on DSR, because many USB-serial adapters and cables don't wire it.
+    Needs a null-modem cable.
+    """
+
+    def __init__(self, port: str, *, baud: int = 9600, timeout: float = 5.0, serial_obj=None) -> None:
+        self.name = f"{SERIAL_PREFIX}{port}"
+        if serial_obj is None:
+            import serial
+
+            try:
+                serial_obj = serial.Serial(
+                    port,
+                    baud,
+                    bytesize=serial.EIGHTBITS,
+                    parity=serial.PARITY_NONE,
+                    stopbits=serial.STOPBITS_TWO,
+                    timeout=timeout,
+                    write_timeout=timeout,
+                )
+            except serial.SerialException as e:
+                raise InstrumentError(f"could not open serial port {port}: {e}") from e
+            serial_obj.dtr = True
+        self._ser = serial_obj
+
+    def write(self, cmd: str) -> None:
+        log.debug("%s <- %s", self.name, cmd)
+        self._ser.write((cmd + "\n").encode("ascii"))
+
+    def query(self, cmd: str) -> str:
+        self._ser.reset_input_buffer()
+        self.write(cmd)
+        reply = self._ser.readline().decode("ascii", "replace").strip()
+        if not reply:
+            raise InstrumentError(
+                f"{self.name}: no reply to '{cmd}'. Check the instrument's interface is set to RS-232 "
+                "(baud and parity matching), and that the cable is null-modem."
+            )
+        log.debug("%s <- %s -> %s", self.name, cmd, reply)
+        return reply
+
+    def close(self) -> None:
+        self._ser.close()

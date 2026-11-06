@@ -213,3 +213,20 @@ class SimAnalogDiscovery:
 
     def close(self) -> None:
         pass
+
+
+class SimDmm:
+    """34401A stand-in: VOUT with ~20 uV of noise."""
+
+    def __init__(self, model: LdoModel) -> None:
+        self.m = model
+        self.idn = "SIM,34401A,0,sim"
+
+    def configure_dcv(self, *, range: float | None, nplc: float) -> None:
+        pass
+
+    def read_dcv(self) -> float:
+        return self.m.vout_dc() + float(self.m.rng.normal(0.0, 20e-6))
+
+    def close(self) -> None:
+        pass

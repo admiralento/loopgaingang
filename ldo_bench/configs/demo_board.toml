@@ -30,6 +30,13 @@ wavegen_channel = 1
 vout = { range = 5.0, offset = 0.0 }
 ref  = { range = 50.0, offset = 0.0 }
 
+[dmm]                        # Agilent 34401A measuring VOUT in the DC tests (load/line reg)
+enabled = true               # false, or --no-dmm, to use the AD2 for VOUT instead
+resource = ""                # "" = auto-discover. Or "serial:/dev/cu.usbserial-XXXX" / "serial:COM3"
+baud = 9600                  # must match the meter's RS-232 setting
+nplc = 10                    # integration time (power-line cycles): 10 = ~0.2 s/reading, low noise
+samples = 1                  # readings averaged per point
+
 [loadbank]
 # Switched_R_Load_Bank: R1..R6, B0 = LSB. 125 ohm || 125 ohm on bit 2.
 # Current per bit at 1.0 V: 4.0, 8.0, 16.0, 31.6, 64.9 mA  (all on: ~125 mA)

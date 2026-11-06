@@ -51,11 +51,17 @@ def _load(path: Path) -> BenchConfig:
 
 
 @contextmanager
-def _bench(cfg: BenchConfig, sim: bool, psu: str | None, ad: str | None, yes: bool):
+def _bench(cfg: BenchConfig, sim: bool, psu: str | None, ad: str | None, yes: bool, use_dmm: bool = True):
     """Open the bench and turn instrument errors and Ctrl-C into clean exits."""
     try:
         with open_bench(
-            cfg, sim=sim, psu_resource=psu, ad_serial=ad, assume_yes=yes, confirm=typer.confirm
+            cfg,
+            sim=sim,
+            psu_resource=psu,
+            ad_serial=ad,
+            assume_yes=yes,
+            confirm=typer.confirm,
+            use_dmm=use_dmm,
         ) as bench:
             yield bench
     except InstrumentError as e:
@@ -169,6 +175,43 @@ def _save(bench: Bench, cfg: BenchConfig, config_path: Path, out: Path, module, 
     return run.path
 
 
+NoDmmOpt = Annotated[bool, typer.Option("--no-dmm", help="Measure VOUT with the AD2 even if a DMM is set up")]
+
+
+@app.command("line-reg")
+def line_reg(
+    config: ConfigOpt,
+    load: Annotated[str | None, typer.Option(help="Load as a code or current, e.g. 8 or 30mA")] = None,
+    out: OutOpt = Path("results"),
+    sim: SimOpt = False,
+    psu: PsuOpt = None,
+    ad_serial: AdOpt = None,
+    no_dmm: NoDmmOpt = False,
+    yes: YesOpt = False,
+    verbose: VerboseOpt = False,
+) -> None:
+    """Line regulation: sweep VIN at a fixed load; reports dVOUT/dVIN and the dropout knee."""
+    from ldo_bench.loadbank import LoadBank, parse_load
+    from ldo_bench.procedures import line_reg as proc
+
+    _logging(verbose)
+    cfg = _load(config)
+    lr = _section(cfg, "line-reg")
+    if load is not None:
+        try:
+            code = parse_load(load, LoadBank(cfg.loadbank, None), cfg.dut.vout_nominal)
+        except ValueError as e:
+            typer.secho(str(e), fg="red", err=True)
+            raise typer.Exit(2) from e
+        cfg = _load_with(cfg, line_reg=lr.model_copy(update={"load_code": code}))
+        lr = cfg.line_reg
+    with _bench(cfg, sim, psu, ad_serial, yes, use_dmm=not no_dmm) as bench:
+        res = proc.run(bench, lr)
+        path = _save(bench, cfg, config, out, proc, res)
+    typer.echo(res.report())
+    typer.secho(f"Saved to {path}", fg="green")
+
+
 @app.command("load-reg")
 def load_reg(
     config: ConfigOpt,
@@ -177,6 +220,7 @@ def load_reg(
     sim: SimOpt = False,
     psu: PsuOpt = None,
     ad_serial: AdOpt = None,
+    no_dmm: NoDmmOpt = False,
     yes: YesOpt = False,
     verbose: VerboseOpt = False,
 ) -> None:
@@ -189,7 +233,7 @@ def load_reg(
     if vin is not None:
         cfg = _load_with(cfg, load_reg=lr.model_copy(update={"vin": vin}))
         lr = cfg.load_reg
-    with _bench(cfg, sim, psu, ad_serial, yes) as bench:
+    with _bench(cfg, sim, psu, ad_serial, yes, use_dmm=not no_dmm) as bench:
         res = proc.run(bench, lr)
         path = _save(bench, cfg, config, out, proc, res)
     typer.echo(res.report())

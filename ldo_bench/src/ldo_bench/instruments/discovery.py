@@ -5,6 +5,9 @@ E36xxA supplies (E3638A, E3648A):
 first over VISA (GPIB / USB resources), then on serial ports that answer like
 a Prologix-style USB-GPIB adapter. If there is more than one match, the user
 picks one with --psu or psu.resource in the config.
+
+The DMM (34401A) is found the same way: on USB serial ports (its own RS-232
+port through a USB-serial adapter) and over VISA if it is on GPIB.
 """
 
 from __future__ import annotations
@@ -15,9 +18,13 @@ from dataclasses import dataclass
 
 from ldo_bench.instruments.base import InstrumentError, Oscilloscope
 from ldo_bench.instruments.e36xx import GPIB_HINT, SUPPORTED, AgilentE36xx, model_of
+from ldo_bench.instruments.hp34401a import HP34401A, RS232_HINT
+from ldo_bench.instruments.hp34401a import MODEL as DMM_MODEL
 from ldo_bench.instruments.transports import (
     PROLOGIX_PREFIX,
+    SERIAL_PREFIX,
     PrologixTransport,
+    SerialTransport,
     open_transport,
     visa_resource_manager,
 )
@@ -84,9 +91,30 @@ def _serial_ports() -> list[str]:
     return ports
 
 
-def _prologix_candidates(preferred_address: int) -> list[Found]:
+def _serial_instrument_candidates(baud: int = 9600) -> list[Found]:
+    """Instruments on their own RS-232 port (e.g. the 34401A) behind USB-serial adapters."""
     found: list[Found] = []
     for port in _serial_ports():
+        try:
+            t = SerialTransport(port, baud=baud, timeout=1.0)
+        except InstrumentError:
+            continue
+        try:
+            t.write("SYST:REM")
+            found.append(Found(f"{SERIAL_PREFIX}{port}", t.query("*IDN?")))
+            t.write("SYST:LOC")
+        except InstrumentError as e:
+            log.debug("%s: no RS-232 instrument at %d baud: %s", port, baud, e)
+        finally:
+            t.close()
+    return found
+
+
+def _prologix_candidates(preferred_address: int, skip: frozenset[str] = frozenset()) -> list[Found]:
+    found: list[Found] = []
+    for port in _serial_ports():
+        if port in skip:
+            continue
         try:
             t = PrologixTransport(port, preferred_address, timeout=SCAN_TIMEOUT)
         except InstrumentError:
@@ -137,6 +165,28 @@ def open_psu(resource: str = "", *, gpib_address: int = 5, channel: int = 1) -> 
     return AgilentE36xx(open_transport(psus[0].resource), channel)
 
 
+def _is_dmm(f: Found) -> bool:
+    return DMM_MODEL in f.idn.upper()
+
+
+def open_dmm(resource: str = "", *, baud: int = 9600) -> HP34401A:
+    if resource:
+        return HP34401A(open_transport(resource, baud=baud))
+    dmms = [f for f in _serial_instrument_candidates(baud) if _is_dmm(f)]
+    if not dmms:
+        dmms = [f for f in _visa_candidates() if _is_dmm(f)]
+    if not dmms:
+        raise InstrumentError(
+            f"no {DMM_MODEL} found on USB-serial ports or VISA.\n{RS232_HINT}\n"
+            "Run without the DMM with --no-dmm, or set dmm.enabled = false."
+        )
+    if len(dmms) > 1:
+        listing = "\n  ".join(f"{f.resource}  ({f.idn})" for f in dmms)
+        raise InstrumentError(f"more than one {DMM_MODEL} found; set dmm.resource:\n  {listing}")
+    log.info("Using DMM %s (%s)", dmms[0].resource, dmms[0].idn)
+    return HP34401A(open_transport(dmms[0].resource, baud=baud))
+
+
 def open_ad2(serial: str = "") -> Oscilloscope:
     from ldo_bench.instruments.ad2 import open_ad2_device
 
@@ -158,16 +208,18 @@ def _ad2_lines() -> list[str]:
     ]
 
 
-def discover(gpib_address: int = 5) -> list[str]:
+def discover(gpib_address: int = 5, baud: int = 9600) -> list[str]:
     lines = []
-    instruments = _visa_candidates()
-    instruments += _prologix_candidates(gpib_address)
+    serial_found = _serial_instrument_candidates(baud)
+    skip = frozenset(f.resource.removeprefix(SERIAL_PREFIX) for f in serial_found)
+    instruments = _visa_candidates() + _prologix_candidates(gpib_address, skip) + serial_found
     for f in instruments:
-        tag = "  <- PSU" if _is_psu(f) else ""
+        tag = "  <- PSU" if _is_psu(f) else "  <- DMM" if _is_dmm(f) else ""
         lines.append(f"{f.resource:<40} {f.idn}{tag}")
-    if not instruments:
-        lines.append("No GPIB instruments found (VISA or Prologix-style adapter).")
+    if not any(_is_psu(f) for f in instruments):
+        lines.append(f"No supported power supply found ({', '.join(SUPPORTED)}).")
         lines.append(GPIB_HINT)
-    elif not any(_is_psu(f) for f in instruments):
-        lines.append(f"No supported power supply among them ({', '.join(SUPPORTED)}).")
+    if not any(_is_dmm(f) for f in instruments):
+        lines.append(f"No {DMM_MODEL} DMM found (optional).")
+        lines.append(RS232_HINT)
     return lines + _ad2_lines()

@@ -28,14 +28,21 @@ class LoadRegResult:
     vin_set: float
     rows: list[dict]
     reg: LoadRegulation
+    vout_source: str = "ad2"
 
     def summary(self) -> dict:
-        return {"vin_set": self.vin_set, "points": len(self.rows), **self.reg.as_dict()}
+        return {
+            "vin_set": self.vin_set,
+            "points": len(self.rows),
+            "vout_source": self.vout_source,
+            **self.reg.as_dict(),
+        }
 
     def report(self) -> str:
         r = self.reg
         return (
-            f"Load regulation at VIN = {self.vin_set:.3f} V, {r.i_min * 1e3:.1f} to {r.i_max * 1e3:.1f} mA:\n"
+            f"Load regulation at VIN = {self.vin_set:.3f} V, {r.i_min * 1e3:.1f} to {r.i_max * 1e3:.1f} mA "
+            f"(VOUT from {self.vout_source.upper()}):\n"
             f"  VOUT       {r.v_at_i_min:.5f} V -> {r.v_at_i_max:.5f} V\n"
             f"  dVOUT      {r.delta_v * 1e3:.3f} mV  ({r.percent:.3f} %)\n"
             f"  slope      {r.slope:.4f} mV/mA  (R_out {r.r_out * 1e3:.1f} mOhm, R^2 {r.r2:.4f})"
@@ -46,7 +53,7 @@ def wiring(bench: Bench) -> list[str]:
     a, lb = bench.cfg.ad2, bench.cfg.loadbank
     return [
         "PSU -> VIN (DC input, not through the buffer)",
-        f"Scope {a.vout_channel}+ -> VOUT at the output pins, {a.vout_channel}- -> GND",
+        bench.vout_wiring(),
         f"Scope {a.ref_channel}+ -> VIN at the board, {a.ref_channel}- -> GND",
         f"DIO {lb.dio_pins} -> load bank bits B0..B{len(lb.dio_pins) - 1}",
     ]
@@ -63,13 +70,15 @@ def run(bench: Bench, lr: LoadRegConfig) -> LoadRegResult:
     for k, code in enumerate(codes):
         bank.set(code)
         bench.sleep(lr.settle_time)
-        vout, vin = bench.measure_dc(lr.dc_window)
+        p = bench.measure_point(lr.dc_window)
         row = {
             "code": code,
-            "i_est_a": bank.current(code, vout.mean),
-            "vout_v": vout.mean,
-            "vout_std_v": vout.std,
-            "vin_board_v": vin.mean,
+            "i_est_a": bank.current(code, p.vout),
+            "vout_v": p.vout,
+            "vout_std_v": p.vout_std,
+            "vout_source": p.source,
+            "vout_ad2_v": p.vout_ad2,
+            "vin_board_v": p.vin,
             "vin_set_v": lr.vin,
         }
         if lr.psu_readback:
@@ -82,13 +91,13 @@ def run(bench: Bench, lr: LoadRegConfig) -> LoadRegResult:
             len(codes),
             code,
             row["i_est_a"] * 1e3,
-            vout.mean,
+            p.vout,
         )
     bank.off()
 
     i = np.array([r["i_est_a"] for r in rows])
     v = np.array([r["vout_v"] for r in rows])
-    return LoadRegResult(lr.vin, rows, load_regulation(i, v))
+    return LoadRegResult(lr.vin, rows, load_regulation(i, v), rows[0]["vout_source"])
 
 
 def plot(res: LoadRegResult, dut: str):
@@ -117,7 +126,8 @@ def plot(res: LoadRegResult, dut: str):
     ax.set_title(f"Load regulation: {dut}", pad=20)
     plotting.subtitle(
         ax,
-        f"VIN {res.vin_set:.2f} V  ·  ΔVOUT {r.delta_v * 1e3:.2f} mV ({r.percent:.3f} %) over "
+        f"VIN {res.vin_set:.2f} V  ·  VOUT by {res.vout_source.upper()}  ·  "
+        f"ΔVOUT {r.delta_v * 1e3:.2f} mV ({r.percent:.3f} %) over "
         f"{r.i_min * 1e3:.0f} to {r.i_max * 1e3:.0f} mA  ·  slope {r.slope:.4f} mV/mA",
     )
     ax.legend(loc="best")
