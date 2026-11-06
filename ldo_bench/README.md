@@ -53,13 +53,17 @@ There is one config per board. Each holds the wiring, load-bank pins and resisto
 
 ### macOS: `ModuleNotFoundError: No module named 'ldo_bench'`
 
-If the repo is in an iCloud-synced folder (e.g. `~/Documents`), macOS marks files inside `.venv` as hidden, and Python 3.12+ skips hidden `.pth` files. Keep the virtualenv outside the synced folder:
+If the repo is in an iCloud-synced folder (e.g. `~/Documents`), macOS marks files inside `.venv` as hidden, and Python 3.12+ skips hidden `.pth` files. Fix it once by keeping the virtualenv outside the synced folder, with `.venv` as a symlink to it:
 
 ```
-export UV_PROJECT_ENVIRONMENT="$HOME/.venvs/ldo-bench"   # add to ~/.zshrc
+cd ldo_bench
+rm -rf .venv
+uv venv --python 3.12 ~/.venvs/ldo-bench
+ln -s ~/.venvs/ldo-bench .venv
+uv sync
 ```
 
-Windows is not affected.
+After that, `uv run ldo-bench ...` works as usual. Windows is not affected.
 
 ## Tests
 
