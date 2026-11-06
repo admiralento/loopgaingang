@@ -92,6 +92,9 @@ class DmmConfig(_Model):
         ),
     )
     baud: int = Field(9600, description="Must match the 34401A's RS-232 baud rate setting")
+    parity: Literal["none", "even", "odd"] = Field(
+        "none", description="34401A PARITY setting: NONE: 8 BITS = 'none', EVEN: 7 BITS = 'even'"
+    )
     nplc: Literal[0.02, 0.2, 1, 10, 100] = Field(10, description="Integration time in power-line cycles")
     range: float | None = Field(None, gt=0, description="Fixed DCV range (V); None = auto range")
     samples: int = Field(1, ge=1, description="Readings averaged per point")

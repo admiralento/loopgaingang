@@ -22,3 +22,11 @@ def jafwak():
 def bench(cfg):
     with open_bench(cfg, sim=True) as b:
         yield b
+
+
+@pytest.fixture(autouse=True)
+def _no_serial_delays(monkeypatch):
+    """Fake serial ports don't need the 34401A's pacing."""
+    from ldo_bench.instruments.transports import SerialTransport
+
+    monkeypatch.setattr(SerialTransport, "CMD_GAP", 0.0)

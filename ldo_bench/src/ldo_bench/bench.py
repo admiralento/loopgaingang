@@ -227,7 +227,7 @@ def open_bench(
         opened.append(ad2)
         dmm = None
         if want_dmm:
-            dmm = open_dmm(cfg.dmm.resource, baud=cfg.dmm.baud)
+            dmm = open_dmm(cfg.dmm.resource, baud=cfg.dmm.baud, parity=cfg.dmm.parity)
             opened.append(dmm)
             dmm.configure_dcv(range=cfg.dmm.range, nplc=cfg.dmm.nplc)
     except BaseException:

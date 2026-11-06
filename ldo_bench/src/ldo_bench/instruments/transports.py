@@ -37,6 +37,8 @@ log = logging.getLogger(__name__)
 
 PROLOGIX_PREFIX = "prologix:"
 SERIAL_PREFIX = "serial:"
+# parity setting -> (data bits, pyserial parity)
+SERIAL_FRAMES = {"none": (8, "N"), "even": (7, "E"), "odd": (7, "O")}
 
 
 class Transport(Protocol):
@@ -56,9 +58,11 @@ def parse_prologix(resource: str) -> tuple[str, int]:
     return port, int(addr)
 
 
-def open_transport(resource: str, *, timeout: float = 5.0, baud: int = 9600) -> Transport:
+def open_transport(
+    resource: str, *, timeout: float = 5.0, baud: int = 9600, parity: str = "none"
+) -> Transport:
     if resource.lower().startswith(SERIAL_PREFIX):
-        return SerialTransport(resource[len(SERIAL_PREFIX) :], baud=baud, timeout=timeout)
+        return SerialTransport(resource[len(SERIAL_PREFIX) :], baud=baud, parity=parity, timeout=timeout)
     if resource.lower().startswith(PROLOGIX_PREFIX):
         port, addr = parse_prologix(resource)
         return PrologixTransport(port, addr, timeout=timeout)
@@ -181,23 +185,40 @@ class PrologixTransport:
 class SerialTransport:
     """An instrument's own RS-232 port (SCPI over serial), e.g. the 34401A's DB9.
 
-    HP/Agilent bench instruments use 8 data bits, no parity, 2 stop bits and a
-    DTR/DSR handshake. We assert DTR (so the instrument may send) but don't
-    block on DSR, because many USB-serial adapters and cables don't wire it.
-    Needs a null-modem cable.
+    HP/Agilent bench instruments use 2 stop bits and either 8 data bits with no
+    parity or 7 data bits with even/odd parity (a front-panel setting), plus a
+    DTR/DSR handshake. We assert DTR (so the instrument may send) and, before
+    each command, wait briefly for the instrument's DSR (it drops it while busy;
+    the 34401A loses characters otherwise). If DSR never shows up (adapter or
+    cable doesn't wire it) we stop waiting for it. Needs a null-modem cable.
     """
 
-    def __init__(self, port: str, *, baud: int = 9600, timeout: float = 5.0, serial_obj=None) -> None:
+    CMD_GAP = 0.05  # s after each command: the 34401A drops back-to-back input
+    DSR_WAIT = 0.5  # s to wait for DSR before giving up on the handshake
+
+    def __init__(
+        self,
+        port: str,
+        *,
+        baud: int = 9600,
+        parity: str = "none",
+        timeout: float = 5.0,
+        serial_obj=None,
+    ) -> None:
         self.name = f"{SERIAL_PREFIX}{port}"
+        if parity not in SERIAL_FRAMES:
+            raise InstrumentError(f"unknown parity '{parity}', expected one of {list(SERIAL_FRAMES)}")
+        self.parity = parity
         if serial_obj is None:
             import serial
 
+            bytesize, par = SERIAL_FRAMES[parity]
             try:
                 serial_obj = serial.Serial(
                     port,
                     baud,
-                    bytesize=serial.EIGHTBITS,
-                    parity=serial.PARITY_NONE,
+                    bytesize=bytesize,
+                    parity=par,
                     stopbits=serial.STOPBITS_TWO,
                     timeout=timeout,
                     write_timeout=timeout,
@@ -206,15 +227,37 @@ class SerialTransport:
                 raise InstrumentError(f"could not open serial port {port}: {e}") from e
             serial_obj.dtr = True
         self._ser = serial_obj
+        self._use_dsr = True
+
+    def _wait_dsr(self) -> None:
+        if not self._use_dsr:
+            return
+        t_end = time.monotonic() + self.DSR_WAIT
+        while not getattr(self._ser, "dsr", True):
+            if time.monotonic() > t_end:
+                log.debug("%s: DSR never asserted; not using the handshake", self.name)
+                self._use_dsr = False
+                return
+            time.sleep(0.005)
 
     def write(self, cmd: str) -> None:
         log.debug("%s <- %s", self.name, cmd)
+        self._wait_dsr()
         self._ser.write((cmd + "\n").encode("ascii"))
+        if hasattr(self._ser, "flush"):
+            self._ser.flush()  # wait until it's actually on the wire
+        time.sleep(self.CMD_GAP)
 
     def query(self, cmd: str) -> str:
         self._ser.reset_input_buffer()
         self.write(cmd)
-        reply = self._ser.readline().decode("ascii", "replace").strip()
+        raw = self._ser.readline()
+        if any(b > 0x7E or (b < 0x20 and b not in (0x0A, 0x0D)) for b in raw):
+            raise InstrumentError(
+                f"{self.name}: garbled reply to '{cmd}' ({raw[:24]!r}): the instrument's baud rate or "
+                f"parity doesn't match ({self.parity})"
+            )
+        reply = raw.decode("ascii").strip()
         if not reply:
             raise InstrumentError(
                 f"{self.name}: no reply to '{cmd}'. Check the instrument's interface is set to RS-232 "

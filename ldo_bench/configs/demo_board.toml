@@ -34,6 +34,7 @@ ref  = { range = 50.0, offset = 0.0 }
 enabled = true               # false, or --no-dmm, to use the AD2 for VOUT instead
 resource = ""                # "" = auto-discover. Or "serial:/dev/cu.usbserial-XXXX" / "serial:COM3"
 baud = 9600                  # must match the meter's RS-232 setting
+parity = "even"              # bench meter is set to EVEN: 7 BITS ("none" = NONE: 8 BITS)
 nplc = 10                    # integration time (power-line cycles): 10 = ~0.2 s/reading, low noise
 samples = 1                  # readings averaged per point
 

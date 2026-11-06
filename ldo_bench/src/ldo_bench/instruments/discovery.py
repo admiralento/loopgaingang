@@ -22,6 +22,7 @@ from ldo_bench.instruments.hp34401a import HP34401A, RS232_HINT
 from ldo_bench.instruments.hp34401a import MODEL as DMM_MODEL
 from ldo_bench.instruments.transports import (
     PROLOGIX_PREFIX,
+    SERIAL_FRAMES,
     SERIAL_PREFIX,
     PrologixTransport,
     SerialTransport,
@@ -38,6 +39,7 @@ SCAN_TIMEOUT = 0.5  # s per probe while scanning
 class Found:
     resource: str
     idn: str
+    parity: str | None = None  # serial instruments: the parity that worked
 
 
 # --- probing -----------------------------------------------------------------
@@ -91,22 +93,32 @@ def _serial_ports() -> list[str]:
     return ports
 
 
-def _serial_instrument_candidates(baud: int = 9600) -> list[Found]:
-    """Instruments on their own RS-232 port (e.g. the 34401A) behind USB-serial adapters."""
+def _serial_instrument_candidates(baud: int = 9600, parity: str = "none") -> list[Found]:
+    """Instruments on their own RS-232 port (e.g. the 34401A) behind USB-serial adapters.
+
+    Tries the configured parity first, then the others, since it's a front-panel
+    setting that is easy to get out of sync with the config.
+    """
     found: list[Found] = []
+    order = [parity, *(p for p in SERIAL_FRAMES if p != parity)]
     for port in _serial_ports():
-        try:
-            t = SerialTransport(port, baud=baud, timeout=1.0)
-        except InstrumentError:
-            continue
-        try:
-            t.write("SYST:REM")
-            found.append(Found(f"{SERIAL_PREFIX}{port}", t.query("*IDN?")))
-            t.write("SYST:LOC")
-        except InstrumentError as e:
-            log.debug("%s: no RS-232 instrument at %d baud: %s", port, baud, e)
-        finally:
-            t.close()
+        for par in order:
+            try:
+                t = SerialTransport(port, baud=baud, parity=par, timeout=2.0)
+            except InstrumentError:
+                break
+            try:
+                t.write("")  # end any junk a previous probe left in the instrument's buffer
+                t.write("SYST:REM")
+                idn = t.query("*IDN?")
+                t.write("*CLS")  # clear parity errors from earlier mismatched probes
+                t.write("SYST:LOC")
+                found.append(Found(f"{SERIAL_PREFIX}{port}", idn, par))
+                break
+            except InstrumentError as e:
+                log.debug("%s: no RS-232 instrument at %d baud, parity %s: %s", port, baud, par, e)
+            finally:
+                t.close()
     return found
 
 
@@ -169,10 +181,10 @@ def _is_dmm(f: Found) -> bool:
     return DMM_MODEL in f.idn.upper()
 
 
-def open_dmm(resource: str = "", *, baud: int = 9600) -> HP34401A:
+def open_dmm(resource: str = "", *, baud: int = 9600, parity: str = "none") -> HP34401A:
     if resource:
-        return HP34401A(open_transport(resource, baud=baud))
-    dmms = [f for f in _serial_instrument_candidates(baud) if _is_dmm(f)]
+        return HP34401A(open_transport(resource, baud=baud, parity=parity))
+    dmms = [f for f in _serial_instrument_candidates(baud, parity) if _is_dmm(f)]
     if not dmms:
         dmms = [f for f in _visa_candidates() if _is_dmm(f)]
     if not dmms:
@@ -183,8 +195,13 @@ def open_dmm(resource: str = "", *, baud: int = 9600) -> HP34401A:
     if len(dmms) > 1:
         listing = "\n  ".join(f"{f.resource}  ({f.idn})" for f in dmms)
         raise InstrumentError(f"more than one {DMM_MODEL} found; set dmm.resource:\n  {listing}")
-    log.info("Using DMM %s (%s)", dmms[0].resource, dmms[0].idn)
-    return HP34401A(open_transport(dmms[0].resource, baud=baud))
+    f = dmms[0]
+    log.info("Using DMM %s (%s)", f.resource, f.idn)
+    if f.parity and f.parity != parity:
+        log.warning(
+            "The DMM is set to parity '%s', not '%s': set dmm.parity = \"%s\"", f.parity, parity, f.parity
+        )
+    return HP34401A(open_transport(f.resource, baud=baud, parity=f.parity or parity))
 
 
 def open_ad2(serial: str = "") -> Oscilloscope:
@@ -215,6 +232,8 @@ def discover(gpib_address: int = 5, baud: int = 9600) -> list[str]:
     instruments = _visa_candidates() + _prologix_candidates(gpib_address, skip) + serial_found
     for f in instruments:
         tag = "  <- PSU" if _is_psu(f) else "  <- DMM" if _is_dmm(f) else ""
+        if f.parity:
+            tag += f" (parity {f.parity})"
         lines.append(f"{f.resource:<40} {f.idn}{tag}")
     if not any(_is_psu(f) for f in instruments):
         lines.append(f"No supported power supply found ({', '.join(SUPPORTED)}).")

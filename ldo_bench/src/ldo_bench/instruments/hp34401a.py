@@ -17,9 +17,9 @@ log = logging.getLogger(__name__)
 MODEL = "34401A"
 
 RS232_HINT = (
-    "On the 34401A front panel (Shift > I/O MENU): set INTERFACE to RS-232, BAUD RATE to match "
-    "dmm.baud (default 9600) and PARITY to NONE: 8 BITS. The cable must be null-modem "
-    "(e.g. Agilent 34398A); a straight-through DB9 cable will not work."
+    "On the 34401A front panel (Shift > I/O MENU): set INTERFACE to RS-232, and BAUD RATE / PARITY "
+    "to match dmm.baud and dmm.parity (NONE: 8 BITS = 'none', EVEN: 7 BITS = 'even'). The cable "
+    "must be a full-handshake null-modem cable (e.g. Agilent 34398A)."
 )
 
 
@@ -28,6 +28,7 @@ class HP34401A:
         self.t = transport
         self.serial = isinstance(transport, SerialTransport)
         if self.serial:
+            self.t.write("")  # terminate any partial command left in the meter's buffer
             self.t.write("SYST:REM")
             time.sleep(0.1)
         try:

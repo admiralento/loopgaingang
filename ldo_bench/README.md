@@ -35,9 +35,11 @@ Close the WaveForms GUI before running tests, because only one program can open 
 On the meter's front panel (**Shift > I/O MENU**), set:
 - INTERFACE: **RS-232**
 - BAUD RATE: **9600** (or match `dmm.baud`)
-- PARITY: **NONE: 8 BITS**
+- PARITY: to match `dmm.parity`. Our bench meter is on **EVEN: 7 BITS**, so the configs say `parity = "even"`. NONE: 8 BITS would be `"none"`.
 
-The cable must be **null-modem** (e.g. Agilent 34398A); a straight-through DB9 cable won't work. The script puts the meter in remote mode while it runs and returns it to local afterwards, so the front panel works again.
+The cable must be a **full-handshake null-modem** cable (TX/RX and DTR/DSR crossed, e.g. Agilent 34398A). A straight-through or 3-wire cable won't work: the meter won't transmit until it sees our DTR.
+
+If the parity in the config is wrong, auto-discovery still finds the meter and tells you which setting to use. The script puts the meter in remote mode while it runs and returns it to local afterwards, so the front panel works again.
 
 When `[dmm]` is enabled, the DC tests read VOUT from the DMM (10 NPLC, autozero, >10 GΩ input) and VIN from the AD2. The AD2's own VOUT reading is still saved as `vout_ad2_v` for comparison. Use `--no-dmm` or `dmm.enabled = false` to use the AD2 for VOUT instead.
 
