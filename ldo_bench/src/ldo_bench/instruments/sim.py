@@ -94,7 +94,7 @@ class LdoModel:
 class SimPowerSupply:
     def __init__(self, model: LdoModel) -> None:
         self.m = model
-        self.idn = "SIM,E3638A,0,sim"
+        self.idn = "SIM,E3648A,0,sim"
         self.current_limit = 0.0
 
     def setup(self, *, current_limit: float, ovp: float | None, voltage_range: str | None) -> None:

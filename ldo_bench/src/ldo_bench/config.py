@@ -33,13 +33,14 @@ class PsuConfig(_Model):
     resource: str = Field(
         "",
         description=(
-            "Empty = auto-discover an E3638A. Otherwise a VISA resource such as "
+            "Empty = auto-discover an E3638A / E3648A. Otherwise a VISA resource such as "
             "'GPIB0::5::INSTR', or a Prologix-style adapter as 'prologix:COM5:5' "
             "(serial port, GPIB address)."
         ),
     )
     gpib_address: int = Field(5, ge=0, le=30, description="Tried first when scanning a Prologix adapter")
-    voltage_range: Literal["LOW", "HIGH"] | None = Field(None, description="E3638A output range")
+    channel: int = Field(1, ge=1, le=2, description="Output to use on a dual-output supply (E3648A)")
+    voltage_range: Literal["LOW", "HIGH"] | None = Field(None, description="Output range (LOW/HIGH)")
     current_limit: float = Field(gt=0, description="Applied before the output is enabled (A)")
     ovp: float | None = Field(None, gt=0, description="Over-voltage protection level (V)")
     v_max: float = Field(

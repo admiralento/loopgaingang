@@ -3,7 +3,7 @@
 Bench automation for characterizing the LDO on the JAFWAK board. It covers load regulation, line regulation, load transient and line transient.
 
 Hardware:
-- Agilent E3638A power supply over GPIB (USB adapter)
+- Agilent E3648A (dual output) or E3638A power supply over GPIB (XyphroLabs UsbGpib adapter)
 - Digilent Analog Discovery 2
 
 ## Setup
@@ -18,7 +18,7 @@ Hardware:
 
 ### UsbGpib adapter
 
-The adapter only appears on USB when the power supply is **on** with its **GPIB interface enabled**. On the E3638A, set the I/O config on the front panel to GPIB/HP-IB, not RS-232.
+The adapter only appears on USB when the power supply is **on** with its **GPIB interface enabled**. On the supply, set the I/O config on the front panel to GPIB/HP-IB, not RS-232.
 
 The LED shows the adapter's state:
 - **On:** connected to the instrument and visible on USB.

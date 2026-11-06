@@ -6,7 +6,7 @@
 #   Scope 1+      -> VOUT,  1- -> GND
 #   Scope 2+      -> VIN (DC tests) / J4 (load tran) / VIN (line tran),  2- -> GND
 #   W1            -> V_SIG SMA (J13) -> BUF634 -> VIN   (line tran only)
-#   E3638A        -> VIN, or VDD_BUF during line tran
+#   PSU (E3648A)  -> VIN, or VDD_BUF during line tran
 
 [dut]
 name = "TPS7A7001 demo board"
@@ -16,6 +16,7 @@ vin_max = 5.5                # TPS7A7001 recommended max is 6.5 V
 [psu]
 resource = ""
 gpib_address = 5
+channel = 1                  # E3648A output (OUT1 / OUT2); the other one is held at 0 V
 current_limit = 0.3
 v_max = 5.5
 ovp = 6.0

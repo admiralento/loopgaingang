@@ -30,7 +30,7 @@ VerboseOpt = Annotated[bool, typer.Option("--verbose", "-v", help="Debug logging
 
 @app.callback()
 def _root() -> None:
-    """LDO characterization on the bench (E3638A + Analog Discovery 2)."""
+    """LDO characterization on the bench (Agilent E36xxA supply + Analog Discovery 2)."""
 
 
 def _logging(verbose: bool) -> None:
@@ -74,10 +74,10 @@ def check_config(config: ConfigOpt) -> None:
 
 @app.command()
 def discover(sim: SimOpt = False, verbose: VerboseOpt = False) -> None:
-    """List the E3638A supplies and Analog Discovery 2s that are connected."""
+    """List the power supplies and Analog Discovery 2s that are connected."""
     _logging(verbose)
     if sim:
-        typer.echo("SIM,E3638A,0,sim  (sim)\nSIM Analog Discovery 2 (SN:SIM000)  (sim)")
+        typer.echo("SIM,E3648A,0,sim  (sim)\nSIM Analog Discovery 2 (SN:SIM000)  (sim)")
         return
     from ldo_bench.instruments.discovery import discover as _discover
 

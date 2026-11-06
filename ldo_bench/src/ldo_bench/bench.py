@@ -176,7 +176,9 @@ def open_bench(
 
     from ldo_bench.instruments.discovery import open_ad2, open_psu
 
-    psu = open_psu(psu_resource or cfg.psu.resource, gpib_address=cfg.psu.gpib_address)
+    psu = open_psu(
+        psu_resource or cfg.psu.resource, gpib_address=cfg.psu.gpib_address, channel=cfg.psu.channel
+    )
     try:
         ad2 = open_ad2(ad_serial or cfg.ad2.serial)
     except BaseException:

@@ -5,16 +5,17 @@
 #   Scope 1+      -> VOUT,  1- -> GND
 #   Scope 2+      -> VIN (DC tests) / B4 (load tran) / VIN (line tran),  2- -> GND
 #   W1            -> VIN_FG SMA (J3) -> BUF634 -> VIN   (line tran only; JP4 to buffer)
-#   E3638A        -> VIN_DC (JP4 to DC), or VS_BUFF during line tran
+#   PSU (E3648A)  -> VIN_DC (JP4 to DC), or VS_BUFF during line tran
 
 [dut]
 name = "JAFWAK"
 vout_nominal = 1.2
 vin_max = 3.6                # TODO: confirm the custom LDO's max VIN
 
-[psu]                        # Agilent E3638A over GPIB
-resource = ""                # "" = auto-discover. Or "GPIB0::5::INSTR", or "prologix:COM5:5"
-gpib_address = 5             # E363xA factory default
+[psu]                        # Agilent E3648A (or E3638A) over GPIB
+resource = ""                # "" = auto-discover. Or a VISA resource (USB0::...::INSTR, GPIB0::5::INSTR), or "prologix:COM5:5"
+gpib_address = 5             # only used to scan Prologix adapters
+channel = 1                  # E3648A output (OUT1 / OUT2); the other one is held at 0 V
 current_limit = 0.3          # A, applied before the output turns on
 v_max = 5.5                  # PSU ceiling; above dut.vin_max only so line_tran can power VS_BUFF
 ovp = 6.0

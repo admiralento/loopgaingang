@@ -3,10 +3,11 @@ import pytest
 from ldo_bench.instruments import discovery
 from ldo_bench.instruments.base import InstrumentError
 from ldo_bench.instruments.discovery import Found
-from ldo_bench.instruments.e3638a import E3638A
+from ldo_bench.instruments.e36xx import AgilentE36xx
 from ldo_bench.instruments.transports import PrologixTransport, parse_prologix
 
 IDN = "Agilent Technologies,E3638A,0,1.2-5.0-1.0"
+IDN_DUAL = "Agilent Technologies,E3648A,0,1.7-5.0-1.0"  # the unit on our bench
 
 
 class FakeTransport:
@@ -38,13 +39,30 @@ class FakeTransport:
 
 
 def test_rejects_other_model():
-    with pytest.raises(InstrumentError, match="not an E3638A"):
-        E3638A(FakeTransport(idn="Agilent Technologies,E3631A,0,2.1"))
+    with pytest.raises(InstrumentError, match="not a supported supply"):
+        AgilentE36xx(FakeTransport(idn="Agilent Technologies,E3631A,0,2.1"))
+
+
+def test_single_output_has_no_channel_2():
+    with pytest.raises(InstrumentError, match="no output 2"):
+        AgilentE36xx(FakeTransport(), channel=2)
+
+
+def test_dual_output_selects_channel_and_zeroes_the_other():
+    t = FakeTransport(idn=IDN_DUAL)
+    p = AgilentE36xx(t, channel=2)
+    p.setup(current_limit=0.3, ovp=None, voltage_range=None)
+    i = t.sent.index("INST:SEL OUT1")
+    assert t.sent[i + 1] == "VOLT 0"  # unused output held at 0 V
+    assert t.sent.index("INST:SEL OUT2") < t.sent.index("CURR 0.3000")
+    t.sent.clear()
+    p.set_voltage(1.8)
+    assert t.sent == ["INST:SEL OUT2", "VOLT 1.8000"]
 
 
 def test_setup_and_readback():
     t = FakeTransport()
-    p = E3638A(t)
+    p = AgilentE36xx(t)
     p.setup(current_limit=0.3, ovp=6.0, voltage_range=None)
     assert "OUTP OFF" in t.sent and "CURR 0.3000" in t.sent and "VOLT:PROT 6.000" in t.sent
     p.set_voltage(1.8)
@@ -55,7 +73,7 @@ def test_setup_and_readback():
 
 def test_scpi_error_raises():
     t = FakeTransport()
-    p = E3638A(t)
+    p = AgilentE36xx(t)
     t.errors = ['-222,"Data out of range"']
     with pytest.raises(InstrumentError, match="Data out of range"):
         p.setup(current_limit=99, ovp=None, voltage_range=None)
@@ -63,7 +81,7 @@ def test_scpi_error_raises():
 
 def test_ovp_rejection_is_only_a_warning(caplog):
     t = FakeTransport()
-    p = E3638A(t)
+    p = AgilentE36xx(t)
     t.errors = ['+0,"No error"', '-113,"Undefined header"']  # CURR ok, OVP rejected
     p.setup(current_limit=0.3, ovp=6.0, voltage_range=None)
     assert "software limits" in caplog.text
@@ -128,5 +146,5 @@ def test_open_psu_falls_back_to_prologix(monkeypatch):
 def test_no_psu_found(monkeypatch):
     monkeypatch.setattr(discovery, "_visa_candidates", list)
     monkeypatch.setattr(discovery, "_prologix_candidates", lambda addr: [])
-    with pytest.raises(InstrumentError, match="no E3638A"):
+    with pytest.raises(InstrumentError, match="GPIB \\(HP-IB\\)"):
         discovery.open_psu()
