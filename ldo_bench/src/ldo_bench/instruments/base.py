@@ -105,7 +105,10 @@ class DigitalOut(Protocol):
         ...
 
     def release_all(self) -> None:
-        """Drive every pin this object has touched low, then stop driving them."""
+        """Stop driving (tri-state) every pin this object has touched.
+
+        Both load banks have 10k gate pull-downs, so released pins mean load off.
+        """
         ...
 
 

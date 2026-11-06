@@ -1,0 +1,215 @@
+"""Simulated bench: an LDO model plus fake PSU / AD2 that all share its state.
+
+Used by `--sim` and by the test suite, so every procedure can run end to end
+with no hardware attached. The model is deliberately simple but has the
+features the analysis has to handle: output resistance, finite line
+regulation, dropout, noise, an underdamped transient and a switching glitch.
+
+What VIN is connected to follows the real board: if the wavegen is driving
+(line transient, VIN through the BUF634) VIN follows W1; otherwise VIN follows
+the PSU output.
+"""
+
+from __future__ import annotations
+
+import math
+from collections.abc import Callable
+from dataclasses import dataclass, field
+
+import numpy as np
+
+from ldo_bench.instruments.base import Capture, ChannelSetup, DcReading, Edge, InstrumentError
+
+
+@dataclass
+class LdoModel:
+    vout_nominal: float
+    resistors: list[float]
+    dio_pins: list[int]
+    active_high: bool = True
+    r_out: float = 0.05  # ohm, DC load regulation
+    line_reg: float = 0.5e-3  # V/V, DC line regulation
+    dropout: float = 0.10  # V at zero load
+    r_dropout: float = 1.0  # ohm, extra dropout per amp
+    iq: float = 50e-6  # A
+    noise_rms: float = 0.4e-3  # V
+    # Transient: v(t) = A * exp(-t / tau) * cos(2 pi f t)
+    z_peak: float = 0.4  # ohm, peak dip per amp of load step
+    k_line: float = 0.05  # V/V, peak output kick per volt of line step
+    tau: float = 4e-6
+    f_ring: float = 150e3
+    glitch: float = 0.05  # V, one-sample spike at the switching edge
+    seed: int = 1234
+
+    # bench state
+    psu_v: float = 0.0
+    psu_on: bool = False
+    awg_v: dict[int, float] = field(default_factory=dict)  # enabled wavegen channels
+    dio: dict[int, bool] = field(default_factory=dict)
+    ref_probe: tuple[str, int] = ("vin", 0)  # what scope ch2 is wired to: ("vin", 0) or ("dio", pin)
+
+    def __post_init__(self) -> None:
+        self.rng = np.random.default_rng(self.seed)
+
+    # --- DC model -----------------------------------------------------------
+    @property
+    def vin(self) -> float:
+        if self.awg_v:
+            return next(iter(self.awg_v.values()))
+        return self.psu_v if self.psu_on else 0.0
+
+    def conductance(self) -> float:
+        return sum(
+            1.0 / r
+            for pin, r in zip(self.dio_pins, self.resistors, strict=True)
+            if self.dio.get(pin, not self.active_high) == self.active_high
+        )
+
+    def vout_dc(self, vin: float | None = None, g: float | None = None) -> float:
+        vin = self.vin if vin is None else vin
+        g = self.conductance() if g is None else g
+        if vin <= 0:
+            return 0.0
+        v = self.vout_nominal
+        for _ in range(4):  # load current depends on vout; iterate to a fixed point
+            i = v * g
+            vreg = self.vout_nominal + self.line_reg * (vin - self.vout_nominal - 0.5) - self.r_out * i
+            vdrop = vin - self.dropout - self.r_dropout * i
+            v = max(0.0, min(vreg, vdrop))
+        return v
+
+    def load_current(self) -> float:
+        return self.vout_dc() * self.conductance()
+
+    def ref_value(self) -> float:
+        kind, pin = self.ref_probe
+        if kind == "dio":
+            return 3.3 if self.dio.get(pin, False) else 0.0
+        return self.vin
+
+    def noise(self, n: int) -> np.ndarray:
+        return self.rng.normal(0.0, self.noise_rms, n)
+
+
+class SimPowerSupply:
+    def __init__(self, model: LdoModel) -> None:
+        self.m = model
+        self.idn = "SIM,E3638A,0,sim"
+        self.current_limit = 0.0
+
+    def setup(self, *, current_limit: float, ovp: float | None, voltage_range: str | None) -> None:
+        self.current_limit = current_limit
+
+    def set_voltage(self, volts: float) -> None:
+        self.m.psu_v = volts
+
+    def get_voltage_setpoint(self) -> float:
+        return self.m.psu_v
+
+    def output(self, on: bool) -> None:
+        self.m.psu_on = on
+
+    def measure_voltage(self) -> float:
+        return self.m.psu_v if self.m.psu_on else 0.0
+
+    def measure_current(self) -> float:
+        if not self.m.psu_on:
+            return 0.0
+        buffer_iq = 1.5e-3 if self.m.awg_v else 0.0
+        return self.m.load_current() + self.m.iq + buffer_iq
+
+    def close(self) -> None:
+        pass
+
+
+class SimAnalogDiscovery:
+    """Implements Oscilloscope, DigitalOut and Wavegen, like the real AD2 driver."""
+
+    def __init__(self, model: LdoModel, vout_channel: int = 1) -> None:
+        self.m = model
+        self.vout_channel = vout_channel
+        self.idn = "SIM Analog Discovery 2 (SN:SIM000)"
+        self._touched: set[int] = set()
+
+    # --- Oscilloscope -------------------------------------------------------
+    def _value(self, ch: int, vout: float, ref: float) -> float:
+        return vout if ch == self.vout_channel else ref
+
+    def measure_dc(self, duration: float, setups: dict[int, ChannelSetup]) -> dict[int, DcReading]:
+        n = 8192
+        vout, ref = self.m.vout_dc(), self.m.ref_value()
+        out = {}
+        for ch in setups:
+            x = self._value(ch, vout, ref) + self.m.noise(n)
+            out[ch] = DcReading(float(np.mean(x)), float(np.std(x)), n)
+        return out
+
+    def capture(
+        self,
+        *,
+        sample_rate: float,
+        n_samples: int,
+        setups: dict[int, ChannelSetup],
+        trigger_channel: int,
+        trigger_level: float,
+        edge: Edge,
+        pre_trigger: float,
+        stimulus: Callable[[], None],
+        timeout: float,
+    ) -> Capture:
+        m = self.m
+        vin0, g0, ref0 = m.vin, m.conductance(), m.ref_value()
+        v0 = m.vout_dc(vin0, g0)
+        stimulus()
+        vin1, g1, ref1 = m.vin, m.conductance(), m.ref_value()
+        v1 = m.vout_dc(vin1, g1)
+
+        trig_before = self._value(trigger_channel, v0, ref0)
+        trig_after = self._value(trigger_channel, v1, ref1)
+        crossed = (
+            trig_before < trigger_level <= trig_after
+            if edge == "rising"
+            else trig_before > trigger_level >= trig_after
+        )
+        if not crossed:
+            raise InstrumentError(
+                f"trigger timeout: ch{trigger_channel} went {trig_before:.3f} -> {trig_after:.3f} V, "
+                f"no {edge} crossing of {trigger_level:.3f} V"
+            )
+
+        i_trig = round(pre_trigger * n_samples)
+        t = (np.arange(n_samples) - i_trig) / sample_rate
+        after = t >= 0
+        di = v0 * g1 - v0 * g0  # load step (A), + = more load
+        dvin = vin1 - vin0
+        amp = -m.z_peak * di + m.k_line * dvin
+        ts = np.where(after, t, 0.0)
+        ring = amp * np.exp(-ts / m.tau) * np.cos(2 * math.pi * m.f_ring * ts)
+        vout = np.where(after, v1 + ring, v0) + m.noise(n_samples)
+        if 0 <= i_trig < n_samples:
+            vout[i_trig] += m.glitch * (1 if (di < 0 or dvin > 0) else -1)
+        ref = np.where(after, ref1, ref0) + m.noise(n_samples) * 0.25
+        ch1, ch2 = (vout, ref) if self.vout_channel == 1 else (ref, vout)
+        return Capture(sample_rate, ch1, ch2, i_trig)
+
+    # --- DigitalOut ---------------------------------------------------------
+    def write_pins(self, levels: dict[int, bool]) -> None:
+        self.m.dio.update(levels)
+        self._touched.update(levels)
+
+    def release_all(self) -> None:
+        for p in self._touched:
+            self.m.dio[p] = False  # floating gate pulled down by its 10k
+        self._touched.clear()
+
+    # --- Wavegen ------------------------------------------------------------
+    def set_dc(self, channel: int, volts: float) -> None:
+        if abs(volts) > 5.0:
+            raise InstrumentError("AD2 wavegen is limited to +/-5 V")
+        self.m.awg_v[channel] = volts
+
+    def off(self, channel: int) -> None:
+        self.m.awg_v.pop(channel, None)
+
+    def close(self) -> None:
+        pass
