@@ -121,7 +121,7 @@ def _smoke(bench: Bench, vin: float) -> None:
     )
     bench.loadbank.off()
     bench.vin_from_psu(vin)
-    typer.echo(f"{'code':>4} {'I_est mA':>9} {'VOUT V':>9} {'VIN V':>8} {'I_psu mA':>9}")
+    typer.echo(f"{'code':>4} {'I_est mA':>9} {'VOUT V':>9} {'VIN V':>8} {'V_psu V':>8} {'I_psu mA':>9}")
     for code in (0, bench.loadbank.max_code):
         bench.loadbank.set(code)
         bench.sleep(0.05)
@@ -129,7 +129,7 @@ def _smoke(bench: Bench, vin: float) -> None:
         i_est = bench.loadbank.current(code, vout.mean)
         typer.echo(
             f"{code:>4} {i_est * 1e3:>9.2f} {vout.mean:>9.4f} {ref.mean:>8.3f} "
-            f"{bench.psu.measure_current() * 1e3:>9.2f}"
+            f"{bench.psu.measure_voltage():>8.3f} {bench.psu.measure_current() * 1e3:>9.2f}"
         )
     bench.loadbank.off()
 
