@@ -170,9 +170,21 @@ class Bench:
         r = self.scope.measure_dc(duration, self.scope_setups())
         return r[self.cfg.ad2.vout_channel], r[self.cfg.ad2.ref_channel]
 
-    def measure_point(self, duration: float) -> DcPoint:
-        """VIN from the AD2; VOUT from the DMM if present (more accurate), else the AD2."""
+    def measure_point(self, duration: float, vin_source: Literal["ad2", "psu"] = "ad2") -> DcPoint:
+        """VOUT from the DMM if present (more accurate), else the AD2.
+
+        VIN from the AD2 at the board (`vin_source="ad2"`), or from the PSU's own
+        readback (`"psu"`), which needs no scope wiring but includes cable drop
+        and the PSU's readback error (~1-3 mV on the bench E3648A).
+        """
+        if vin_source == "psu" and self.dmm is not None:
+            vin_psu = self.psu.measure_voltage()
+            n = self.cfg.dmm.samples if self.cfg.dmm else 1
+            x = np.array([self.dmm.read_dcv() for _ in range(n)])
+            return DcPoint(float(x.mean()), float(x.std()), vin_psu, float("nan"), "dmm")
         vout_ad2, vin = self.measure_dc(duration)
+        if vin_source == "psu":
+            vin = DcReading(self.psu.measure_voltage(), 0.0, 1)
         if self.dmm is None:
             return DcPoint(vout_ad2.mean, vout_ad2.std, vin.mean, vout_ad2.mean, "ad2")
         n = self.cfg.dmm.samples if self.cfg.dmm else 1

@@ -98,7 +98,9 @@ The result is the slope dVOUT/dI_load (mV/mA, equal to the output resistance) an
 
 At a fixed load, VIN sweeps upward from `vin_start` to `vin_stop`. Starting below VOUT + dropout means the same run captures the dropout knee as well as the regulation slope.
 
-- **Measured VIN:** the analysis uses VIN measured at the board, not the supply setpoint.
+- **Measured VIN:** the analysis uses measured VIN, never the setpoint. Where it comes from is set by `line_reg.vin_source` (or `--vin-from`):
+  - `"ad2"`: scope ref channel at the board. This excludes cable drop.
+  - `"psu"`: the supply's own readback. Only the DMM on VOUT is needed, no scope probes. It includes cable drop and the supply's ~1–3 mV readback error, which is negligible for the slope. The demo board config uses this.
 - **Dropout:** the point where VOUT falls `dropout_fraction` (1 %) below its value at the highest VIN, interpolated between points.
 - **Slope:** dVOUT/dVIN in mV/V and %/V, fitted from 3 steps above the knee (or from `fit_vin_min`).
 

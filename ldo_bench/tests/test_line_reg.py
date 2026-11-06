@@ -77,11 +77,23 @@ def test_procedure_uses_dmm_when_configured(cfg):
         assert line_reg.run(b, cfg.line_reg).vout_source == "ad2"
 
 
-def test_dmm_lowers_noise(cfg):
-    lr = cfg.line_reg.model_copy(update={"vin_start": 2.5, "vin_stop": 3.0, "psu_readback": False})
+def test_vin_from_psu_needs_no_scope(cfg, monkeypatch):
+    lr = cfg.line_reg.model_copy(update={"vin_source": "psu"})
     with open_bench(cfg, sim=True) as b:
-        dmm = line_reg.run(b, lr)
-    with open_bench(cfg, sim=True, use_dmm=False) as b:
-        ad2 = line_reg.run(b, lr)
-    resid = [np.std(np.array([r["vout_v"] for r in x.rows])) for x in (dmm, ad2)]
-    assert resid[0] < resid[1]
+
+        def no_scope(*a, **k):
+            raise AssertionError("AD2 scope used in vin_source='psu' mode")
+
+        monkeypatch.setattr(b.scope, "measure_dc", no_scope)
+        wiring = line_reg.wiring(b, lr)
+        res = line_reg.run(b, lr)
+    assert not any("Scope" in w for w in wiring)
+    assert res.vin_source == "psu" and res.vout_source == "dmm"
+    assert all(r["vin_source"] == "psu" for r in res.rows)
+    assert res.reg.slope == pytest.approx(b.sim_model.line_reg, rel=0.1)
+    assert "PSU readback" in res.vin_label
+
+
+def test_vin_source_validated():
+    with pytest.raises(ValueError):
+        LineRegConfig(vin_start=1, vin_stop=2, vin_step=0.1, vin_source="dmm")

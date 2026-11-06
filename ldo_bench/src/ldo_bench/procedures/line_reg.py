@@ -31,9 +31,15 @@ class LineRegResult:
     rows: list[dict]
     reg: LineRegulation
     vout_source: str
+    vin_source: str = "ad2"
+
+    @property
+    def vin_label(self) -> str:
+        return "VIN at the board (V)" if self.vin_source == "ad2" else "VIN, PSU readback (V)"
 
     def summary(self) -> dict:
         return {
+            "vin_source": self.vin_source,
             "load_code": self.load_code,
             "i_load_a": self.i_load,
             "points": len(self.rows),
@@ -52,7 +58,7 @@ class LineRegResult:
             drop = "not reached in this sweep"
         return (
             f"Line regulation at {self.i_load * 1e3:.1f} mA (code {self.load_code}), "
-            f"VOUT from {self.vout_source.upper()}:\n"
+            f"VOUT from {self.vout_source.upper()}, VIN from {self.vin_source.upper()}:\n"
             f"  VOUT       {r.v_ref:.5f} V at the highest VIN\n"
             f"  slope      {r.slope * 1e3:.4f} mV/V  ({r.percent_per_v:.4f} %/V, R^2 {r.r2:.4f})\n"
             f"  fit range  VIN {r.fit_vin_min:.3f} to {r.fit_vin_max:.3f} V  "
@@ -69,29 +75,34 @@ def sweep_points(lr: LineRegConfig) -> np.ndarray:
     return np.round(pts, 6)
 
 
-def wiring(bench: Bench) -> list[str]:
+def wiring(bench: Bench, lr: LineRegConfig) -> list[str]:
     a, lb = bench.cfg.ad2, bench.cfg.loadbank
-    return [
-        "PSU -> VIN (DC input, not through the buffer)",
-        bench.vout_wiring(),
-        f"Scope {a.ref_channel}+ -> VIN at the board, {a.ref_channel}- -> GND",
-        f"DIO {lb.dio_pins} -> load bank bits B0..B{len(lb.dio_pins) - 1}",
-    ]
+    lines = ["PSU -> VIN (DC input, not through the buffer)"]
+    if lr.vin_source == "psu" and bench.dmm is not None:
+        lines.append("DMM V+/COM -> VOUT / GND at the output pins (no scope probes needed)")
+    else:
+        lines.append(bench.vout_wiring())
+    if lr.vin_source == "ad2":
+        lines.append(f"Scope {a.ref_channel}+ -> VIN at the board, {a.ref_channel}- -> GND")
+    if lr.load_code:
+        lines.append(f"DIO {lb.dio_pins} -> load bank bits B0..B{len(lb.dio_pins) - 1}, AD2 GND -> board GND")
+    return lines
 
 
 def run(bench: Bench, lr: LineRegConfig) -> LineRegResult:
     bank = bench.loadbank
     vins = sweep_points(lr)
-    bench.confirm_wiring("line regulation", wiring(bench), ref_probe=("vin", 0))
+    bench.confirm_wiring("line regulation", wiring(bench, lr), ref_probe=("vin", 0))
 
     bank.set(lr.load_code)
     rows = []
     for k, v in enumerate(vins):
         bench.vin_from_psu(float(v))
-        p = bench.measure_point(lr.dc_window)
+        p = bench.measure_point(lr.dc_window, vin_source=lr.vin_source)
         row = {
             "vin_set_v": float(v),
-            "vin_board_v": p.vin,
+            "vin_v": p.vin,
+            "vin_source": lr.vin_source,
             "vout_v": p.vout,
             "vout_std_v": p.vout_std,
             "vout_source": p.source,
@@ -100,13 +111,14 @@ def run(bench: Bench, lr: LineRegConfig) -> LineRegResult:
             "i_est_a": bank.current(lr.load_code, p.vout),
         }
         if lr.psu_readback:
-            row["v_psu_v"] = bench.psu.measure_voltage()
+            # With vin_source="psu" the voltage readback is already vin_v.
+            row["v_psu_v"] = p.vin if lr.vin_source == "psu" else bench.psu.measure_voltage()
             row["i_psu_a"] = bench.psu.measure_current()
         rows.append(row)
         log.info("[%2d/%d] VIN %.3f V  VOUT %.5f V", k + 1, len(vins), p.vin, p.vout)
     bank.off()
 
-    x = np.array([r["vin_board_v"] for r in rows])
+    x = np.array([r["vin_v"] for r in rows])
     y = np.array([r["vout_v"] for r in rows])
     reg = line_regulation(
         x,
@@ -116,12 +128,12 @@ def run(bench: Bench, lr: LineRegConfig) -> LineRegResult:
         knee_margin=KNEE_STEPS * lr.vin_step,
     )
     i_load = bank.current(lr.load_code, reg.v_ref)
-    return LineRegResult(lr.load_code, i_load, rows, reg, rows[0]["vout_source"])
+    return LineRegResult(lr.load_code, i_load, rows, reg, rows[0]["vout_source"], lr.vin_source)
 
 
 def plot(res: LineRegResult, dut: str):
     r = res.reg
-    x = np.array([row["vin_board_v"] for row in res.rows])
+    x = np.array([row["vin_v"] for row in res.rows])
     y = np.array([row["vout_v"] for row in res.rows])
     order = np.argsort(x)
     x, y = x[order], y[order]
@@ -143,7 +155,7 @@ def plot(res: LineRegResult, dut: str):
             color=plotting.INK_2,
         )
     top.set_ylabel("VOUT (V)")
-    top.set_xlabel("VIN at the board (V)")
+    top.set_xlabel(res.vin_label)
     top.set_title(f"Line regulation: {dut}", pad=20)
     plotting.subtitle(
         top,
@@ -165,7 +177,7 @@ def plot(res: LineRegResult, dut: str):
         zorder=2,
     )
     bot.plot(x[m], (y[m] - ref) * 1e3, color=plotting.SERIES[0], **marker, label="Measured", zorder=3)
-    bot.set_xlabel("VIN at the board (V)")
+    bot.set_xlabel(res.vin_label)
     bot.set_ylabel(f"VOUT minus {ref:.4f} V (mV)")
     bot.set_title("In regulation (fit range)", fontsize=9.5, pad=6)
     bot.legend(loc="best")

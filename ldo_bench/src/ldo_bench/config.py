@@ -171,6 +171,13 @@ class LineRegConfig(_Model):
     )
     dc_window: float = Field(0.1, gt=0)
     psu_readback: bool = Field(True, description="Also record the PSU's V/I readback (~0.8 s per point)")
+    vin_source: Literal["ad2", "psu"] = Field(
+        "ad2",
+        description=(
+            "'ad2' = VIN measured at the board by scope ref channel; "
+            "'psu' = the PSU's readback (no scope wiring; includes cable drop and ~1-3 mV readback error)"
+        ),
+    )
 
     @model_validator(mode="after")
     def _check(self) -> LineRegConfig:

@@ -204,6 +204,9 @@ def psu_check(
 def line_reg(
     config: ConfigOpt,
     load: Annotated[str | None, typer.Option(help="Load as a code or current, e.g. 8 or 30mA")] = None,
+    vin_from: Annotated[
+        str | None, typer.Option("--vin-from", help="VIN measurement: 'ad2' (scope at the board) or 'psu'")
+    ] = None,
     out: OutOpt = Path("results"),
     sim: SimOpt = False,
     psu: PsuOpt = None,
@@ -226,6 +229,12 @@ def line_reg(
             typer.secho(str(e), fg="red", err=True)
             raise typer.Exit(2) from e
         cfg = _load_with(cfg, line_reg=lr.model_copy(update={"load_code": code}))
+        lr = cfg.line_reg
+    if vin_from is not None:
+        if vin_from not in ("ad2", "psu"):
+            typer.secho("--vin-from must be 'ad2' or 'psu'", fg="red", err=True)
+            raise typer.Exit(2)
+        cfg = _load_with(cfg, line_reg=lr.model_copy(update={"vin_source": vin_from}))
         lr = cfg.line_reg
     with _bench(cfg, sim, psu, ad_serial, yes, use_dmm=not no_dmm) as bench:
         res = proc.run(bench, lr)

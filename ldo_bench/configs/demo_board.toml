@@ -64,6 +64,7 @@ vin_start = 1.05
 vin_stop = 5.0
 vin_step = 0.05
 load_code = 8
+vin_source = "psu"           # VIN from the PSU readback: only the DMM on VOUT, no scope probes
 
 [load_tran]                  # matches AD_workspaces/demo_board_load_tran_*.dwf3work
 vin = 1.8
