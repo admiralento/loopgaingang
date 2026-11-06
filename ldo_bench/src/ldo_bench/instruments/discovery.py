@@ -127,7 +127,24 @@ def open_psu(resource: str = "", *, gpib_address: int = 5) -> E3638A:
 
 
 def open_ad2(serial: str = "") -> Oscilloscope:
-    raise InstrumentError("Analog Discovery 2 driver not implemented yet; use --sim")
+    from ldo_bench.instruments.ad2 import open_ad2_device
+
+    return open_ad2_device(serial)
+
+
+def _ad2_lines() -> list[str]:
+    from ldo_bench.instruments.ad2 import list_ad2, load_library
+
+    try:
+        devices = list_ad2(load_library())
+    except InstrumentError as e:
+        return [f"Analog Discovery 2: {e}"]
+    if not devices:
+        return ["No Analog Discovery 2 found."]
+    return [
+        f"{'AD2 SN:' + sn:<40} Digilent Analog Discovery 2{'  (in use by another program)' if busy else ''}"
+        for _, sn, busy in devices
+    ]
 
 
 def discover(gpib_address: int = 5) -> list[str]:
@@ -139,4 +156,4 @@ def discover(gpib_address: int = 5) -> list[str]:
         lines.append(f"{f.resource:<40} {f.idn}{tag}")
     if not instruments:
         lines.append("No GPIB instruments found (VISA or Prologix-style adapter).")
-    return lines
+    return lines + _ad2_lines()
