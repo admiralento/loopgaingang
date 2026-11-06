@@ -47,6 +47,10 @@ class LdoModel:
     awg_v: dict[int, float] = field(default_factory=dict)  # enabled wavegen channels
     dio: dict[int, bool] = field(default_factory=dict)
     ref_probe: tuple[str, int] = ("vin", 0)  # what scope ch2 is wired to: ("vin", 0) or ("dio", pin)
+    dmm_probe: str = "vout"  # what the DMM is across: "vout" or "psu" (the supply terminals)
+    psu_offset: float = -1.0e-3  # V, sim supply output error: offset + gain, like the bench E3648A
+    psu_gain: float = 4.5e-4
+    psu_readback_gain: float = 5.5e-4  # readback reads high, ~2.7 mV at 5 V
 
     def __post_init__(self) -> None:
         self.rng = np.random.default_rng(self.seed)
@@ -77,6 +81,12 @@ class LdoModel:
             vdrop = vin - self.dropout - self.r_dropout * i
             v = max(0.0, min(vreg, vdrop))
         return v
+
+    def psu_actual(self) -> float:
+        """What is really on the supply terminals (sim includes a small output error)."""
+        if not self.psu_on or self.psu_v == 0:
+            return 0.0
+        return self.psu_v * (1 + self.psu_gain) + self.psu_offset
 
     def load_current(self) -> float:
         return self.vout_dc() * self.conductance()
@@ -110,7 +120,7 @@ class SimPowerSupply:
         self.m.psu_on = on
 
     def measure_voltage(self) -> float:
-        return self.m.psu_v if self.m.psu_on else 0.0
+        return self.m.psu_actual() * (1 + self.m.psu_readback_gain) if self.m.psu_on else 0.0
 
     def measure_current(self) -> float:
         if not self.m.psu_on:
@@ -226,7 +236,9 @@ class SimDmm:
         pass
 
     def read_dcv(self) -> float:
-        return self.m.vout_dc() + float(self.m.rng.normal(0.0, 20e-6))
+        m = self.m
+        v = m.psu_actual() if m.dmm_probe == "psu" else m.vout_dc()
+        return v + float(m.rng.normal(0.0, 20e-6))
 
     def close(self) -> None:
         pass

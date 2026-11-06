@@ -20,6 +20,13 @@ log = logging.getLogger(__name__)
 # model -> number of outputs
 SUPPORTED = {"E3638A": 1, "E3648A": 2}
 
+# Accuracy (12 months, 25 +/- 5 C) as (% of value, offset V), from the datasheets.
+# E3648A: E364xA data sheet. E3638A: same figures as the E363xA family; check yours.
+ACCURACY = {
+    "E3648A": {"programming": (0.05, 10e-3), "readback": (0.05, 5e-3)},
+    "E3638A": {"programming": (0.05, 10e-3), "readback": (0.05, 5e-3)},
+}
+
 # Shown whenever we can't find or talk to the supply.
 GPIB_HINT = (
     "Make sure the supply is switched on and its remote interface is set to GPIB (HP-IB), "

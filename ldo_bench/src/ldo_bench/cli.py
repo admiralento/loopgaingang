@@ -178,6 +178,28 @@ def _save(bench: Bench, cfg: BenchConfig, config_path: Path, out: Path, module, 
 NoDmmOpt = Annotated[bool, typer.Option("--no-dmm", help="Measure VOUT with the AD2 even if a DMM is set up")]
 
 
+@app.command("psu-check")
+def psu_check(
+    config: ConfigOpt,
+    out: OutOpt = Path("results"),
+    sim: SimOpt = False,
+    psu: PsuOpt = None,
+    ad_serial: AdOpt = None,
+    yes: YesOpt = False,
+    verbose: VerboseOpt = False,
+) -> None:
+    """Check the PSU's output and readback against the DMM (DMM across the PSU, nothing else)."""
+    from ldo_bench.procedures import psu_check as proc
+
+    _logging(verbose)
+    cfg = _load(config)
+    with _bench(cfg, sim, psu, ad_serial, yes) as bench:
+        res = proc.run(bench, cfg.psu_check)
+        path = _save(bench, cfg, config, out, proc, res)
+    typer.echo(res.report())
+    typer.secho(f"Saved to {path}", fg="green" if res.passed is not False else "yellow")
+
+
 @app.command("line-reg")
 def line_reg(
     config: ConfigOpt,

@@ -137,6 +137,17 @@ class AnalysisConfig(_Model):
     )
 
 
+class PsuCheckConfig(_Model):
+    """psu-check: DMM across the PSU output, nothing else connected."""
+
+    points: list[float] = Field(
+        default_factory=lambda: [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0],
+        description="Setpoints (V); anything above psu.v_max is refused",
+    )
+    readings: int = Field(3, ge=1, description="DMM readings averaged per point")
+    settle_time: float = Field(0.5, ge=0, description="Extra wait after each setpoint (s)")
+
+
 class LoadRegConfig(_Model):
     vin: float = Field(gt=0)
     codes: list[int] = Field(default_factory=list, description="Empty = every code 0..max")
@@ -215,6 +226,7 @@ class BenchConfig(_Model):
     dmm: DmmConfig | None = None
     loadbank: LoadBankConfig
     analysis: AnalysisConfig = AnalysisConfig()
+    psu_check: PsuCheckConfig = PsuCheckConfig()
     load_reg: LoadRegConfig | None = None
     line_reg: LineRegConfig | None = None
     load_tran: LoadTranConfig | None = None
@@ -234,6 +246,9 @@ class BenchConfig(_Model):
             if v > vin_ceiling:
                 raise ValueError(f"{name} = {v} V exceeds dut.vin_max / psu.v_max ({vin_ceiling} V)")
 
+        over = [v for v in self.psu_check.points if v > self.psu.v_max or v < 0]
+        if over:
+            raise ValueError(f"psu_check.points {over} are outside 0..psu.v_max ({self.psu.v_max} V)")
         if self.load_reg:
             vin_ok("load_reg.vin", self.load_reg.vin)
             for c in self.load_reg.codes:

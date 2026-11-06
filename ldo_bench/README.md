@@ -71,6 +71,7 @@ All commands take `-c <config>`. They also accept:
 
 ```
 uv run ldo-bench smoke     -c configs/demo_board.toml   # power up, read VOUT at no / full load
+uv run ldo-bench psu-check -c configs/demo_board.toml   # PSU setpoint/readback vs DMM (DMM across the PSU only)
 uv run ldo-bench load-reg  -c configs/demo_board.toml   # load regulation (all 32 load codes)
 uv run ldo-bench line-reg  -c configs/demo_board.toml   # line regulation + dropout (--load 30mA)
 ```

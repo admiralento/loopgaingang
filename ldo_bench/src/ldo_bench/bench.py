@@ -92,10 +92,17 @@ class Bench:
         return line
 
     # --- Wiring -------------------------------------------------------------
-    def confirm_wiring(self, title: str, lines: list[str], ref_probe: RefProbe) -> None:
+    def confirm_wiring(
+        self,
+        title: str,
+        lines: list[str],
+        ref_probe: RefProbe,
+        dmm_probe: Literal["vout", "psu"] = "vout",
+    ) -> None:
         """Show the wiring a test needs and wait for the user to confirm it."""
         if self.sim_model is not None:
             self.sim_model.ref_probe = ref_probe
+            self.sim_model.dmm_probe = dmm_probe
         text = "\n".join([f"Wiring for {title}:", *(f"  - {s}" for s in lines)])
         log.info(text)
         if self.is_sim or self.assume_yes or self._confirm is None:
@@ -133,6 +140,10 @@ class Bench:
     def vin_from_psu(self, volts: float) -> None:
         """PSU drives the LDO's VIN directly."""
         self._psu_ramp(volts, min(self.cfg.dut.vin_max, self.cfg.psu.v_max))
+
+    def psu_output(self, volts: float) -> None:
+        """PSU with nothing but a meter on it (psu-check): only psu.v_max applies."""
+        self._psu_ramp(volts, self.cfg.psu.v_max)
 
     def buffer_rail(self, volts: float) -> None:
         """PSU drives the BUF634 supply (VS_BUFF / VDD_BUF) during line transient."""
