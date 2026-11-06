@@ -109,10 +109,10 @@ class Bench:
             self.sim_model.dmm_probe = dmm_probe
             self.sim_model.bank_on_psu = bank_on_psu
         text = "\n".join([f"Wiring for {title}:", *(f"  - {s}" for s in lines)])
-        log.info(text)
         if self.is_sim or self.assume_yes or self._confirm is None:
+            log.info(text)  # not asking: still record what the run assumed
             return
-        if not self._confirm(f"{text}\nIs the bench wired like this?"):
+        if not self._confirm(f"{text}\nIs the bench wired like this? (--yes skips this)"):
             raise KeyboardInterrupt("wiring not confirmed")
 
     # --- Supplies -----------------------------------------------------------
