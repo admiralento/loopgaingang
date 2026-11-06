@@ -18,7 +18,7 @@ from ldo_bench.analysis import SettlingResult, settling_analysis
 from ldo_bench.bench import Bench
 from ldo_bench.config import AnalysisConfig, LoadTranConfig
 from ldo_bench.instruments.base import ChannelSetup, InstrumentError
-from ldo_bench.procedures.transient import averaged_step, plot_edges
+from ldo_bench.procedures.transient import averaged_step, plot_edges, validate_capture
 
 log = logging.getLogger(__name__)
 
@@ -191,11 +191,14 @@ def run(bench: Bench, lt: LoadTranConfig, an: AnalysisConfig) -> LoadTranResult:
             blank_time=an.blank_time,
             reference=an.settle_reference,
         )
-        if m.step_index < 0:
-            raise InstrumentError(
-                f"load transient ({edge}): no step found on scope {a.ref_channel} in the averaged capture, "
-                "so there is nothing to analyse. Check the trigger channel wiring."
-            )
+        validate_capture(
+            bench,
+            m,
+            ref,
+            expected_swing=lt.dio_high_level,
+            test=f"load transient ({edge})",
+            ref_desc=f"DIO {pin}",
+        )
         i0 = m.step_index
         t = (np.arange(len(vout)) - i0) / cap.sample_rate
         results.append(

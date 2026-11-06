@@ -25,6 +25,9 @@ PsuOpt = Annotated[
 ]
 AdOpt = Annotated[str | None, typer.Option("--ad-serial", help="Analog Discovery 2 serial number")]
 OutOpt = Annotated[Path, typer.Option("--out", "-o", help="Folder for run results")]
+SaveSimOpt = Annotated[
+    bool, typer.Option("--save-sim", help="With --sim: save the run folder anyway (marked SIM)")
+]
 YesOpt = Annotated[bool, typer.Option("--yes", "-y", help="Don't ask to confirm wiring")]
 VerboseOpt = Annotated[bool, typer.Option("--verbose", "-v", help="Debug logging")]
 
@@ -116,6 +119,8 @@ def smoke(
 
 
 def _smoke(bench: Bench, vin: float) -> None:
+    if bench.is_sim:
+        typer.secho(SIM_BANNER, fg="magenta", bold=True)
     a = bench.cfg.ad2
     bench.confirm_wiring(
         "smoke test",
@@ -160,21 +165,47 @@ def _load_with(cfg: BenchConfig, **sections) -> BenchConfig:
         raise typer.Exit(2) from e
 
 
-def _save(bench: Bench, cfg: BenchConfig, config_path: Path, out: Path, module, res) -> Path:
-    """Write data.csv, summary.json, meta.json and plot.png for one run."""
+def _save(
+    bench: Bench, cfg: BenchConfig, config_path: Path, out: Path, module, res, save_sim: bool = False
+) -> Path | None:
+    """Write data.csv, summary.json, meta.json and plot.png for one run.
+
+    Only real measurements are saved: a test that couldn't measure the board raises before it
+    gets here, and simulated runs are not saved unless --save-sim (then marked SIM everywhere).
+    """
     from ldo_bench import plotting
     from ldo_bench.results import RunDir
 
-    run = RunDir(out, module.NAME, cfg, config_path=config_path)
+    if bench.is_sim and not save_sim:
+        return None
+    run = RunDir(out, module.NAME, cfg, config_path=config_path, simulated=bench.is_sim)
     run.write_csv("data.csv", res.rows)
     for name, rows in getattr(res, "extra_csvs", dict)().items():
         run.write_csv(name, rows)
     run.write_json("summary.json", res.summary())
     run.write_meta(idns=bench.idns(), sim=bench.is_sim)
     fig = module.plot(res, cfg.dut.name)
+    if bench.is_sim:
+        plotting.mark_simulated(fig)
     run.save_fig(fig)
     plotting.close(fig)
     return run.path
+
+
+SIM_BANNER = "SIMULATED (--sim): these numbers come from the simulator, not the board."
+
+
+def _echo_report(bench: Bench, res) -> None:
+    if bench.is_sim:
+        typer.secho(SIM_BANNER, fg="magenta", bold=True)
+    typer.echo(res.report())
+
+
+def _saved(path: Path | None, *, fg: str = "green") -> None:
+    if path is None:
+        typer.secho("Simulated run: nothing saved (add --save-sim to keep it, marked SIM).", fg="magenta")
+    else:
+        typer.secho(f"Saved to {path}", fg=fg)
 
 
 NoDmmOpt = Annotated[bool, typer.Option("--no-dmm", help="Measure VOUT with the AD2 even if a DMM is set up")]
@@ -192,6 +223,7 @@ def load_tran(
     averages: Annotated[int | None, typer.Option("--avg", help="Captures averaged per edge")] = None,
     out: OutOpt = Path("results"),
     sim: SimOpt = False,
+    save_sim: SaveSimOpt = False,
     psu: PsuOpt = None,
     ad_serial: AdOpt = None,
     yes: YesOpt = False,
@@ -221,9 +253,9 @@ def load_tran(
         lt = cfg.load_tran
     with _bench(cfg, sim, psu, ad_serial, yes, use_dmm=False) as bench:
         res = proc.run(bench, lt, cfg.analysis)
-        path = _save(bench, cfg, config, out, proc, res)
-    typer.echo(res.report())
-    typer.secho(f"Saved to {path}", fg="green")
+        path = _save(bench, cfg, config, out, proc, res, save_sim)
+    _echo_report(bench, res)
+    _saved(path, fg="green")
 
 
 @app.command("line-tran")
@@ -235,6 +267,7 @@ def line_tran(
     averages: Annotated[int | None, typer.Option("--avg", help="Captures averaged per edge")] = None,
     out: OutOpt = Path("results"),
     sim: SimOpt = False,
+    save_sim: SaveSimOpt = False,
     psu: PsuOpt = None,
     ad_serial: AdOpt = None,
     yes: YesOpt = False,
@@ -265,9 +298,9 @@ def line_tran(
         lt = cfg.line_tran
     with _bench(cfg, sim, psu, ad_serial, yes, use_dmm=False) as bench:
         res = proc.run(bench, lt, cfg.analysis)
-        path = _save(bench, cfg, config, out, proc, res)
-    typer.echo(res.report())
-    typer.secho(f"Saved to {path}", fg="green")
+        path = _save(bench, cfg, config, out, proc, res, save_sim)
+    _echo_report(bench, res)
+    _saved(path, fg="green")
 
 
 @app.command("loadbank-check")
@@ -276,6 +309,7 @@ def loadbank_check(
     voltage: Annotated[float | None, typer.Option(help="PSU voltage across the bank (V, max 1.5)")] = None,
     out: OutOpt = Path("results"),
     sim: SimOpt = False,
+    save_sim: SaveSimOpt = False,
     psu: PsuOpt = None,
     ad_serial: AdOpt = None,
     yes: YesOpt = False,
@@ -290,9 +324,9 @@ def loadbank_check(
         cfg = _load_with(cfg, loadbank_check=cfg.loadbank_check.model_copy(update={"voltage": voltage}))
     with _bench(cfg, sim, psu, ad_serial, yes, use_dmm=False) as bench:
         res = proc.run(bench, cfg.loadbank_check)
-        path = _save(bench, cfg, config, out, proc, res)
-    typer.echo(res.report())
-    typer.secho(f"Saved to {path}", fg="green" if res.passed else "yellow")
+        path = _save(bench, cfg, config, out, proc, res, save_sim)
+    _echo_report(bench, res)
+    _saved(path, fg="green" if res.passed else "yellow")
 
 
 @app.command("psu-check")
@@ -300,6 +334,7 @@ def psu_check(
     config: ConfigOpt,
     out: OutOpt = Path("results"),
     sim: SimOpt = False,
+    save_sim: SaveSimOpt = False,
     psu: PsuOpt = None,
     ad_serial: AdOpt = None,
     yes: YesOpt = False,
@@ -312,9 +347,9 @@ def psu_check(
     cfg = _load(config)
     with _bench(cfg, sim, psu, ad_serial, yes) as bench:
         res = proc.run(bench, cfg.psu_check)
-        path = _save(bench, cfg, config, out, proc, res)
-    typer.echo(res.report())
-    typer.secho(f"Saved to {path}", fg="green" if res.passed is not False else "yellow")
+        path = _save(bench, cfg, config, out, proc, res, save_sim)
+    _echo_report(bench, res)
+    _saved(path, fg="green" if res.passed is not False else "yellow")
 
 
 @app.command("line-reg")
@@ -326,6 +361,7 @@ def line_reg(
     ] = None,
     out: OutOpt = Path("results"),
     sim: SimOpt = False,
+    save_sim: SaveSimOpt = False,
     psu: PsuOpt = None,
     ad_serial: AdOpt = None,
     no_dmm: NoDmmOpt = False,
@@ -355,9 +391,9 @@ def line_reg(
         lr = cfg.line_reg
     with _bench(cfg, sim, psu, ad_serial, yes, use_dmm=not no_dmm) as bench:
         res = proc.run(bench, lr)
-        path = _save(bench, cfg, config, out, proc, res)
-    typer.echo(res.report())
-    typer.secho(f"Saved to {path}", fg="green")
+        path = _save(bench, cfg, config, out, proc, res, save_sim)
+    _echo_report(bench, res)
+    _saved(path, fg="green")
 
 
 @app.command("load-reg")
@@ -366,6 +402,7 @@ def load_reg(
     vin: Annotated[float | None, typer.Option(help="Override load_reg.vin (V)")] = None,
     out: OutOpt = Path("results"),
     sim: SimOpt = False,
+    save_sim: SaveSimOpt = False,
     psu: PsuOpt = None,
     ad_serial: AdOpt = None,
     no_dmm: NoDmmOpt = False,
@@ -383,9 +420,9 @@ def load_reg(
         lr = cfg.load_reg
     with _bench(cfg, sim, psu, ad_serial, yes, use_dmm=not no_dmm) as bench:
         res = proc.run(bench, lr)
-        path = _save(bench, cfg, config, out, proc, res)
-    typer.echo(res.report())
-    typer.secho(f"Saved to {path}", fg="green")
+        path = _save(bench, cfg, config, out, proc, res, save_sim)
+    _echo_report(bench, res)
+    _saved(path, fg="green")
 
 
 def main() -> None:

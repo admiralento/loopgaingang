@@ -71,8 +71,8 @@ def run(bench: Bench, lr: LoadRegConfig) -> LoadRegResult:
         bank.set(code)
         bench.sleep(lr.settle_time)
         p = bench.measure_point(lr.dc_window)
-        if k == 0:
-            bench.check_vout(p.vout, test="load regulation", source=p.source.upper())
+        # every point: a probe that comes loose mid-sweep must stop the run, not end up in the fit
+        bench.check_vout(p.vout, test=f"load regulation (code {code})", source=p.source.upper())
         row = {
             "code": code,
             "i_est_a": bank.current(code, p.vout),

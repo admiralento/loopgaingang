@@ -30,6 +30,32 @@ def align_average(captures: list[Capture]) -> Capture:
     return Capture(captures[0].sample_rate, ch1, ch2, pre)
 
 
+SWING_TOLERANCE = 0.3  # the trigger channel's step must be within 30 % of what we commanded
+
+
+def validate_capture(
+    bench: Bench, metrics, ref: np.ndarray, *, expected_swing: float, test: str, ref_desc: str
+) -> None:
+    """Refuse to report a transient unless the capture shows the real stimulus and the real VOUT.
+
+    Raises InstrumentError (so nothing is saved or plotted) when:
+      - no step was found on the trigger channel,
+      - the trigger channel's swing isn't the stimulus we commanded (probe on the wrong signal),
+      - VOUT before the step isn't near the DUT's output voltage (scope not on VOUT).
+    """
+    ch = bench.cfg.ad2.ref_channel
+    if metrics.step_index < 0:
+        raise InstrumentError(f"{test}: no step found on scope {ch}; check that it is on {ref_desc}.")
+    lo, hi = np.percentile(ref, 2), np.percentile(ref, 98)
+    swing = hi - lo
+    if abs(swing - expected_swing) > SWING_TOLERANCE * expected_swing:
+        raise InstrumentError(
+            f"{test}: scope {ch} swings {swing:.3f} V but {ref_desc} should swing {expected_swing:.3f} V. "
+            "It is probably on the wrong signal; nothing was saved."
+        )
+    bench.check_vout(metrics.nominal, test=test, source=f"scope {bench.cfg.ad2.vout_channel} (captured)")
+
+
 def averaged_step(
     bench: Bench,
     tc: TransientCaptureConfig,

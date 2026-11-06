@@ -83,6 +83,15 @@ uv run ldo-bench load-tran -c configs/demo_board.toml   # load steps: peak + set
 uv run ldo-bench line-tran -c configs/jafwak.toml       # VIN steps via W1 + BUF634 (--low 1.8 --high 2.0 --load 19mA)
 ```
 
+**Only real measurements are saved.** Before a test saves anything, it checks that it really measured the board:
+- **VOUT is near the board's nominal output:** within `dut.vout_tolerance`, 20 %. Load regulation checks this at every point.
+- **The transient captures are real:**
+  - the trigger channel shows a step
+  - its swing is the commanded stimulus: about 3.3 V for a DIO pin, or the VIN step
+  - VOUT before the step is at the nominal output
+
+If any check fails, the test stops with an error saying what to look at. It writes **no folder and no plot**, so a plot always means real data. `--sim` runs print the report marked SIMULATED and save nothing. Use `--save-sim` to keep them; the folder then ends in `_SIM` and the plot carries a SIMULATED banner.
+
 Each run writes a folder under `results/`:
 - `data.csv`: every point
 - `summary.json`: the headline numbers

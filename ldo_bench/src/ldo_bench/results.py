@@ -51,13 +51,22 @@ def _versions() -> dict[str, str]:
 
 
 class RunDir:
-    def __init__(self, root: Path, test: str, cfg: BenchConfig, *, config_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        root: Path,
+        test: str,
+        cfg: BenchConfig,
+        *,
+        config_path: Path | None = None,
+        simulated: bool = False,
+    ) -> None:
         self.started = datetime.now()
         self.test = test
         self.cfg = cfg
         self.config_path = config_path
         stamp = self.started.strftime("%Y%m%d-%H%M%S")
-        self.path = Path(root) / f"{stamp}_{_slug(cfg.dut.name)}_{test}"
+        suffix = "_SIM" if simulated else ""  # never mistake a simulated run for a measurement
+        self.path = Path(root) / f"{stamp}_{_slug(cfg.dut.name)}_{test}{suffix}"
         self.path.mkdir(parents=True, exist_ok=False)
 
     def file(self, name: str) -> Path:

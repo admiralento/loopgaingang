@@ -65,3 +65,20 @@ def subtitle(ax, text: str) -> None:
 
 def close(fig) -> None:
     plt.close(fig)
+
+
+def mark_simulated(fig) -> None:
+    """Banner across a figure made from simulated data, so it can't pass for a measurement."""
+    fig.text(
+        0.5,
+        0.5,
+        "SIMULATED: NOT MEASURED DATA",
+        ha="center",
+        va="center",
+        rotation=20,
+        fontsize=30,
+        fontweight="bold",
+        color="#d03b3b",
+        alpha=0.25,
+        zorder=100,
+    )
