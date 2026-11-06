@@ -214,6 +214,7 @@ def run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig) -> LineTranResult:
     w_hi, v_hi = _calibrate(bench, lt.vin_high)
     log.info("VIN levels %.4f / %.4f V (W1 %.4f / %.4f V)", v_lo, v_hi, w_lo, w_hi)
     vout_dc, _ = bench.measure_dc(0.05)
+    bench.check_vout(vout_dc.mean, test="line transient", source=f"scope {a.vout_channel}")
     i_load = bench.loadbank.current(lt.load_code, vout_dc.mean)
 
     results = []
@@ -242,7 +243,12 @@ def run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig) -> LineTranResult:
             blank_time=an.blank_time,
             reference=an.settle_reference,
         )
-        i0 = m.step_index if m.step_index >= 0 else cap.trigger_index
+        if m.step_index < 0:
+            raise InstrumentError(
+                f"line transient ({edge}): no step found on scope {a.ref_channel} in the averaged capture, "
+                "so there is nothing to analyse. Check the trigger channel wiring."
+            )
+        i0 = m.step_index
         t = (np.arange(len(vout)) - i0) / cap.sample_rate
         results.append(EdgeResult(edge, v_from, v_to, m, t, vout, smoothed, vin, (v_lo + v_hi) / 2))
         log.info("%s: peak %+.2f mV, settling %.2f us", edge, m.deviation * 1e3, m.settling_time * 1e6)

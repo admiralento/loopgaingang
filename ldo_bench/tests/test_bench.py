@@ -77,3 +77,10 @@ def test_dut_current_limit_enforced_in_config(jafwak):
     d["load_tran"]["code_high"] = 17
     with pytest.raises(ValueError, match=r"dut\.i_max"):
         BenchConfig.model_validate(d)
+
+
+def test_check_vout(jafwak):
+    with open_bench(jafwak, sim=True) as b:
+        b.check_vout(1.19, test="t", source="scope 1")  # within 20 % of 1.2 V
+        with pytest.raises(InstrumentError, match="isn't VOUT"):
+            b.check_vout(-0.0004, test="t", source="scope 1")  # floating input, like the 15:09 run

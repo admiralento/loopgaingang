@@ -96,9 +96,16 @@ def run(bench: Bench, lr: LineRegConfig) -> LineRegResult:
 
     bank.set(lr.load_code)
     rows = []
+    # Low VIN points are in dropout (VOUT legitimately low): check VOUT at the first point with
+    # clear headroom instead, or at the top of the sweep.
+    v_check = min(bench.cfg.dut.vout_nominal + 0.5, float(vins[-1]))
+    checked = False
     for k, v in enumerate(vins):
         bench.vin_from_psu(float(v))
         p = bench.measure_point(lr.dc_window, vin_source=lr.vin_source)
+        if not checked and v >= v_check - 1e-9:
+            bench.check_vout(p.vout, test="line regulation", source=p.source.upper())
+            checked = True
         row = {
             "vin_set_v": float(v),
             "vin_v": p.vin,

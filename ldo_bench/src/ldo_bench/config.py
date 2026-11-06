@@ -27,6 +27,15 @@ class DutConfig(_Model):
     name: str = "LDO"
     vout_nominal: float = Field(gt=0, description="Expected LDO output voltage (V)")
     vin_max: float = Field(gt=0, description="Highest voltage any test may put on the LDO's VIN (V)")
+    vout_tolerance: float = Field(
+        0.2,
+        gt=0,
+        lt=1,
+        description=(
+            "Before measuring, VOUT must be within this fraction of vout_nominal, else the test stops "
+            "(probe not connected, LDO off, wrong board)"
+        ),
+    )
     i_max: float | None = Field(
         None,
         gt=0,

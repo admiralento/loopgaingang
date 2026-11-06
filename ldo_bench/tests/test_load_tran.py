@@ -61,3 +61,33 @@ def test_report_hints_post_when_dc_shift_exceeds_band(cfg):
     with open_bench(cfg, sim=True) as b:
         res = load_tran.run(b, lt, cfg.analysis)  # 'pre' reference
     assert 'settle_reference = "post"' in res.report()
+
+
+def test_stops_when_scope_not_on_vout(cfg, monkeypatch):
+    """Regression: with scope 1 unconnected the run analysed trigger crosstalk as a load transient."""
+    from ldo_bench.instruments.base import DcReading
+
+    lt = cfg.load_tran.model_copy(update={"averages": 2})
+    with open_bench(cfg, sim=True) as b:
+        floating = {1: DcReading(-0.0004, 2e-4, 8192), 2: DcReading(0.0, 1e-4, 8192)}
+        monkeypatch.setattr(b.scope, "measure_dc", lambda *a, **k: floating)
+        captured = []
+        monkeypatch.setattr(b.scope, "capture", lambda **k: captured.append(1))
+        with pytest.raises(InstrumentError, match="isn't VOUT"):
+            load_tran.run(b, lt, cfg.analysis)
+    assert not captured  # stopped before any transient capture
+
+
+def test_stops_when_no_step_in_capture(cfg, monkeypatch):
+    lt = cfg.load_tran.model_copy(update={"averages": 2})
+    with open_bench(cfg, sim=True) as b:
+        real = b.scope.capture
+
+        def flat_ref(**k):
+            c = real(**k)
+            c.ch2[:] = 0.0  # trigger channel shows no edge
+            return c
+
+        monkeypatch.setattr(b.scope, "capture", flat_ref)
+        with pytest.raises(InstrumentError, match="no step found"):
+            load_tran.run(b, lt, cfg.analysis)

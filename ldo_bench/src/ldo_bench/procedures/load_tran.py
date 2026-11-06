@@ -160,7 +160,8 @@ def run(bench: Bench, lt: LoadTranConfig, an: AnalysisConfig) -> LoadTranResult:
     bank.set(lt.code_low)
     bench.vin_from_psu(lt.vin)
     vout_est, _ = bench.measure_dc(0.05)
-    v_nom = vout_est.mean if vout_est.mean > 0.1 else bench.cfg.dut.vout_nominal
+    bench.check_vout(vout_est.mean, test="load transient", source=f"scope {a.vout_channel}")
+    v_nom = vout_est.mean
 
     results = []
     for edge in lt.edges:
@@ -190,7 +191,12 @@ def run(bench: Bench, lt: LoadTranConfig, an: AnalysisConfig) -> LoadTranResult:
             blank_time=an.blank_time,
             reference=an.settle_reference,
         )
-        i0 = m.step_index if m.step_index >= 0 else cap.trigger_index
+        if m.step_index < 0:
+            raise InstrumentError(
+                f"load transient ({edge}): no step found on scope {a.ref_channel} in the averaged capture, "
+                "so there is nothing to analyse. Check the trigger channel wiring."
+            )
+        i0 = m.step_index
         t = (np.arange(len(vout)) - i0) / cap.sample_rate
         results.append(
             EdgeResult(

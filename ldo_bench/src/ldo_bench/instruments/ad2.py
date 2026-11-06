@@ -188,13 +188,19 @@ class AnalogDiscovery2:
 
         expected = round(pre_trigger * n)
         found = _find_crossing(data[trigger_channel], trigger_level, edge, expected)
-        if found is None or abs(found - expected) > 0.05 * n:
+        if found is None:
+            # The hardware triggered but the captured data has no such edge: don't guess where it was.
+            raise InstrumentError(
+                f"scope triggered, but channel {trigger_channel}'s data has no {edge} crossing of "
+                f"{trigger_level:.3f} V. The trigger signal may be marginal or noisy; check the wiring."
+            )
+        if abs(found - expected) > 0.05 * n:
             log.warning(
-                "trigger edge at sample %s, expected near %d; check triggerPositionSet sign on this SDK",
+                "trigger edge at sample %d, expected near %d; check triggerPositionSet sign on this SDK",
                 found,
                 expected,
             )
-        return Capture(rate, ch1, ch2, expected if found is None else found)
+        return Capture(rate, ch1, ch2, found)
 
     # --- DigitalOut -----------------------------------------------------------
     def write_pins(self, levels: dict[int, bool]) -> None:

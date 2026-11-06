@@ -181,6 +181,17 @@ class Bench:
         r = self.scope.measure_dc(duration, self.scope_setups())
         return r[self.cfg.ad2.vout_channel], r[self.cfg.ad2.ref_channel]
 
+    def check_vout(self, vout: float, *, test: str, source: str) -> None:
+        """Stop if VOUT isn't near vout_nominal: otherwise we'd analyse whatever an unconnected
+        or wrong input picks up (e.g. the trigger edge coupling into a floating scope input)."""
+        nom, tol = self.cfg.dut.vout_nominal, self.cfg.dut.vout_tolerance
+        if abs(vout - nom) > tol * nom:
+            raise InstrumentError(
+                f"{test}: VOUT reads {vout:.4f} V on the {source}, but {self.cfg.dut.name} should be at "
+                f"{nom} V (+/-{tol:.0%}). Stopping instead of measuring a signal that isn't VOUT. Check that "
+                f"the {source} is on VOUT and GND, the LDO is enabled and VIN is applied."
+            )
+
     def measure_point(self, duration: float, vin_source: Literal["ad2", "psu"] = "ad2") -> DcPoint:
         """VOUT from the DMM if present (more accurate), else the AD2.
 
