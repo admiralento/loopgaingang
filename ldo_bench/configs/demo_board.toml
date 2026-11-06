@@ -67,7 +67,7 @@ load_code = 8
 vin_source = "psu"           # VIN from the PSU readback: only the DMM on VOUT, no scope probes
 
 [load_tran]                  # matches AD_workspaces/demo_board_load_tran_*.dwf3work
-vin = 1.8
+vin = 2.0
 code_low = 1                 # 4 mA
 code_high = 17               # ~69 mA (README: 67 mA measured)
 trigger_pin = 4              # Scope 2+ on DIO 4 / J4, as in the WaveForms workspaces

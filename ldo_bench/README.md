@@ -79,6 +79,7 @@ uv run ldo-bench psu-check -c configs/demo_board.toml   # PSU setpoint/readback 
 uv run ldo-bench loadbank-check -c configs/demo_board.toml  # load bank straight on the PSU: checks DIO -> J0..J4 wiring
 uv run ldo-bench load-reg  -c configs/demo_board.toml   # load regulation (all 32 load codes)
 uv run ldo-bench line-reg  -c configs/demo_board.toml   # line regulation + dropout (--load 30mA)
+uv run ldo-bench load-tran -c configs/demo_board.toml   # load steps: peak + settling (--from 4mA --to 67mA --avg 32)
 ```
 
 Each run writes a folder under `results/`:
@@ -111,4 +112,19 @@ At a fixed load, VIN sweeps upward from `vin_start` to `vin_stop`. Starting belo
 - **Dropout:** the point where VOUT falls `dropout_fraction` (1 %) below its value at the highest VIN, interpolated between points.
 - **Slope:** dVOUT/dVIN in mV/V and %/V, fitted from 3 steps above the knee (or from `fit_vin_min`).
 
-Work in progress: the transient tests are next.
+### Load transient
+
+The load bank steps between `code_low` and `code_high`. The AD2 triggers on scope channel 2, wired to a DIO pin that changes between the two codes (`trigger_pin`; on the demo board that's DIO 4 / J4, as in the WaveForms workspaces). Each edge is captured `averages` times. The captures are lined up on the trigger and averaged; the response repeats on every step, so this removes noise without blurring it.
+
+The analysis is a Python port of `AD_workspaces/load_tran_script.js`, using the same `[analysis]` settings, so the numbers match the WaveForms custom measurements:
+- **Nominal:** VOUT before the step.
+- **Peak:** the largest dip or overshoot within 20 µs.
+- **Settling band:** ±10 % of the peak deviation.
+- **Settling time:** after the last 1 µs-smoothed sample outside the band.
+- **Noise:** should be at most band / 3, or noise sets the settling time.
+
+If VOUT's final level after the step is outside the band (DC load regulation), it can never settle back to the pre-step level. The report says so and suggests `settle_reference = "post"`.
+
+The run folder also contains `waveform_rising.csv` and `waveform_falling.csv` (averaged and smoothed VOUT, plus the trigger channel).
+
+Work in progress: line transient is next.

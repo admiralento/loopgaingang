@@ -208,6 +208,7 @@ class TransientCaptureConfig(_Model):
     averages: int = Field(16, ge=1)
     edges: list[Literal["rising", "falling"]] = Field(default_factory=lambda: ["rising", "falling"])
     timeout: float = Field(5.0, gt=0)
+    rest_time: float = Field(0.02, ge=0, description="Settle at the starting level before each capture (s)")
 
 
 class LoadTranConfig(TransientCaptureConfig):

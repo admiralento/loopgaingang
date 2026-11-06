@@ -1,0 +1,284 @@
+"""Load transient: step the load bank between two codes and measure VOUT's response.
+
+The AD2 triggers on scope ref channel, wired to a load bank DIO pin that changes
+between the two codes (the same setup as the WaveForms workspaces: Scope 2+ on
+DIO 4 / J4). Each edge is captured `averages` times and averaged; the response
+repeats on every step, so averaging removes noise without blurring it. The
+analysis is the Python port of load_tran_script.js.
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+
+import numpy as np
+
+from ldo_bench import plotting
+from ldo_bench.analysis import SettlingResult, settling_analysis
+from ldo_bench.bench import Bench
+from ldo_bench.config import AnalysisConfig, LoadTranConfig
+from ldo_bench.instruments.base import ChannelSetup, InstrumentError
+from ldo_bench.procedures.transient import averaged_step
+
+log = logging.getLogger(__name__)
+
+NAME = "load-tran"
+
+
+@dataclass
+class EdgeResult:
+    edge: str  # "rising" = load stepped up (code_low -> code_high)
+    code_from: int
+    code_to: int
+    i_from: float
+    i_to: float
+    metrics: SettlingResult
+    t: np.ndarray  # s, 0 at the step
+    vout: np.ndarray
+    vout_smoothed: np.ndarray
+    ref: np.ndarray
+
+    @property
+    def title(self) -> str:
+        word = "Load step up" if self.edge == "rising" else "Load step down"
+        return f"{word}: {self.i_from * 1e3:.0f} → {self.i_to * 1e3:.0f} mA"
+
+
+@dataclass
+class LoadTranResult:
+    vin: float
+    trigger_pin: int
+    averages: int
+    edges: list[EdgeResult]
+
+    @property
+    def rows(self) -> list[dict]:
+        out = []
+        for e in self.edges:
+            m = e.metrics
+            out.append(
+                {
+                    "edge": e.edge,
+                    "code_from": e.code_from,
+                    "code_to": e.code_to,
+                    "i_from_a": e.i_from,
+                    "i_to_a": e.i_to,
+                    "nominal_v": m.nominal,
+                    "peak_v": m.peak,
+                    "deviation_v": m.deviation,
+                    "band_v": m.band,
+                    "settle_level_v": m.settle_level,
+                    "settling_time_s": m.settling_time,
+                    "noise_v": m.noise,
+                    "final_v": m.final,
+                    "trustworthy": m.trustworthy,
+                    "sample_rate_hz": m.sample_rate,
+                }
+            )
+        return out
+
+    def extra_csvs(self) -> dict[str, list[dict]]:
+        return {
+            f"waveform_{e.edge}.csv": [
+                {"t_s": float(t), "vout_v": float(v), "vout_smoothed_v": float(f), "ref_v": float(r)}
+                for t, v, f, r in zip(e.t, e.vout, e.vout_smoothed, e.ref, strict=True)
+            ]
+            for e in self.edges
+        }
+
+    def summary(self) -> dict:
+        return {
+            "vin": self.vin,
+            "trigger_pin": self.trigger_pin,
+            "averages": self.averages,
+            "edges": {
+                e.edge: {**e.metrics.as_dict(), "i_from": e.i_from, "i_to": e.i_to} for e in self.edges
+            },
+        }
+
+    def report(self) -> str:
+        lines = [f"Load transient at VIN = {self.vin:.3f} V ({self.averages} averages per edge):"]
+        for e in self.edges:
+            m = e.metrics
+            ts = (
+                "did not settle in the capture"
+                if np.isnan(m.settling_time)
+                else f"{m.settling_time * 1e6:.2f} us"
+            )
+            lines += [
+                f"  {e.title}",
+                f"    nominal   {m.nominal:.5f} V",
+                f"    peak      {m.deviation * 1e3:+.2f} mV  (band ±{m.band * 1e3:.2f} mV)",
+                f"    settling  {ts}  (to the {'pre-step' if m.reference == 'pre' else 'final'} level)",
+                f"    noise     {m.noise * 1e3:.3f} mV rms"
+                + ("" if m.trustworthy else "  ! above band/3: settling time limited by noise"),
+            ]
+            shift = m.final - m.nominal
+            if m.reference == "pre" and np.isfinite(shift) and abs(shift) > m.band:
+                lines.append(
+                    f"    ! VOUT ends {shift * 1e3:+.2f} mV from the pre-step level (DC load regulation), "
+                    f"outside the ±{m.band * 1e3:.2f} mV band, so it can never settle back to it. "
+                    'Set analysis.settle_reference = "post" to measure settling to the final level.'
+                )
+        return "\n".join(lines)
+
+
+def trigger_setup(bench: Bench, lt: LoadTranConfig) -> tuple[int, bool]:
+    """(DIO pin on the ref channel, whether it rises when the load steps up)."""
+    bank = bench.loadbank
+    if lt.trigger_pin is None:
+        return bank.trigger_pin(lt.code_low, lt.code_high)
+    bit = bank.bit_for_pin(lt.trigger_pin)
+    if not (lt.code_low ^ lt.code_high) >> bit & 1:
+        raise InstrumentError(
+            f"trigger_pin DIO {lt.trigger_pin} (bit {bit}) is the same in codes {lt.code_low} and "
+            f"{lt.code_high}: it never moves, so the scope can't trigger on it"
+        )
+    return lt.trigger_pin, bank.pin_edge(bit, lt.code_high)
+
+
+def wiring(bench: Bench, pin: int) -> list[str]:
+    a, lb = bench.cfg.ad2, bench.cfg.loadbank
+    bit = lb.dio_pins.index(pin)
+    return [
+        "PSU -> VIN",
+        f"Scope {a.vout_channel}+ -> VOUT at the output pins, {a.vout_channel}- -> GND",
+        f"Scope {a.ref_channel}+ -> DIO {pin} / J{bit} (trigger), {a.ref_channel}- -> GND",
+        f"DIO {lb.dio_pins} -> load bank J0..J{len(lb.dio_pins) - 1}, AD2 GND -> board GND",
+    ]
+
+
+def run(bench: Bench, lt: LoadTranConfig, an: AnalysisConfig) -> LoadTranResult:
+    bank, a = bench.loadbank, bench.cfg.ad2
+    pin, rises_with_load = trigger_setup(bench, lt)
+    bench.confirm_wiring("load transient", wiring(bench, pin), ref_probe=("dio", pin))
+    setups = {
+        a.vout_channel: ChannelSetup(a.vout.range, a.vout.offset),
+        a.ref_channel: ChannelSetup(a.ref.range, a.ref.offset),
+    }
+    bank.set(lt.code_low)
+    bench.vin_from_psu(lt.vin)
+    vout_est, _ = bench.measure_dc(0.05)
+    v_nom = vout_est.mean if vout_est.mean > 0.1 else bench.cfg.dut.vout_nominal
+
+    results = []
+    for edge in lt.edges:
+        c_from, c_to = (lt.code_low, lt.code_high) if edge == "rising" else (lt.code_high, lt.code_low)
+        pin_rises = rises_with_load if edge == "rising" else not rises_with_load
+        trig_edge = "rising" if pin_rises else "falling"
+        cap = averaged_step(
+            bench,
+            lt,
+            setups=setups,
+            trigger_channel=a.ref_channel,
+            trigger_level=lt.dio_high_level / 2,
+            trigger_edge=trig_edge,
+            start=lambda c=c_from: bank.set(c),
+            step=lambda c=c_to: bank.set(c),
+            label=f"load step {edge}",
+        )
+        vout, ref = cap.channel(a.vout_channel), cap.channel(a.ref_channel)
+        m, smoothed = settling_analysis(
+            vout,
+            ref,
+            cap.sample_rate,
+            trig_edge,
+            settle_fraction=an.settle_fraction,
+            smooth_time=an.smooth_time,
+            peak_window=an.peak_window,
+            blank_time=an.blank_time,
+            reference=an.settle_reference,
+        )
+        i0 = m.step_index if m.step_index >= 0 else cap.trigger_index
+        t = (np.arange(len(vout)) - i0) / cap.sample_rate
+        results.append(
+            EdgeResult(
+                edge,
+                c_from,
+                c_to,
+                bank.current(c_from, v_nom),
+                bank.current(c_to, v_nom),
+                m,
+                t,
+                vout,
+                smoothed,
+                ref,
+            )
+        )
+        log.info("%s: peak %+.2f mV, settling %.2f us", edge, m.deviation * 1e3, m.settling_time * 1e6)
+    bank.off()
+    return LoadTranResult(lt.vin, pin, lt.averages, results)
+
+
+def plot(res: LoadTranResult, dut: str):
+    n = len(res.edges)
+    fig, axes = plotting.figure(1, n, size=(5.2 * n, 4.4), squeeze=False)
+    for ax, e in zip(axes[0], res.edges, strict=True):
+        m = e.metrics
+        us = e.t * 1e6
+        dev = (e.vout - m.nominal) * 1e3
+        dev_s = (e.vout_smoothed - m.nominal) * 1e3
+        # Show from a little before the step to well past settling.
+        t_end = (m.settling_time * 1e6 * 2.5 + 10) if np.isfinite(m.settling_time) else us[-1]
+        view = (us >= -0.15 * t_end) & (us <= t_end)
+        if np.isfinite(m.band):
+            lvl = (m.settle_level - m.nominal) * 1e3
+            ax.axhspan(lvl - m.band * 1e3, lvl + m.band * 1e3, color=plotting.GRID, alpha=0.8, lw=0, zorder=0)
+        ax.axvline(0, color=plotting.AXIS, lw=0.8, zorder=1)
+        ax.plot(us[view], dev[view], color=plotting.SERIES[0], lw=0.8, alpha=0.35, zorder=2, label="Averaged")
+        ax.plot(us[view], dev_s[view], color=plotting.SERIES[0], lw=1.8, zorder=3, label="Smoothed (1 µs)")
+        if np.isfinite(m.settling_time):
+            ax.axvline(m.settling_time * 1e6, color=plotting.INK_2, lw=1, ls=(0, (3, 2)), zorder=2)
+            ax.annotate(
+                f"settled {m.settling_time * 1e6:.1f} µs",
+                (m.settling_time * 1e6, 1.0),
+                xycoords=("data", "axes fraction"),
+                xytext=(4, -12),
+                textcoords="offset points",
+                fontsize=8,
+                color=plotting.INK_2,
+            )
+        i_pk = int(np.argmin(np.abs(e.vout_smoothed - m.peak))) if np.isfinite(m.peak) else None
+        if i_pk is not None:
+            ax.plot(
+                us[i_pk],
+                dev_s[i_pk],
+                "o",
+                ms=6,
+                color=plotting.SERIES[0],
+                mec=plotting.SURFACE,
+                mew=1.5,
+                zorder=4,
+            )
+            ax.annotate(
+                f"{m.deviation * 1e3:+.1f} mV",
+                (us[i_pk], dev_s[i_pk]),
+                xytext=(8, 0),
+                textcoords="offset points",
+                fontsize=8,
+                color=plotting.INK,
+                va="center",
+            )
+        # Scale to the smoothed response and band; the 1-sample switching glitch in the raw
+        # trace would otherwise set the axis and squash the response.
+        span = [dev_s[view].min(), dev_s[view].max()]
+        if np.isfinite(m.band):
+            span += [lvl - m.band * 1e3, lvl + m.band * 1e3]
+        lo, hi = min(span), max(span)
+        pad = 0.15 * (hi - lo or 1.0)
+        ax.set_ylim(lo - pad, hi + pad)
+        ax.set_xlabel("Time from step (µs)")
+        ax.set_ylabel(f"VOUT minus {m.nominal:.4f} V (mV)" if np.isfinite(m.nominal) else "VOUT (mV)")
+        ax.set_title(e.title, fontsize=10, pad=6)
+        ax.legend(loc="lower right" if m.deviation > 0 else "upper right")
+    fig.suptitle(
+        f"Load transient: {dut}  ·  VIN {res.vin:.2f} V  ·  {res.averages} averages  ·  "
+        "shaded = settling band",
+        x=0.01,
+        ha="left",
+        fontsize=11,
+        fontweight="bold",
+        color=plotting.INK,
+    )
+    return fig

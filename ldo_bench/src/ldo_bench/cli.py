@@ -167,6 +167,8 @@ def _save(bench: Bench, cfg: BenchConfig, config_path: Path, out: Path, module, 
 
     run = RunDir(out, module.NAME, cfg, config_path=config_path)
     run.write_csv("data.csv", res.rows)
+    for name, rows in getattr(res, "extra_csvs", dict)().items():
+        run.write_csv(name, rows)
     run.write_json("summary.json", res.summary())
     run.write_meta(idns=bench.idns(), sim=bench.is_sim)
     fig = module.plot(res, cfg.dut.name)
@@ -176,6 +178,52 @@ def _save(bench: Bench, cfg: BenchConfig, config_path: Path, out: Path, module, 
 
 
 NoDmmOpt = Annotated[bool, typer.Option("--no-dmm", help="Measure VOUT with the AD2 even if a DMM is set up")]
+
+
+@app.command("load-tran")
+def load_tran(
+    config: ConfigOpt,
+    low: Annotated[
+        str | None, typer.Option("--from", help="Low load: code or current, e.g. 1 or 4mA")
+    ] = None,
+    high: Annotated[
+        str | None, typer.Option("--to", help="High load: code or current, e.g. 17 or 67mA")
+    ] = None,
+    averages: Annotated[int | None, typer.Option("--avg", help="Captures averaged per edge")] = None,
+    out: OutOpt = Path("results"),
+    sim: SimOpt = False,
+    psu: PsuOpt = None,
+    ad_serial: AdOpt = None,
+    yes: YesOpt = False,
+    verbose: VerboseOpt = False,
+) -> None:
+    """Load transient: step the load bank, capture VOUT, report peak and settling time."""
+    from ldo_bench.loadbank import LoadBank, parse_load
+    from ldo_bench.procedures import load_tran as proc
+
+    _logging(verbose)
+    cfg = _load(config)
+    lt = _section(cfg, "load-tran")
+    update = {}
+    try:
+        bank = LoadBank(cfg.loadbank, None)
+        if low is not None:
+            update["code_low"] = parse_load(low, bank, cfg.dut.vout_nominal)
+        if high is not None:
+            update["code_high"] = parse_load(high, bank, cfg.dut.vout_nominal)
+    except ValueError as e:
+        typer.secho(str(e), fg="red", err=True)
+        raise typer.Exit(2) from e
+    if averages is not None:
+        update["averages"] = averages
+    if update:
+        cfg = _load_with(cfg, load_tran=lt.model_copy(update=update))
+        lt = cfg.load_tran
+    with _bench(cfg, sim, psu, ad_serial, yes, use_dmm=False) as bench:
+        res = proc.run(bench, lt, cfg.analysis)
+        path = _save(bench, cfg, config, out, proc, res)
+    typer.echo(res.report())
+    typer.secho(f"Saved to {path}", fg="green")
 
 
 @app.command("loadbank-check")
