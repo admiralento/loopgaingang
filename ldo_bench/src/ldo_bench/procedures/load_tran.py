@@ -37,6 +37,7 @@ class EdgeResult:
     vout: np.ndarray
     vout_smoothed: np.ndarray
     ref: np.ndarray
+    trigger_level: float | None = None
 
     @property
     def title(self) -> str:
@@ -203,6 +204,7 @@ def run(bench: Bench, lt: LoadTranConfig, an: AnalysisConfig) -> LoadTranResult:
                 vout,
                 smoothed,
                 ref,
+                lt.dio_high_level / 2,
             )
         )
         log.info("%s: peak %+.2f mV, settling %.2f us", edge, m.deviation * 1e3, m.settling_time * 1e6)
@@ -213,6 +215,7 @@ def run(bench: Bench, lt: LoadTranConfig, an: AnalysisConfig) -> LoadTranResult:
 def plot(res: LoadTranResult, dut: str):
     return plot_edges(
         res.edges,
-        f"Load transient: {dut}  ·  VIN {res.vin:.2f} V  ·  {res.averages} averages  ·  "
+        ref_label=f"DIO {res.trigger_pin}, scope 2 (V)",
+        suptitle=f"Load transient: {dut}  ·  VIN {res.vin:.2f} V  ·  {res.averages} averages  ·  "
         "shaded = settling band",
     )

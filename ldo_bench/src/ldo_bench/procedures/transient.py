@@ -73,14 +73,20 @@ def averaged_step(
     return align_average(caps)
 
 
-def plot_edges(edges, suptitle: str):
-    """One panel per edge: averaged + smoothed VOUT, settling band, peak and settling time.
+def plot_edges(edges, suptitle: str, ref_label: str = "Scope 2 (V)"):
+    """One column per edge: the scope 2 (trigger) trace on a small panel on top, sharing the time
+    axis with VOUT below (averaged + smoothed, settling band, peak and settling time).
 
-    Each edge needs .title, .metrics (SettlingResult), .t, .vout and .vout_smoothed.
+    Separate panels rather than one plot with two y-axes: volts and millivolts on one plot
+    make either trace easy to misread. Each edge needs .title, .metrics, .t, .vout,
+    .vout_smoothed, .ref and .trigger_level (None to skip the trigger line).
     """
     n = len(edges)
-    fig, axes = plotting.figure(1, n, size=(5.2 * n, 4.4), squeeze=False)
-    for ax, e in zip(axes[0], edges, strict=True):
+    fig, axes = plotting.figure(
+        2, n, size=(5.2 * n, 5.6), squeeze=False, sharex="col", height_ratios=[1, 3.2]
+    )
+    for col, e in enumerate(edges):
+        ax_ref, ax = axes[0][col], axes[1][col]
         m = e.metrics
         us = e.t * 1e6
         dev = (e.vout - m.nominal) * 1e3
@@ -88,6 +94,27 @@ def plot_edges(edges, suptitle: str):
         # Show from a little before the step to well past settling.
         t_end = (m.settling_time * 1e6 * 2.5 + 10) if np.isfinite(m.settling_time) else us[-1]
         view = (us >= -0.15 * t_end) & (us <= t_end)
+
+        # Top: scope 2, the trigger / stimulus channel.
+        ax_ref.axvline(0, color=plotting.AXIS, lw=0.8, zorder=1)
+        ax_ref.plot(us[view], e.ref[view], color=plotting.SERIES[1], lw=1.4, zorder=3)
+        if getattr(e, "trigger_level", None) is not None:
+            ax_ref.axhline(e.trigger_level, color=plotting.INK_2, lw=0.9, ls=(0, (3, 2)), zorder=2)
+            ax_ref.annotate(
+                f"trigger {e.trigger_level:.2f} V",
+                (1.0, e.trigger_level),
+                xycoords=("axes fraction", "data"),
+                xytext=(-4, 3),
+                textcoords="offset points",
+                ha="right",
+                fontsize=7.5,
+                color=plotting.INK_2,
+            )
+        ax_ref.set_ylabel(ref_label, fontsize=8)
+        ax_ref.set_title(e.title, fontsize=10, pad=6)
+        ax_ref.tick_params(labelbottom=False)
+
+        # Bottom: VOUT response.
         if np.isfinite(m.band):
             lvl = (m.settle_level - m.nominal) * 1e3
             ax.axhspan(lvl - m.band * 1e3, lvl + m.band * 1e3, color=plotting.GRID, alpha=0.8, lw=0, zorder=0)
@@ -136,7 +163,6 @@ def plot_edges(edges, suptitle: str):
         ax.set_ylim(lo - pad, hi + pad)
         ax.set_xlabel("Time from step (µs)")
         ax.set_ylabel(f"VOUT minus {m.nominal:.4f} V (mV)" if np.isfinite(m.nominal) else "VOUT (mV)")
-        ax.set_title(e.title, fontsize=10, pad=6)
         ax.legend(loc="lower right" if m.deviation > 0 else "upper right")
     fig.suptitle(suptitle, x=0.01, ha="left", fontsize=11, fontweight="bold", color=plotting.INK)
     return fig

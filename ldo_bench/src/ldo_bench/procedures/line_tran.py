@@ -39,6 +39,7 @@ class EdgeResult:
     vout: np.ndarray
     vout_smoothed: np.ndarray
     ref: np.ndarray
+    trigger_level: float | None = None
 
     @property
     def title(self) -> str:
@@ -243,7 +244,7 @@ def run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig) -> LineTranResult:
         )
         i0 = m.step_index if m.step_index >= 0 else cap.trigger_index
         t = (np.arange(len(vout)) - i0) / cap.sample_rate
-        results.append(EdgeResult(edge, v_from, v_to, m, t, vout, smoothed, vin))
+        results.append(EdgeResult(edge, v_from, v_to, m, t, vout, smoothed, vin, (v_lo + v_hi) / 2))
         log.info("%s: peak %+.2f mV, settling %.2f us", edge, m.deviation * 1e3, m.settling_time * 1e6)
 
     bench.wavegen_off()
@@ -254,6 +255,7 @@ def run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig) -> LineTranResult:
 def plot(res: LineTranResult, dut: str):
     return plot_edges(
         res.edges,
-        f"Line transient: {dut}  ·  {res.i_load * 1e3:.1f} mA load  ·  {res.averages} averages  ·  "
+        ref_label="VIN, scope 2 (V)",
+        suptitle=f"Line transient: {dut}  ·  {res.i_load * 1e3:.1f} mA load  ·  {res.averages} averages  ·  "
         "shaded = settling band",
     )
