@@ -1,0 +1,71 @@
+# Bench config for the LDO_Stable_JAFWAK board (SU272AFJK LDO).
+# Values marked TODO still need checking on the bench.
+
+[dut]
+name = "JAFWAK"
+vout_nominal = 1.8          # TODO: confirm the LDO output voltage
+
+[psu]                        # Agilent E3638A over GPIB
+resource = ""                # "" = auto-discover. Or "GPIB0::5::INSTR", or "prologix:COM5:5"
+gpib_address = 5             # E363xA factory default
+current_limit = 0.4          # A, applied before the output turns on
+ovp = 6.0                    # V
+vin_max = 5.5                # V, hard ceiling for every test
+settle_time = 0.3            # s after each voltage change
+
+[ad2]                        # Analog Discovery 2
+serial = ""                  # "" = first AD2 found
+vout_channel = 1             # Scope 1+ on VOUT, 1- on GND
+ref_channel = 2              # Scope 2+ on VIN (DC tests) or the stimulus (transients), 2- on GND
+wavegen_channel = 1          # W1 -> VIN_FG SMA -> BUF634 -> VIN (line transient)
+vout = { range = 5.0, offset = 0.0 }
+ref  = { range = 50.0, offset = 0.0 }
+
+[loadbank]
+# Binary-weighted load cell (load_cell.kicad_sch), bits B0 (LSB) .. B4 (MSB) on header J13.
+# Current per bit = Vout / R:  at 1.8 V -> 7.2, 14.4, 28.8, 57, 117 mA  (max ~224 mA)
+dio_pins = [0, 1, 2, 3, 4]   # TODO: AD2 DIO pins wired to B0..B4
+resistors = [250.0, 125.0, 62.5, 31.6, 15.4]   # R20, R19, R17||R18, R16, R15
+switch_resistance = 0.0      # FDV305N Rds(on), ohm (add if you want it in the current estimate)
+active_high = true
+
+[analysis]                   # same defaults as AD_workspaces/load_tran_script.js
+settle_fraction = 0.1
+smooth_time = 1e-6
+peak_window = 20e-6
+blank_time = 0.5e-6
+settle_reference = "pre"
+
+[load_reg]
+vin = 3.3
+codes = []                   # [] = all 32 codes
+settle_time = 0.05
+dc_window = 0.1
+
+[line_reg]
+vin_start = 1.9
+vin_stop = 5.0
+vin_step = 0.1
+load_code = 8
+
+[load_tran]
+vin = 3.3
+code_low = 1
+code_high = 16
+sample_rate = 10e6
+n_samples = 8192
+pre_trigger = 0.2
+averages = 16
+edges = ["rising", "falling"]
+
+[line_tran]
+psu_voltage = 5.5            # on VS_BUFF; must be >= vin_high + buffer_headroom
+vin_low = 2.8
+vin_high = 3.3
+load_code = 8
+buffer_headroom = 2.0
+sample_rate = 10e6
+n_samples = 8192
+pre_trigger = 0.2
+averages = 16
+edges = ["rising", "falling"]

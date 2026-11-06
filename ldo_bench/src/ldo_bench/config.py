@@ -1,0 +1,223 @@
+"""Bench / DUT configuration loaded from a TOML file.
+
+Everything that depends on the board, the wiring or the test conditions lives in
+the config file, so the code never hard-codes an instrument address or a pin.
+The config is validated before any instrument is powered up.
+"""
+
+from __future__ import annotations
+
+import tomllib
+from pathlib import Path
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+# AD2 limits
+AD2_DIO_PINS = 16
+AD2_WAVEGEN_MAX_V = 5.0
+
+
+class _Model(BaseModel):
+    # Typos in the TOML file should fail loudly, not be silently ignored.
+    model_config = ConfigDict(extra="forbid")
+
+
+class DutConfig(_Model):
+    name: str = "LDO"
+    vout_nominal: float = Field(gt=0, description="Expected LDO output voltage (V)")
+
+
+class PsuConfig(_Model):
+    resource: str = Field(
+        "",
+        description=(
+            "Empty = auto-discover an E3638A. Otherwise a VISA resource such as "
+            "'GPIB0::5::INSTR', or a Prologix-style adapter as 'prologix:COM5:5' "
+            "(serial port, GPIB address)."
+        ),
+    )
+    gpib_address: int = Field(5, ge=0, le=30, description="Tried first when scanning a Prologix adapter")
+    voltage_range: Literal["LOW", "HIGH"] | None = Field(None, description="E3638A output range")
+    current_limit: float = Field(gt=0, description="Applied before the output is enabled (A)")
+    ovp: float | None = Field(None, gt=0, description="Over-voltage protection level (V)")
+    vin_max: float = Field(gt=0, description="No test may ever program the PSU above this (V)")
+    ramp_step: float = Field(0.25, gt=0, description="Max voltage step when ramping (V)")
+    settle_time: float = Field(0.3, ge=0, description="Wait after each PSU voltage change (s)")
+
+    @model_validator(mode="after")
+    def _ovp_above_vin_max(self) -> PsuConfig:
+        if self.ovp is not None and self.ovp <= self.vin_max:
+            raise ValueError(f"psu.ovp ({self.ovp} V) must be above psu.vin_max ({self.vin_max} V)")
+        return self
+
+
+class ScopeChannelConfig(_Model):
+    range: float = Field(5.0, gt=0, description="Peak-to-peak input range (V). AD2: 5 or 50")
+    offset: float = 0.0
+
+
+class Ad2Config(_Model):
+    serial: str = Field("", description="Empty = first Analog Discovery 2 found")
+    vout_channel: Literal[1, 2] = 1
+    ref_channel: Literal[1, 2] = 2
+    vout: ScopeChannelConfig = ScopeChannelConfig()
+    ref: ScopeChannelConfig = ScopeChannelConfig(range=50.0)
+    wavegen_channel: Literal[1, 2] = 1
+
+    @model_validator(mode="after")
+    def _distinct(self) -> Ad2Config:
+        if self.vout_channel == self.ref_channel:
+            raise ValueError("ad2.vout_channel and ad2.ref_channel must differ")
+        return self
+
+
+class LoadBankConfig(_Model):
+    dio_pins: list[int] = Field(description="AD2 DIO pin for each bank bit, LSB first")
+    resistors: list[float] = Field(description="Load resistor for each bit, LSB first (ohm)")
+    switch_resistance: float = Field(0.0, ge=0, description="Per-switch on-resistance (ohm)")
+    active_high: bool = True
+
+    @model_validator(mode="after")
+    def _check(self) -> LoadBankConfig:
+        if len(self.dio_pins) != len(self.resistors):
+            raise ValueError("loadbank.dio_pins and loadbank.resistors must be the same length")
+        if len(set(self.dio_pins)) != len(self.dio_pins):
+            raise ValueError("loadbank.dio_pins has duplicates")
+        if any(not 0 <= p < AD2_DIO_PINS for p in self.dio_pins):
+            raise ValueError(f"loadbank.dio_pins must be in 0..{AD2_DIO_PINS - 1}")
+        if any(r <= 0 for r in self.resistors):
+            raise ValueError("loadbank.resistors must be positive")
+        return self
+
+    @property
+    def max_code(self) -> int:
+        return (1 << len(self.dio_pins)) - 1
+
+
+class AnalysisConfig(_Model):
+    settle_fraction: float = Field(0.1, gt=0, lt=1)
+    smooth_time: float = Field(1e-6, gt=0)
+    peak_window: float = Field(20e-6, gt=0)
+    blank_time: float = Field(0.5e-6, ge=0)
+    settle_reference: Literal["pre", "post"] = Field(
+        "pre",
+        description=(
+            "'pre' = settle back to the pre-step level (same as the WaveForms script); "
+            "'post' = settle to the final level after the step"
+        ),
+    )
+
+
+class LoadRegConfig(_Model):
+    vin: float = Field(gt=0)
+    codes: list[int] = Field(default_factory=list, description="Empty = every code 0..max")
+    settle_time: float = Field(0.05, ge=0)
+    dc_window: float = Field(
+        0.1, gt=0, description="DC averaging window (s); 0.1 s spans whole 50/60 Hz cycles"
+    )
+
+
+class LineRegConfig(_Model):
+    vin_start: float = Field(gt=0)
+    vin_stop: float = Field(gt=0)
+    vin_step: float = Field(gt=0)
+    load_code: int = Field(0, ge=0)
+    fit_vin_min: float | None = Field(
+        None, description="Only fit the slope above this Vin (V); default = 3 x step above the dropout knee"
+    )
+    dropout_fraction: float = Field(
+        0.01, gt=0, lt=1, description="Dropout = Vout falls this fraction below its max-Vin value"
+    )
+    dc_window: float = Field(0.1, gt=0)
+
+
+class TransientCaptureConfig(_Model):
+    sample_rate: float = Field(10e6, gt=0)
+    n_samples: int = Field(8192, gt=16)
+    pre_trigger: float = Field(0.2, gt=0, lt=1, description="Fraction of the capture before the step")
+    averages: int = Field(16, ge=1)
+    edges: list[Literal["rising", "falling"]] = Field(default_factory=lambda: ["rising", "falling"])
+    timeout: float = Field(5.0, gt=0)
+
+
+class LoadTranConfig(TransientCaptureConfig):
+    vin: float = Field(gt=0)
+    code_low: int = Field(ge=0)
+    code_high: int = Field(ge=0)
+    trigger_pin: int | None = Field(
+        None, description="DIO pin wired to the ref channel; default = MSB that changes"
+    )
+    dio_high_level: float = Field(3.3, gt=0, description="DIO logic-high voltage, for the trigger level")
+
+
+class LineTranConfig(TransientCaptureConfig):
+    psu_voltage: float = Field(gt=0, description="PSU voltage on VS_BUFF (buffer supply) (V)")
+    vin_low: float = Field(ge=0, description="W1 low level -> VIN through the BUF634 (V)")
+    vin_high: float = Field(gt=0)
+    load_code: int = Field(0, ge=0)
+    buffer_headroom: float = Field(2.0, ge=0, description="Required VS_BUFF - Vin margin for the BUF634 (V)")
+
+    @model_validator(mode="after")
+    def _check(self) -> LineTranConfig:
+        if self.vin_high <= self.vin_low:
+            raise ValueError("line_tran.vin_high must be above vin_low")
+        if self.vin_high > AD2_WAVEGEN_MAX_V:
+            raise ValueError(f"line_tran.vin_high exceeds the AD2 wavegen limit ({AD2_WAVEGEN_MAX_V} V)")
+        if self.psu_voltage < self.vin_high + self.buffer_headroom:
+            raise ValueError(
+                f"line_tran.psu_voltage ({self.psu_voltage} V) must be at least vin_high + buffer_headroom "
+                f"({self.vin_high + self.buffer_headroom} V) or the BUF634 will clip"
+            )
+        return self
+
+
+class BenchConfig(_Model):
+    dut: DutConfig
+    psu: PsuConfig
+    ad2: Ad2Config = Ad2Config()
+    loadbank: LoadBankConfig
+    analysis: AnalysisConfig = AnalysisConfig()
+    load_reg: LoadRegConfig | None = None
+    line_reg: LineRegConfig | None = None
+    load_tran: LoadTranConfig | None = None
+    line_tran: LineTranConfig | None = None
+
+    @model_validator(mode="after")
+    def _cross_checks(self) -> BenchConfig:
+        vmax = self.psu.vin_max
+        max_code = self.loadbank.max_code
+
+        def code_ok(name: str, code: int) -> None:
+            if not 0 <= code <= max_code:
+                raise ValueError(f"{name} = {code} is outside the load bank range 0..{max_code}")
+
+        if self.load_reg:
+            if self.load_reg.vin > vmax:
+                raise ValueError(f"load_reg.vin exceeds psu.vin_max ({vmax} V)")
+            for c in self.load_reg.codes:
+                code_ok("load_reg.codes", c)
+        if self.line_reg:
+            lr = self.line_reg
+            if max(lr.vin_start, lr.vin_stop) > vmax:
+                raise ValueError(f"line_reg sweep exceeds psu.vin_max ({vmax} V)")
+            code_ok("line_reg.load_code", lr.load_code)
+        if self.load_tran:
+            lt = self.load_tran
+            if lt.vin > vmax:
+                raise ValueError(f"load_tran.vin exceeds psu.vin_max ({vmax} V)")
+            code_ok("load_tran.code_low", lt.code_low)
+            code_ok("load_tran.code_high", lt.code_high)
+            if lt.code_low >= lt.code_high:
+                raise ValueError("load_tran.code_low must be below code_high")
+        if self.line_tran:
+            if self.line_tran.psu_voltage > vmax:
+                raise ValueError(f"line_tran.psu_voltage exceeds psu.vin_max ({vmax} V)")
+            code_ok("line_tran.load_code", self.line_tran.load_code)
+        return self
+
+
+def load_config(path: Path) -> BenchConfig:
+    with open(path, "rb") as f:
+        data = tomllib.load(f)
+    return BenchConfig.model_validate(data)
