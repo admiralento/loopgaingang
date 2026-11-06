@@ -47,4 +47,31 @@ export UV_PROJECT_ENVIRONMENT="$HOME/.venvs/ldo-bench"   # add to ~/.zshrc
 
 Windows is not affected.
 
-Work in progress: see the plan in the PR description.
+## Tests
+
+All commands take `-c <config>`. They also accept:
+- `--sim`: no hardware
+- `--psu` / `--ad-serial`: pick an instrument when several are connected
+- `--yes`: skip the wiring prompt
+- `-v`: debug log
+
+```
+uv run ldo-bench smoke     -c configs/demo_board.toml   # power up, read VOUT at no / full load
+uv run ldo-bench load-reg  -c configs/demo_board.toml   # load regulation (all 32 load codes)
+```
+
+Each run writes a folder under `results/`:
+- `data.csv`: every point
+- `summary.json`: the headline numbers
+- `meta.json`: config, instrument IDs, git commit, package versions
+- `plot.png`
+
+### Load regulation
+
+The PSU drives VIN directly. The AD2 measures VOUT and VIN at the board, averaged over 0.1 s (a whole number of 50/60 Hz cycles), so drop in the supply cables doesn't count against the LDO.
+
+Load current is estimated as VOUT / R from the bank resistors. The PSU current readback is also recorded; it adds the LDO's quiescent current. That readback costs about 0.8 s per point over GPIB. Set `load_reg.psu_readback = false` to skip it.
+
+The result is the slope dVOUT/dI_load (mV/mA, equal to the output resistance) and the total ΔVOUT (mV and %).
+
+Work in progress: line regulation and the transient tests are next.

@@ -24,6 +24,7 @@ PsuOpt = Annotated[
     str | None, typer.Option("--psu", help="PSU resource, e.g. GPIB0::5::INSTR or prologix:COM5:5")
 ]
 AdOpt = Annotated[str | None, typer.Option("--ad-serial", help="Analog Discovery 2 serial number")]
+OutOpt = Annotated[Path, typer.Option("--out", "-o", help="Folder for run results")]
 YesOpt = Annotated[bool, typer.Option("--yes", "-y", help="Don't ask to confirm wiring")]
 VerboseOpt = Annotated[bool, typer.Option("--verbose", "-v", help="Debug logging")]
 
@@ -132,6 +133,67 @@ def _smoke(bench: Bench, vin: float) -> None:
             f"{bench.psu.measure_voltage():>8.3f} {bench.psu.measure_current() * 1e3:>9.2f}"
         )
     bench.loadbank.off()
+
+
+def _section(cfg: BenchConfig, name: str):
+    sec = getattr(cfg, name.replace("-", "_"))
+    if sec is None:
+        typer.secho(f"The config has no [{name.replace('-', '_')}] section.", fg="red", err=True)
+        raise typer.Exit(2)
+    return sec
+
+
+def _load_with(cfg: BenchConfig, **sections) -> BenchConfig:
+    """Re-validate the config with some sections replaced (keeps the safety checks)."""
+    data = cfg.model_dump()
+    data.update({k: v.model_dump() for k, v in sections.items()})
+    try:
+        return BenchConfig.model_validate(data)
+    except ValidationError as e:
+        typer.secho(f"Invalid option:\n{e}", fg="red", err=True)
+        raise typer.Exit(2) from e
+
+
+def _save(bench: Bench, cfg: BenchConfig, config_path: Path, out: Path, module, res) -> Path:
+    """Write data.csv, summary.json, meta.json and plot.png for one run."""
+    from ldo_bench import plotting
+    from ldo_bench.results import RunDir
+
+    run = RunDir(out, module.NAME, cfg, config_path=config_path)
+    run.write_csv("data.csv", res.rows)
+    run.write_json("summary.json", res.summary())
+    run.write_meta(idns=bench.idns(), sim=bench.is_sim)
+    fig = module.plot(res, cfg.dut.name)
+    run.save_fig(fig)
+    plotting.close(fig)
+    return run.path
+
+
+@app.command("load-reg")
+def load_reg(
+    config: ConfigOpt,
+    vin: Annotated[float | None, typer.Option(help="Override load_reg.vin (V)")] = None,
+    out: OutOpt = Path("results"),
+    sim: SimOpt = False,
+    psu: PsuOpt = None,
+    ad_serial: AdOpt = None,
+    yes: YesOpt = False,
+    verbose: VerboseOpt = False,
+) -> None:
+    """Load regulation: step the load bank at fixed VIN, record VOUT vs load current."""
+    from ldo_bench.procedures import load_reg as proc
+
+    _logging(verbose)
+    cfg = _load(config)
+    lr = _section(cfg, "load-reg")
+    if vin is not None:
+        cfg = _load_with(cfg, load_reg=lr.model_copy(update={"vin": vin}))
+        lr = cfg.load_reg
+    with _bench(cfg, sim, psu, ad_serial, yes) as bench:
+        res = proc.run(bench, lr)
+        path = _save(bench, cfg, config, out, proc, res)
+    typer.echo(res.report())
+    typer.secho(f"Saved to {path}", fg="green")
 
 
 def main() -> None:

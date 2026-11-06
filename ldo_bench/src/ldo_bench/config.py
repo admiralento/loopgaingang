@@ -124,6 +124,7 @@ class LoadRegConfig(_Model):
     dc_window: float = Field(
         0.1, gt=0, description="DC averaging window (s); 0.1 s spans whole 50/60 Hz cycles"
     )
+    psu_readback: bool = Field(True, description="Also record the PSU's V/I readback (~0.8 s per point)")
 
 
 class LineRegConfig(_Model):
