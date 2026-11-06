@@ -2,13 +2,20 @@
 
 Two kinds of USB-GPIB adapter exist and we support both:
 
-* VISA adapters (Keysight 82357B, NI GPIB-USB-HS, ...): they appear as
-  ``GPIB0::5::INSTR`` in NI-VISA / Keysight IO Libraries. Uses PyVISA.
+* VISA adapters. Two flavours, both handled by PyVISA:
+    - USBTMC adapters such as the XyphroLabs UsbGpib (the one on our bench):
+      appear as ``USB0::0x03EB::0x2065::<serial built from *IDN?>::INSTR``.
+      Works with NI-VISA, or with pyvisa-py + pyusb + libusb-package (no
+      driver install needed on macOS). One instrument per adapter, GPIB
+      address found automatically.
+    - GPIB interface cards / Keysight 82357B / NI GPIB-USB-HS: appear as
+      ``GPIB0::5::INSTR`` in NI-VISA / Keysight IO Libraries.
 * Prologix-style adapters (Prologix GPIB-USB, AR488 and many clones): they
   appear as a serial port (COMx on Windows, /dev/tty.usbserial-* on macOS)
   and are driven with ``++`` commands. Uses pyserial.
 
 Resource strings:
+    "USB0::0x03EB::0x2065::GPIB_5_...::INSTR"   UsbGpib adapter (VISA)
     "GPIB0::5::INSTR"            VISA, default backend
     "GPIB0::5::INSTR@py"         VISA via pyvisa-py
     "prologix:COM5:5"            Prologix adapter on COM5, GPIB address 5
