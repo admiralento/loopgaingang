@@ -129,7 +129,7 @@ def _smoke(bench: Bench, vin: float) -> None:
     bench.loadbank.off()
     bench.vin_from_psu(vin)
     typer.echo(f"{'code':>4} {'I_est mA':>9} {'VOUT V':>9} {'VIN V':>8} {'V_psu V':>8} {'I_psu mA':>9}")
-    for code in (0, bench.loadbank.max_code):
+    for code in (0, bench.loadbank.max_allowed_code):
         bench.loadbank.set(code)
         bench.sleep(0.05)
         vout, ref = bench.measure_dc(0.1)

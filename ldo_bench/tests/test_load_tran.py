@@ -42,14 +42,18 @@ def test_both_edges_on_sim(cfg):
 
 
 def test_single_edge_and_auto_trigger_pin(jafwak):
-    res, _ = run(jafwak, edges=["falling"], trigger_pin=None)
+    res, b = run(jafwak, edges=["falling"], trigger_pin=None)
+    lt = jafwak.load_tran
     assert [e.edge for e in res.edges] == ["falling"]
-    assert res.trigger_pin == 4  # MSB that changes between codes 1 and 17
+    # MSB that changes between the two codes (JAFWAK 1 -> 4: bit 2)
+    assert res.trigger_pin == b.loadbank.trigger_pin(lt.code_low, lt.code_high)[0] == 2
 
 
 def test_trigger_pin_must_change(cfg):
+    lt = cfg.load_tran
+    still = next(b for b in range(5) if not (lt.code_low ^ lt.code_high) >> b & 1)
     with pytest.raises(InstrumentError, match="never moves"):
-        run(cfg, trigger_pin=0)  # bit 0 is set in both code 1 and code 17
+        run(cfg, trigger_pin=cfg.loadbank.dio_pins[still])
 
 
 def test_report_hints_post_when_dc_shift_exceeds_band(cfg):

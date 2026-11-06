@@ -61,7 +61,7 @@ def wiring(bench: Bench) -> list[str]:
 
 def run(bench: Bench, lr: LoadRegConfig) -> LoadRegResult:
     bank = bench.loadbank
-    codes = lr.codes or list(range(bank.max_code + 1))
+    codes = lr.codes or bank.allowed_codes()  # [] = every code within dut.i_max
     bench.confirm_wiring("load regulation", wiring(bench), ref_probe=("vin", 0))
 
     bank.off()

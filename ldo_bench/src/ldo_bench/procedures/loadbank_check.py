@@ -96,6 +96,12 @@ def run(bench: Bench, lc: LoadBankCheckConfig) -> LoadBankCheckResult:
         ref_probe=("vin", 0),
         bank_on_psu=True,
     )
+    with bank.unrestricted():  # no DUT here: dut.i_max doesn't apply
+        return _run(bench, lc)
+
+
+def _run(bench: Bench, lc: LoadBankCheckConfig) -> LoadBankCheckResult:
+    bank, lb = bench.loadbank, bench.cfg.loadbank
     bank.off()
     bench.psu_output(lc.voltage)
     bench.sleep(lc.settle_time)

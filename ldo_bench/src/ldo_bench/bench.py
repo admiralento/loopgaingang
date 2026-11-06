@@ -58,7 +58,7 @@ class Bench:
         self.sim_model = sim_model
         self.assume_yes = assume_yes
         self._confirm = confirm
-        self.loadbank = LoadBank(cfg.loadbank, ad2)
+        self.loadbank = LoadBank(cfg.loadbank, ad2, i_max=cfg.dut.i_max, vout=cfg.dut.vout_nominal)
         self._psu_ready = False
         self._psu_on = False
         self._awg_on = False

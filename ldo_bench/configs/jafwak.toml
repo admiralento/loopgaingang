@@ -11,12 +11,13 @@
 name = "JAFWAK"
 vout_nominal = 1.2
 vin_max = 3.6                # TODO: confirm the custom LDO's max VIN
+i_max = 0.020                # max load current: codes 0..4 (19.2 mA at 1.2 V); larger codes are refused
 
 [psu]                        # Agilent E3648A (or E3638A) over GPIB
 resource = ""                # "" = auto-discover. Or a VISA resource (USB0::...::INSTR, GPIB0::5::INSTR), or "prologix:COM5:5"
 gpib_address = 5             # only used to scan Prologix adapters
 channel = 1                  # E3648A output (OUT1 / OUT2); the other one is held at 0 V
-current_limit = 0.3          # A, applied before the output turns on
+current_limit = 0.06         # A, applied before the output turns on (20 mA load + LDO / BUF634 quiescent)
 v_max = 5.5                  # PSU ceiling; above dut.vin_max only so line_tran can power VS_BUFF
 ovp = 6.0
 settle_time = 0.3
@@ -54,7 +55,7 @@ settle_reference = "pre"
 
 [load_reg]
 vin = 1.8
-codes = []                   # [] = all 32 codes
+codes = []                   # [] = every code within dut.i_max (0..4)
 settle_time = 0.05
 dc_window = 0.1
 
@@ -62,23 +63,23 @@ dc_window = 0.1
 vin_start = 1.25
 vin_stop = 3.3
 vin_step = 0.05
-load_code = 8
+load_code = 4                # 19.2 mA
 
 [load_tran]
 vin = 1.8
 code_low = 1                 # 4.8 mA
-code_high = 17               # 82.7 mA
+code_high = 4                # 19.2 mA; trigger on the MSB that changes: DIO 2 (B2)
 sample_rate = 10e6
 n_samples = 8192
 pre_trigger = 0.2
 averages = 16
 edges = ["rising", "falling"]
 
-[line_tran]
-psu_voltage = 4.5            # on VS_BUFF; >= vin_high + buffer_headroom
-vin_low = 1.6
+[line_tran]                  # W1 -> VIN_FG SMA -> BUF634 -> VIN (JP4 to the buffer), PSU on VS_BUFF
+psu_voltage = 4.0            # on VS_BUFF (not VIN!); >= vin_high + buffer_headroom
+vin_low = 1.8
 vin_high = 2.0
-load_code = 8
+load_code = 4                # 19.2 mA
 buffer_headroom = 2.0
 sample_rate = 10e6
 n_samples = 8192

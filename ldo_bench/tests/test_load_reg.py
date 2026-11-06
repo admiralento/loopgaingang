@@ -33,18 +33,19 @@ def test_load_regulation_unsorted_input():
 
 def test_procedure_recovers_sim_output_resistance(bench):
     res = load_reg.run(bench, bench.cfg.load_reg)
-    assert len(res.rows) == 32
-    # sim model: r_out = 50 mOhm; noise is 0.4 mV rms over 8192 samples
-    assert res.reg.r_out == pytest.approx(bench.sim_model.r_out, rel=0.05)
+    assert len(res.rows) == len(bench.loadbank.allowed_codes())  # 32, or 5 under JAFWAK's 20 mA limit
+    # sim model: r_out = 50 mOhm
+    assert res.reg.r_out == pytest.approx(bench.sim_model.r_out, rel=0.1)
     assert res.reg.r2 > 0.99
     # supply off and load released afterwards
     assert bench.loadbank.code == 0
 
 
 def test_codes_subset(bench):
-    lr = bench.cfg.load_reg.model_copy(update={"codes": [0, 31], "psu_readback": False})
+    top = bench.loadbank.max_allowed_code
+    lr = bench.cfg.load_reg.model_copy(update={"codes": [0, top], "psu_readback": False})
     res = load_reg.run(bench, lr)
-    assert [r["code"] for r in res.rows] == [0, 31] and "i_psu_a" not in res.rows[0]
+    assert [r["code"] for r in res.rows] == [0, top] and "i_psu_a" not in res.rows[0]
 
 
 def test_run_folder(bench, tmp_path):

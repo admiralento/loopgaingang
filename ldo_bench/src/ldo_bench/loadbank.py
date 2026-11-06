@@ -8,16 +8,30 @@ bank: 250, 125, 62.5 (125 || 125), 31.6, 15.4 ohm on B0 (LSB) .. B4 (MSB).
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 from ldo_bench.config import LoadBankConfig
-from ldo_bench.instruments.base import DigitalOut
+from ldo_bench.instruments.base import DigitalOut, InstrumentError
 
 
 class LoadBank:
-    def __init__(self, cfg: LoadBankConfig, dio: DigitalOut) -> None:
+    """`i_max` / `vout`: refuse any code whose current at `vout` exceeds `i_max` (the DUT's limit)."""
+
+    def __init__(
+        self,
+        cfg: LoadBankConfig,
+        dio: DigitalOut,
+        *,
+        i_max: float | None = None,
+        vout: float | None = None,
+    ) -> None:
         self.cfg = cfg
         self.dio = dio
         self.code: int | None = None
+        self.i_max = i_max
+        self.vout = vout
+        self._limit_on = True
 
     @property
     def max_code(self) -> int:
@@ -46,9 +60,36 @@ class LoadBank:
             pin: bool(code >> bit & 1) == self.cfg.active_high for bit, pin in enumerate(self.cfg.dio_pins)
         }
 
+    def allowed(self, code: int) -> bool:
+        if self.i_max is None or self.vout is None or not self._limit_on:
+            return True
+        return self.current(code, self.vout) <= self.i_max
+
+    def allowed_codes(self) -> list[int]:
+        return [c for c in range(self.max_code + 1) if self.allowed(c)]
+
+    @property
+    def max_allowed_code(self) -> int:
+        """The allowed code with the most current (not necessarily the highest number)."""
+        return max(self.allowed_codes(), key=self.conductance)
+
     def set(self, code: int) -> None:
+        if not self.allowed(code):
+            raise InstrumentError(
+                f"load code {code} would draw ~{self.current(code, self.vout) * 1e3:.1f} mA, "
+                f"above the DUT limit dut.i_max = {self.i_max * 1e3:.1f} mA"
+            )
         self.dio.write_pins(self.pin_levels(code))
         self.code = code
+
+    @contextmanager
+    def unrestricted(self) -> Iterator[None]:
+        """Lift the DUT current limit, for tests with no DUT connected (loadbank-check)."""
+        self._limit_on = False
+        try:
+            yield
+        finally:
+            self._limit_on = True
 
     def off(self) -> None:
         self.set(0)

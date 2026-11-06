@@ -144,8 +144,8 @@ def wiring(bench: Bench, pin: int) -> list[str]:
     return [
         "PSU -> VIN",
         f"Scope {a.vout_channel}+ -> VOUT at the output pins, {a.vout_channel}- -> GND",
-        f"Scope {a.ref_channel}+ -> DIO {pin} / J{bit} (trigger), {a.ref_channel}- -> GND",
-        f"DIO {lb.dio_pins} -> load bank J0..J{len(lb.dio_pins) - 1}, AD2 GND -> board GND",
+        f"Scope {a.ref_channel}+ -> DIO {pin} (load bank bit B{bit}, trigger), {a.ref_channel}- -> GND",
+        f"DIO {lb.dio_pins} -> load bank bits B0..B{len(lb.dio_pins) - 1}, AD2 GND -> board GND",
     ]
 
 

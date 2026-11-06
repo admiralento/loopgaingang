@@ -27,6 +27,13 @@ class DutConfig(_Model):
     name: str = "LDO"
     vout_nominal: float = Field(gt=0, description="Expected LDO output voltage (V)")
     vin_max: float = Field(gt=0, description="Highest voltage any test may put on the LDO's VIN (V)")
+    i_max: float | None = Field(
+        None,
+        gt=0,
+        description=(
+            "Highest load current any test may switch in (A), estimated at vout_nominal; None = no limit"
+        ),
+    )
 
 
 class PsuConfig(_Model):
@@ -262,9 +269,19 @@ class BenchConfig(_Model):
         vin_ceiling = min(self.dut.vin_max, self.psu.v_max)
         max_code = self.loadbank.max_code
 
+        lb = self.loadbank
+
         def code_ok(name: str, code: int) -> None:
             if not 0 <= code <= max_code:
                 raise ValueError(f"{name} = {code} is outside the load bank range 0..{max_code}")
+            if self.dut.i_max is not None:
+                g = sum(1 / (r + lb.switch_resistance) for b, r in enumerate(lb.resistors) if code >> b & 1)
+                i = self.dut.vout_nominal * g
+                if i > self.dut.i_max:
+                    raise ValueError(
+                        f"{name} = {code} draws ~{i * 1e3:.1f} mA at {self.dut.vout_nominal} V, above "
+                        f"dut.i_max ({self.dut.i_max * 1e3:.1f} mA)"
+                    )
 
         def vin_ok(name: str, v: float) -> None:
             if v > vin_ceiling:

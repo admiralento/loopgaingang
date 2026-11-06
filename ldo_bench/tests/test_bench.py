@@ -31,7 +31,7 @@ def test_shutdown_runs_on_exception(jafwak):
     m = b.sim_model
     with pytest.raises(RuntimeError), b:
         b.vin_from_psu(1.8)
-        b.loadbank.set(31)
+        b.loadbank.set(b.loadbank.max_allowed_code)
         b.vin_from_wavegen(1.5)
         raise RuntimeError("boom")
     assert not m.psu_on and m.psu_v == 0.0
@@ -51,8 +51,29 @@ def test_dc_measurement_tracks_load(bench):
     bench.vin_from_psu(1.8)
     bench.loadbank.set(0)
     v0, ref = bench.measure_dc(0.1)
-    bench.loadbank.set(31)
+    bench.loadbank.set(bench.loadbank.max_allowed_code)
     v1, _ = bench.measure_dc(0.1)
     assert ref.mean == pytest.approx(1.8, abs=1e-3)
     assert v0.mean == pytest.approx(bench.cfg.dut.vout_nominal, abs=5e-3)
     assert v1.mean < v0.mean
+
+
+def test_dut_current_limit_enforced_at_runtime(jafwak):
+    with open_bench(jafwak, sim=True) as b:
+        assert b.loadbank.allowed_codes() == [0, 1, 2, 3, 4]  # <= 20 mA at 1.2 V
+        assert b.loadbank.max_allowed_code == 4
+        with pytest.raises(InstrumentError, match=r"dut\.i_max"):
+            b.loadbank.set(5)  # 24 mA
+        with b.loadbank.unrestricted():  # loadbank-check: no DUT connected
+            b.loadbank.set(31)
+        with pytest.raises(InstrumentError):
+            b.loadbank.set(31)  # limit back on afterwards
+
+
+def test_dut_current_limit_enforced_in_config(jafwak):
+    from ldo_bench.config import BenchConfig
+
+    d = jafwak.model_dump()
+    d["load_tran"]["code_high"] = 17
+    with pytest.raises(ValueError, match=r"dut\.i_max"):
+        BenchConfig.model_validate(d)
