@@ -148,6 +148,21 @@ class PsuCheckConfig(_Model):
     settle_time: float = Field(0.5, ge=0, description="Extra wait after each setpoint (s)")
 
 
+class LoadBankCheckConfig(_Model):
+    """loadbank-check: the load bank straight across the PSU (no LDO) to verify the DIO wiring."""
+
+    voltage: float = Field(
+        1.0,
+        gt=0,
+        le=1.5,
+        description="PSU voltage on the bank (V). Capped at 1.5 V: 15.4 ohm at 1.5 V is already 0.15 W",
+    )
+    readings: int = Field(3, ge=1, description="PSU current readings averaged per state")
+    settle_time: float = Field(0.2, ge=0, description="Wait after switching a bit (s)")
+    tolerance: float = Field(0.10, gt=0, lt=1, description="Allowed relative current error per bit")
+    abs_tolerance: float = Field(1.5e-3, ge=0, description="Plus this absolute error (A): readback noise")
+
+
 class LoadRegConfig(_Model):
     vin: float = Field(gt=0)
     codes: list[int] = Field(default_factory=list, description="Empty = every code 0..max")
@@ -234,6 +249,7 @@ class BenchConfig(_Model):
     loadbank: LoadBankConfig
     analysis: AnalysisConfig = AnalysisConfig()
     psu_check: PsuCheckConfig = PsuCheckConfig()
+    loadbank_check: LoadBankCheckConfig = LoadBankCheckConfig()
     load_reg: LoadRegConfig | None = None
     line_reg: LineRegConfig | None = None
     load_tran: LoadTranConfig | None = None

@@ -178,6 +178,31 @@ def _save(bench: Bench, cfg: BenchConfig, config_path: Path, out: Path, module, 
 NoDmmOpt = Annotated[bool, typer.Option("--no-dmm", help="Measure VOUT with the AD2 even if a DMM is set up")]
 
 
+@app.command("loadbank-check")
+def loadbank_check(
+    config: ConfigOpt,
+    voltage: Annotated[float | None, typer.Option(help="PSU voltage across the bank (V, max 1.5)")] = None,
+    out: OutOpt = Path("results"),
+    sim: SimOpt = False,
+    psu: PsuOpt = None,
+    ad_serial: AdOpt = None,
+    yes: YesOpt = False,
+    verbose: VerboseOpt = False,
+) -> None:
+    """Check the AD2 DIO -> load bank wiring with the bank straight across the PSU (no LDO)."""
+    from ldo_bench.procedures import loadbank_check as proc
+
+    _logging(verbose)
+    cfg = _load(config)
+    if voltage is not None:
+        cfg = _load_with(cfg, loadbank_check=cfg.loadbank_check.model_copy(update={"voltage": voltage}))
+    with _bench(cfg, sim, psu, ad_serial, yes, use_dmm=False) as bench:
+        res = proc.run(bench, cfg.loadbank_check)
+        path = _save(bench, cfg, config, out, proc, res)
+    typer.echo(res.report())
+    typer.secho(f"Saved to {path}", fg="green" if res.passed else "yellow")
+
+
 @app.command("psu-check")
 def psu_check(
     config: ConfigOpt,

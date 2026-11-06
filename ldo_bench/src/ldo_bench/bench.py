@@ -98,11 +98,16 @@ class Bench:
         lines: list[str],
         ref_probe: RefProbe,
         dmm_probe: Literal["vout", "psu"] = "vout",
+        bank_on_psu: bool = False,
     ) -> None:
-        """Show the wiring a test needs and wait for the user to confirm it."""
+        """Show the wiring a test needs and wait for the user to confirm it.
+
+        The keyword arguments only tell the simulator how the bench is wired.
+        """
         if self.sim_model is not None:
             self.sim_model.ref_probe = ref_probe
             self.sim_model.dmm_probe = dmm_probe
+            self.sim_model.bank_on_psu = bank_on_psu
         text = "\n".join([f"Wiring for {title}:", *(f"  - {s}" for s in lines)])
         log.info(text)
         if self.is_sim or self.assume_yes or self._confirm is None:

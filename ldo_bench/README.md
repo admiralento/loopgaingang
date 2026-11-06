@@ -76,6 +76,7 @@ All commands take `-c <config>`. They also accept:
 ```
 uv run ldo-bench smoke     -c configs/demo_board.toml   # power up, read VOUT at no / full load
 uv run ldo-bench psu-check -c configs/demo_board.toml   # PSU setpoint/readback vs DMM (DMM across the PSU only)
+uv run ldo-bench loadbank-check -c configs/demo_board.toml  # load bank straight on the PSU: checks DIO -> J0..J4 wiring
 uv run ldo-bench load-reg  -c configs/demo_board.toml   # load regulation (all 32 load codes)
 uv run ldo-bench line-reg  -c configs/demo_board.toml   # line regulation + dropout (--load 30mA)
 ```
@@ -85,6 +86,12 @@ Each run writes a folder under `results/`:
 - `summary.json`: the headline numbers
 - `meta.json`: config, instrument IDs, git commit, package versions
 - `plot.png`
+
+### Load bank check
+
+Run this before load regulation. Connect the load bank **directly** to the supply: OUT1 + to J5, − to J6. Wire the AD2 DIO 0–4 to J0–J4, plus **AD2 GND to J6**. The J0–J4 headers carry only the gate signal, with no ground.
+
+At 1.0 V, each bit is switched on alone and its extra current is compared with V/R. The no-load current is subtracted first, which cancels the supply's readback offset. The report says which bit draws nothing (open wire or missing ground), or which J header a DIO pin really seems to be wired to.
 
 ### Load regulation
 

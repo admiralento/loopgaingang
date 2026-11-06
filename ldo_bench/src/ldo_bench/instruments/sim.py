@@ -48,6 +48,8 @@ class LdoModel:
     dio: dict[int, bool] = field(default_factory=dict)
     ref_probe: tuple[str, int] = ("vin", 0)  # what scope ch2 is wired to: ("vin", 0) or ("dio", pin)
     dmm_probe: str = "vout"  # what the DMM is across: "vout" or "psu" (the supply terminals)
+    bank_on_psu: bool = False  # loadbank-check: the load bank straight across the PSU, no LDO
+    psu_i_offset: float = 2.0e-3  # A, current readback offset (cancelled by zero-load subtraction)
     psu_offset: float = -1.0e-3  # V, sim supply output error: offset + gain, like the bench E3648A
     psu_gain: float = 4.5e-4
     psu_readback_gain: float = 5.5e-4  # readback reads high, ~2.7 mV at 5 V
@@ -125,6 +127,9 @@ class SimPowerSupply:
     def measure_current(self) -> float:
         if not self.m.psu_on:
             return 0.0
+        if self.m.bank_on_psu:
+            noise = float(self.m.rng.normal(0.0, 0.2e-3))
+            return self.m.psu_actual() * self.m.conductance() + self.m.psu_i_offset + noise
         buffer_iq = 1.5e-3 if self.m.awg_v else 0.0
         return self.m.load_current() + self.m.iq + buffer_iq
 
