@@ -15,6 +15,7 @@ from ldo_bench.instruments.transports import Transport
 log = logging.getLogger(__name__)
 
 MODEL = "34401A"
+OVERLOAD = 9.0e37  # the 34401A reads +/-9.9E+37 on overload
 
 RS232_HINT = (
     "On the 34401A front panel (Shift > I/O MENU), set INTERFACE to match the cable. On GPIB: HP-IB / "
@@ -60,6 +61,21 @@ class HP34401A:
         self._check("configuring DC volts")
         self._nplc = nplc
         log.info("DMM: DCV %s, %g NPLC, autozero on, high-Z input", f"{range:g} V" if range else "auto", nplc)
+
+    def configure_dci(self, *, range: float | None, nplc: float) -> None:
+        """DC amps on the 3 A / mA input (I and LO terminals). Ranges 10 mA, 100 mA, 1 A, 3 A."""
+        self.t.write(f"CONF:CURR:DC {range:g}" if range else "CONF:CURR:DC AUTO")
+        self.t.write(f"CURR:DC:NPLC {nplc:g}")
+        self.t.write("ZERO:AUTO ON")
+        self.t.write("TRIG:SOUR IMM")
+        self._check("configuring DC current")
+        self._nplc = nplc
+        log.info("DMM: DCI %s, %g NPLC, autozero on", f"{range:g} A" if range else "auto", nplc)
+
+    def read(self) -> float:
+        """One reading in whatever function is configured; +/-inf if the meter is overloaded."""
+        v = float(self.t.query("READ?"))
+        return float("inf") * (1 if v > 0 else -1) if abs(v) >= OVERLOAD else v
 
     def read_dcv(self) -> float:
         return float(self.t.query("READ?"))

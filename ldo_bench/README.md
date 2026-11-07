@@ -83,6 +83,8 @@ uv run ldo-bench load-tran -c configs/demo_board.toml   # load steps: peak + set
 uv run ldo-bench line-tran -c configs/jafwak.toml       # VIN steps via W1 + BUF634 (--low 1.8 --high 2.0 --load 19mA)
 uv run ldo-bench enable-sine -c configs/jafwak.toml     # enable block: sine in, square out -> VT+/VT-, hysteresis (--freq 1e3)
 uv run ldo-bench enable-startup -c configs/jafwak.toml  # enable edge -> VOUT + VREF (or current) startup timing (--ch2 iin)
+uv run ldo-bench iq -c configs/jafwak.toml              # quiescent + shutdown current vs VIN (DMM; --method series --rail bgr)
+uv run ldo-bench psrr -c configs/jafwak.toml            # PSRR 100 Hz - 1 MHz, sine on VIN through the BUF634 (--amp-mv 20)
 ```
 
 **Everything saved and plotted is what was measured: nothing is filled in or assumed.** Each test runs to the end and checks that it really measured the board:
@@ -183,7 +185,25 @@ VIN is driven by the AD2 wavegen through the board's BUF634 buffer:
   - for currents: the levels before and after, and the peak (inrush)
 - **Setup checks:** VOUT already up before the enable edge (the enable path isn't controlling the LDO), VOUT not reaching nominal after enabling, and VREF off its expected level (`vref_nominal`).
 
-Neither test has been run on hardware yet. The AD2's digital trigger in particular (Digital In's detector driving the scope trigger) needs checking on the first run.
+### Quiescent current and PSRR
+
+**`iq`** measures the supply current with no load, enabled and disabled (through the enable path), across a VIN sweep. The DMM does the measuring:
+- **`method = "shunt"`:** DMM DC volts across R13 (J13.1 / J13.2, 0.1 Ω) on the 100 mV range. This is the total current from VIN, including the enable block, the level shifters' low side and ~1.2 µA into the AD2 scope on VOUT. One count is 1 µA, which is fine for Iq but not for shutdown current: those points are reported as "< floor", not as a number.
+- **`method = "series"`:** DMM DC amps (I / LO jacks) in place of one J1 jumper (`rail = "bgr"`, `"vdd"`, `"en"`, `"ota"`), or between the PSU and VIN_DC (`rail = "total"`). One count is 10 nA, so this resolves shutdown current.
+- **Zero:** the DMM is read with the PSU off and that offset (thermal EMF) is subtracted; the spread of those readings sets the floor.
+- **Setup checks:**
+  - shunt: one known load (`check_code`) is switched in briefly, and the DMM must see its current through R13 within 15 %
+  - an enabled current under the floor: the meter isn't across R13 / in series
+  - VOUT off nominal when enabled, or still up when disabled
+  - reversed leads are noted, and the signs flipped
+
+**`psrr`** puts a sine on VIN through the line-transient path (W1 → BUF634 → VIN, PSU on the buffer rail) and measures how much of it reaches VOUT, from 100 Hz to 1 MHz.
+- **Safety:** the same interlock and DC calibration as `line-tran`. The sine's peak (`vin + amplitude`) must be within `dut.vin_max`; the bench refuses a higher setting, and the run stops if the measured VIN peak goes above it.
+- **Measurement:** free-running AD2 captures of VIN (scope 2) and VOUT (scope 1), with a least-squares sine fit at the injected frequency on each (a lock-in). VOUT/VIN is averaged coherently over `averages` captures. W1's amplitude is re-levelled if VIN drifts more than 15 % from the target.
+- **Floor:** whatever the fit can't explain sets the smallest VOUT ripple the AD2 resolves (roughly 70-80 dB of PSRR at 50 mV). Points below that are drawn hollow and reported as "≥ X dB".
+- **Spectrum analyzer:** the VOUT measurement goes through a small `PsrrMeter` interface (`procedures/psrr.py`). A spectrum analyzer driver plugs in there to measure past the AD2's floor.
+
+Neither the enable tests nor `iq` / `psrr` have been run on hardware yet. The AD2's digital trigger in particular (Digital In's detector driving the scope trigger) needs checking on the first run.
 
 ### Interfaces: GPIB or RS-232, for every instrument
 

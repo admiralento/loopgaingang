@@ -390,6 +390,104 @@ class StartupConfig(_Model):
     timeout: float = Field(5.0, gt=0)
 
 
+IqRail = Literal["total", "bgr", "vdd", "en", "ota"]
+
+
+class IqConfig(_Model):
+    """iq: quiescent (enabled) and shutdown (disabled) supply current vs VIN, no load, from the DMM.
+
+    method 'shunt': DMM DC volts across the input sense resistor (JAFWAK R13, J13.1-J13.2); measures
+    everything drawn from VIN. 'series': DMM DC amps in place of a J1 jumper (one rail), or between the
+    PSU and VIN_DC (rail 'total').
+    """
+
+    method: Literal["shunt", "series"] = "shunt"
+    rail: IqRail = Field("total", description="series only: which J1 rail the DMM replaces")
+    sense_ohm: float = Field(0.1, gt=0, description="shunt only: R13 value (ohm)")
+    vin_start: float = Field(gt=0)
+    vin_stop: float = Field(gt=0)
+    vin_step: float = Field(0.1, gt=0)
+    states: list[Literal["enabled", "disabled"]] = Field(
+        default_factory=lambda: ["enabled", "disabled"],
+        description="disabled = through the [enable] path; leave it out on a board with no enable control",
+    )
+    readings: int = Field(5, ge=1, description="DMM readings averaged per point (and for the zero)")
+    settle_time: float = Field(0.5, ge=0, description="Wait after each VIN / enable change (s)")
+    dmm_range: float | None = Field(
+        None,
+        gt=0,
+        description="DMM range: V for shunt (default 0.1 = 100 mV), A for series (default auto)",
+    )
+    nplc: Literal[0.02, 0.2, 1, 10, 100] | None = Field(None, description="None = dmm.nplc")
+    check_code: int = Field(
+        1,
+        ge=0,
+        description=(
+            "shunt only: load code switched in once to prove the DMM sees the current through the sense "
+            "resistor (0 = skip)"
+        ),
+    )
+    check_tolerance: float = Field(0.15, gt=0, lt=1)
+
+    @model_validator(mode="after")
+    def _check(self) -> IqConfig:
+        if self.vin_stop < self.vin_start:
+            raise ValueError("iq.vin_stop must be at or above vin_start")
+        if self.method == "shunt" and self.rail != "total":
+            raise ValueError("iq.method 'shunt' measures the total input current: use rail = 'total'")
+        if not self.states:
+            raise ValueError("iq.states is empty")
+        return self
+
+
+class PsrrConfig(_Model):
+    """psrr: a sine on VIN through the BUF634 (line transient path), its amplitude on VIN and VOUT."""
+
+    psu_voltage: float = Field(gt=0, description="PSU on VS_BUFF / VDD_BUF (buffer supply), not VIN (V)")
+    vin: float = Field(gt=0, description="DC level on VIN (V); the sine rides on it")
+    amplitude: float = Field(0.05, gt=0, description="Sine peak amplitude on VIN (V)")
+    f_start: float = Field(100.0, gt=0)
+    f_stop: float = Field(1e6, gt=0, le=10e6)
+    points_per_decade: int = Field(3, ge=1, le=50)
+    load_code: int = Field(0, ge=0)
+    averages: int = Field(4, ge=1, description="Captures per frequency (VOUT/VIN is averaged coherently)")
+    cycles: float = Field(20.0, ge=2, description="Minimum sine cycles per capture")
+    n_samples: int = Field(8192, ge=512)
+    max_sample_rate: float = Field(100e6, gt=0, le=100e6)
+    settle_cycles: float = Field(20.0, ge=0, description="Wait this many cycles after changing frequency")
+    level_tolerance: float = Field(
+        0.15, gt=0, lt=1, description="Re-level W1 if VIN's amplitude is off by more than this fraction"
+    )
+    buffer_headroom: float = Field(2.0, ge=0)
+    timeout: float = Field(10.0, gt=0)
+
+    @model_validator(mode="after")
+    def _check(self) -> PsrrConfig:
+        if self.f_stop <= self.f_start:
+            raise ValueError("psrr.f_stop must be above f_start")
+        if self.vin - self.amplitude <= 0:
+            raise ValueError("psrr.vin - amplitude must stay above 0 V")
+        if self.vin + self.amplitude > AD2_WAVEGEN_MAX_V:
+            raise ValueError(f"psrr.vin + amplitude exceeds the AD2 wavegen limit ({AD2_WAVEGEN_MAX_V} V)")
+        if self.psu_voltage < self.vin + self.amplitude + self.buffer_headroom:
+            raise ValueError(
+                f"psrr.psu_voltage ({self.psu_voltage} V) must be at least vin + amplitude + "
+                f"buffer_headroom ({self.vin + self.amplitude + self.buffer_headroom} V)"
+            )
+        return self
+
+    def frequencies(self) -> list[float]:
+        import math
+
+        decades = math.log10(self.f_stop / self.f_start)
+        n = max(2, round(decades * self.points_per_decade) + 1)
+        out = []
+        for k in range(n):
+            f = self.f_start * 10 ** (decades * k / (n - 1))
+            out.append(float(f"{f:.3g}"))
+        return out
+
+
 class LineTranConfig(TransientCaptureConfig):
     psu_voltage: float = Field(gt=0, description="PSU voltage on VS_BUFF (buffer supply) (V)")
     vin_low: float = Field(ge=0, description="W1 low level -> VIN through the BUF634 (V)")
@@ -428,6 +526,8 @@ class BenchConfig(_Model):
     enable: EnableConfig = EnableConfig()
     en_sine: EnSineConfig | None = None
     startup: StartupConfig | None = None
+    iq: IqConfig | None = None
+    psrr: PsrrConfig | None = None
 
     @model_validator(mode="after")
     def _cross_checks(self) -> BenchConfig:
@@ -473,7 +573,8 @@ class BenchConfig(_Model):
                 raise ValueError("load_tran.code_low must be below code_high")
         en_pins = {self.enable.dio_pin} | ({self.enable.dio_pin_n} - {None})
         clash = en_pins & set(self.loadbank.dio_pins)
-        if (self.en_sine or self.startup) and clash:
+        iq_enable = self.iq is not None and "disabled" in self.iq.states
+        if (self.en_sine or self.startup or iq_enable) and clash:
             raise ValueError(
                 f"enable DIO pins {sorted(clash)} are also load bank pins {self.loadbank.dio_pins}"
             )
@@ -487,6 +588,18 @@ class BenchConfig(_Model):
         if self.startup:
             vin_ok("startup.vin", self.startup.vin)
             code_ok("startup.load_code", self.startup.load_code)
+        if self.iq:
+            vin_ok("iq sweep", self.iq.vin_stop)
+            code_ok("iq.check_code", self.iq.check_code)
+        if self.psrr:
+            ps = self.psrr
+            if ps.psu_voltage > self.psu.v_max:
+                raise ValueError(f"psrr.psu_voltage exceeds psu.v_max ({self.psu.v_max} V)")
+            if ps.vin + ps.amplitude > self.dut.vin_max:
+                raise ValueError(
+                    f"psrr.vin + amplitude ({ps.vin + ps.amplitude} V) exceeds dut.vin_max ({self.dut.vin_max} V)"
+                )
+            code_ok("psrr.load_code", ps.load_code)
         if self.line_tran:
             lt = self.line_tran
             # Here the PSU feeds the buffer rail; VIN comes from the wavegen through the buffer.

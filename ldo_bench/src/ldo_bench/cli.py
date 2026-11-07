@@ -481,6 +481,114 @@ def enable_startup(
     _saved(path, res=res)
 
 
+@app.command("iq")
+def iq(
+    config: ConfigOpt,
+    method: Annotated[
+        str | None,
+        typer.Option(help="shunt (DMM volts across R13) or series (DMM amps in place of a J1 jumper)"),
+    ] = None,
+    rail: Annotated[
+        str | None, typer.Option(help="series: total, bgr, vdd, en or ota (the J1 rail the DMM replaces)")
+    ] = None,
+    vin: Annotated[float | None, typer.Option(help="One VIN point instead of the sweep (V)")] = None,
+    states: Annotated[
+        str | None, typer.Option(help="Comma list: enabled, disabled (e.g. 'enabled' on its own)")
+    ] = None,
+    out: OutOpt = Path("results"),
+    sim: SimOpt = False,
+    save_sim: SaveSimOpt = False,
+    psu: PsuOpt = None,
+    ad_serial: AdOpt = None,
+    yes: YesOpt = False,
+    verbose: VerboseOpt = False,
+) -> None:
+    """Quiescent (enabled) and shutdown (disabled) current vs VIN, no load, measured by the DMM."""
+    from ldo_bench.procedures import iq as proc
+
+    _logging(verbose)
+    cfg = _load(config)
+    sec = _section(cfg, "iq")
+    update: dict = {}
+    if method is not None:
+        update["method"] = method
+        if method == "shunt" and rail is None:
+            update["rail"] = "total"
+    if rail is not None:
+        update["rail"] = rail
+    if vin is not None:
+        update |= {"vin_start": vin, "vin_stop": vin}
+    if states is not None:
+        update["states"] = [s.strip() for s in states.split(",") if s.strip()]
+    if update:
+        try:
+            sec = type(sec).model_validate(sec.model_dump() | update)
+        except ValidationError as e:
+            typer.secho(f"Invalid option:\n{e}", fg="red", err=True)
+            raise typer.Exit(2) from e
+        cfg = _load_with(cfg, iq=sec)
+        sec = cfg.iq
+    with _bench(cfg, sim, psu, ad_serial, yes) as bench:
+        res = proc.run(bench, sec)
+        path = _save(bench, cfg, config, out, proc, res, save_sim)
+    _echo_report(bench, res)
+    _saved(path, res=res)
+
+
+@app.command("psrr")
+def psrr(
+    config: ConfigOpt,
+    fstart: Annotated[float | None, typer.Option("--fstart", help="First frequency (Hz)")] = None,
+    fstop: Annotated[float | None, typer.Option("--fstop", help="Last frequency (Hz)")] = None,
+    ppd: Annotated[int | None, typer.Option("--ppd", help="Points per decade")] = None,
+    amp_mv: Annotated[float | None, typer.Option("--amp-mv", help="Sine amplitude on VIN (mV peak)")] = None,
+    vin: Annotated[float | None, typer.Option(help="DC level on VIN (V)")] = None,
+    load: Annotated[str | None, typer.Option(help="Load as a code or current, e.g. 4 or 19mA")] = None,
+    averages: Annotated[int | None, typer.Option("--avg", help="Captures per frequency")] = None,
+    out: OutOpt = Path("results"),
+    sim: SimOpt = False,
+    save_sim: SaveSimOpt = False,
+    psu: PsuOpt = None,
+    ad_serial: AdOpt = None,
+    yes: YesOpt = False,
+    verbose: VerboseOpt = False,
+) -> None:
+    """PSRR vs frequency: a sine on VIN through the BUF634, its size on VIN and VOUT (AD2 sine fit)."""
+    from ldo_bench.loadbank import LoadBank, parse_load
+    from ldo_bench.procedures import psrr as proc
+
+    _logging(verbose)
+    cfg = _load(config)
+    sec = _section(cfg, "psrr")
+    update: dict = {}
+    for key, val in (("f_start", fstart), ("f_stop", fstop), ("points_per_decade", ppd), ("vin", vin)):
+        if val is not None:
+            update[key] = val
+    if amp_mv is not None:
+        update["amplitude"] = amp_mv * 1e-3
+    if averages is not None:
+        update["averages"] = averages
+    if load is not None:
+        try:
+            update["load_code"] = parse_load(load, LoadBank(cfg.loadbank, None), cfg.dut.vout_nominal)
+        except ValueError as e:
+            typer.secho(str(e), fg="red", err=True)
+            raise typer.Exit(2) from e
+    if update:
+        try:
+            sec = type(sec).model_validate(sec.model_dump() | update)
+        except ValidationError as e:
+            typer.secho(f"Invalid option:\n{e}", fg="red", err=True)
+            raise typer.Exit(2) from e
+        cfg = _load_with(cfg, psrr=sec)
+        sec = cfg.psrr
+    with _bench(cfg, sim, psu, ad_serial, yes, use_dmm=False) as bench:
+        res = proc.run(bench, sec)
+        path = _save(bench, cfg, config, out, proc, res, save_sim)
+    _echo_report(bench, res)
+    _saved(path, res=res)
+
+
 @app.command("loadbank-check")
 def loadbank_check(
     config: ConfigOpt,

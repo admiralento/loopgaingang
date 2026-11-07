@@ -103,3 +103,13 @@ n_samples = 8192
 pre_trigger = 0.2
 averages = 16
 edges = ["rising", "falling"]
+
+[psrr]                       # sine on VIN through the buffer (line-tran path, PSU on VDD_BUF)
+psu_voltage = 5.0            # on VDD_BUF (not VIN!)
+vin = 2.0
+amplitude = 0.1              # V peak
+f_start = 100
+f_stop = 1e6
+points_per_decade = 3
+load_code = 8
+averages = 4

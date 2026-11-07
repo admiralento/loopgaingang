@@ -24,10 +24,10 @@ def runs(test_dir: Path) -> list[Path]:
 
 
 @pytest.mark.parametrize(
-    "cmd", ["load-reg", "line-reg", "load-tran", "line-tran", "psu-check", "loadbank-check"]
+    "cmd", ["load-reg", "line-reg", "load-tran", "line-tran", "psu-check", "loadbank-check", "iq", "psrr"]
 )
 def test_sim_saves_nothing_by_default(cmd, tmp_path):
-    cfg = "jafwak.toml" if cmd == "line-tran" else "demo_board.toml"
+    cfg = "jafwak.toml" if cmd in ("line-tran", "iq") else "demo_board.toml"
     r = runner.invoke(app, [cmd, "-c", str(CONFIGS / cfg), "--sim", "-o", str(tmp_path)])
     assert r.exit_code == 0, r.output
     assert "SIMULATED" in r.output and "nothing saved" in r.output

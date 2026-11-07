@@ -129,3 +129,27 @@ sense_ohm = 0.1
 settle_fraction = 0.02
 # vref_nominal = 1.2         # set to check the BGR output level
 
+
+[iq]                         # quiescent / shutdown current vs VIN, no load, from the DMM
+method = "shunt"             # "shunt": DMM DCV across R13 (J13.1-J13.2), total input current, ~1 uA counts
+                             # "series": DMM DCI in place of a J1 jumper (rail below), 10 nA counts
+rail = "total"               # series only: "total" (PSU -> DMM -> VIN_DC), "bgr" 1-3, "vdd" 5-7, "en" 9-11, "ota" 13-15
+sense_ohm = 0.1              # R13
+vin_start = 1.4
+vin_stop = 1.9               # = dut.vin_max
+vin_step = 0.1
+states = ["enabled", "disabled"]   # disabled: through the [enable] path
+readings = 5                 # DMM readings per point (10 NPLC: ~1 s)
+settle_time = 0.5
+check_code = 1               # shunt: switch in 4.8 mA once to prove the DMM sees R13's current (0 = skip)
+
+[psrr]                       # sine on VIN through the BUF634 (line-tran path: JP4 to the buffer, PSU on VS_BUFF)
+psu_voltage = 4.0            # on VS_BUFF (not VIN!)
+vin = 1.8                    # DC level; peak = vin + amplitude must stay <= dut.vin_max
+amplitude = 0.05             # V peak (100 mV p-p)
+f_start = 100
+f_stop = 1e6
+points_per_decade = 3
+load_code = 4                # 19.2 mA
+averages = 4                 # captures per frequency, averaged coherently
+cycles = 20                  # min sine cycles per capture (8192 samples, up to 100 MS/s)

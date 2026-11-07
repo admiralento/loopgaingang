@@ -20,6 +20,8 @@ import numpy as np
 
 from ldo_bench.instruments.base import Capture, ChannelSetup, DcReading, Edge, InstrumentError
 
+RAIL_SHARE = {"total": 1.0, "bgr": 0.15, "vdd": 0.30, "en": 0.10, "ota": 0.45}
+
 
 @dataclass
 class LdoModel:
@@ -69,6 +71,17 @@ class LdoModel:
     sense_ohm: float = 0.1  # R13 / R1
     ch1_probe: str = "vout"  # what the VOUT channel is on: "vout" or "en_out"
     awg_sine: dict[int, tuple[float, float, float]] = field(default_factory=dict)  # ch -> (f, low, high)
+    # quiescent / shutdown current and the DMM measuring it
+    iq_off: float = 0.3e-6  # A, shutdown current (below the shunt method's floor, like the real board)
+    iq_vin_slope: float = 0.05  # fractional change in Iq per volt of VIN
+    dmm_rail: str = "total"  # iq series method: which rail the DMM is in
+    dmm_offset_v: float = 2e-6  # V, thermal EMF / offset on the 100 mV range (the iq zero removes it)
+    dmm_noise_v: float = 0.15e-6
+    dmm_noise_a: float = 5e-9
+    # PSRR: VOUT/VIN = h_dc (1 + j f/fz) / (1 + j f/fp)
+    psrr_h_dc: float = 1e-3  # -60 dB at low frequency
+    psrr_fz: float = 5e3
+    psrr_fp: float = 2e6
 
     def __post_init__(self) -> None:
         self.rng = np.random.default_rng(self.seed)
@@ -81,11 +94,37 @@ class LdoModel:
     @property
     def vin(self) -> float:
         if self.psu_to == "rail":  # VIN = buffer output: W1 + offset, only while the rail is powered
-            if not (self.psu_on and self.awg_v):
+            src = self.awg_level()
+            if not self.psu_on or src is None:
                 return 0.0
-            out = next(iter(self.awg_v.values())) + self.buffer_offset
+            out = src + self.buffer_offset
             return max(0.0, min(out, self.psu_v - self.buffer_dropout))
         return self.psu_v if self.psu_on else 0.0
+
+    def awg_level(self) -> float | None:
+        """DC level the wavegen puts on the buffer input (a sine's mid-level), None if it's off."""
+        if self.awg_v:
+            return next(iter(self.awg_v.values()))
+        if self.awg_sine:
+            _, lo, hi = next(iter(self.awg_sine.values()))
+            return (lo + hi) / 2
+        return None
+
+    def supply_current(self, rail: str = "total") -> float:
+        """Current drawn from VIN (rail 'total') or by one J1 rail; the load flows through VDD."""
+        vin = self.vin
+        if vin <= 0:
+            return 0.0
+        q = (self.iq_on if self.enabled else self.iq_off) * (1 + self.iq_vin_slope * (vin - 1.8))
+        i = q * RAIL_SHARE[rail]
+        if rail in ("total", "vdd"):
+            i += self.load_current()
+        return i
+
+    def psrr_h(self, f: float) -> complex:
+        if not self.enabled or self.vin <= 0:
+            return 0j
+        return self.psrr_h_dc * (1 + 1j * f / self.psrr_fz) / (1 + 1j * f / self.psrr_fp)
 
     def conductance(self) -> float:
         return sum(
@@ -249,6 +288,8 @@ class SimAnalogDiscovery:
         dio_trigger: tuple[int, Edge] | None = None,
     ) -> Capture:
         m = self.m
+        if m.awg_sine and m.psu_to == "rail":
+            return self._psrr_capture(sample_rate, n_samples, stimulus)
         if m.awg_sine:
             return self._sine_capture(sample_rate, n_samples, trigger_level, edge, pre_trigger, stimulus)
         if dio_trigger is not None:
@@ -323,6 +364,22 @@ class SimAnalogDiscovery:
         en_out = out if m.ch1_probe == "en_out" else np.full(n, m.vout_dc()) + m.noise(n)
         return self._put(en_out, ain + m.noise(n) * 0.25, rate, i0, True)
 
+    def _psrr_capture(self, rate, n, stimulus) -> Capture:
+        """W1 sine through the buffer onto VIN; VOUT carries it attenuated by the PSRR (free-running)."""
+        m = self.m
+        stimulus()
+        f, lo, hi = next(iter(m.awg_sine.values()))
+        t = np.arange(n) / rate
+        ph = float(m.rng.uniform(0, 2 * math.pi))
+        vin_dc = m.vin
+        amp = (hi - lo) / 2 if vin_dc > 0 else 0.0
+        vin = vin_dc + amp * np.sin(2 * math.pi * f * t + ph)
+        if vin_dc > 0:
+            vin = np.minimum(vin, m.psu_v - m.buffer_dropout)
+        h = m.psrr_h(f)
+        vout = m.vout_dc(vin_dc) + abs(h) * amp * np.sin(2 * math.pi * f * t + ph + np.angle(h))
+        return self._put(vout + m.noise(n), vin + m.noise(n), rate, 0, False)
+
     def _dio_capture(self, rate, n, dio_trigger, pre, stimulus, force) -> Capture:
         """Enable / disable edge from the AD2's own DIO: VOUT and whatever the ref channel is on."""
         m = self.m
@@ -386,12 +443,28 @@ class SimDmm:
     def __init__(self, model: LdoModel) -> None:
         self.m = model
         self.idn = "SIM,34401A,0,sim"
+        self.mode = "dcv"
 
     def configure_dcv(self, *, range: float | None, nplc: float) -> None:
-        pass
+        self.mode = "dcv"
+
+    def configure_dci(self, *, range: float | None, nplc: float) -> None:
+        self.mode = "dci"
+
+    def read(self) -> float:
+        m = self.m
+        if self.mode == "dci":  # only reads a current if it is in series with something
+            i = m.supply_current(m.dmm_rail) if m.dmm_probe == "series" else 0.0
+            return i + float(m.rng.normal(0.0, m.dmm_noise_a))
+        return self.read_dcv()
 
     def read_dcv(self) -> float:
         m = self.m
+        if m.dmm_probe == "open":  # leads not on anything
+            return float(m.rng.normal(0.0, m.dmm_noise_v))
+        if m.dmm_probe == "shunt":  # across R13
+            v = m.sense_ohm * m.supply_current() + m.dmm_offset_v
+            return v + float(m.rng.normal(0.0, m.dmm_noise_v))
         v = m.psu_actual() if m.dmm_probe == "psu" else m.vout_dc()
         return v + float(m.rng.normal(0.0, 20e-6))
 

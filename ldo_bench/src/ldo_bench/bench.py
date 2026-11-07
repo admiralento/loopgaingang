@@ -102,7 +102,8 @@ class Bench:
         title: str,
         lines: list[str],
         ref_probe: RefProbe,
-        dmm_probe: Literal["vout", "psu"] = "vout",
+        dmm_probe: Literal["vout", "psu", "shunt", "series"] = "vout",
+        dmm_rail: str = "total",
         bank_on_psu: bool = False,
         psu_to: Literal["vin", "rail"] = "vin",
         ch1_probe: Literal["vout", "en_out"] = "vout",
@@ -115,6 +116,7 @@ class Bench:
         if self.sim_model is not None:
             self.sim_model.ref_probe = ref_probe
             self.sim_model.dmm_probe = dmm_probe
+            self.sim_model.dmm_rail = dmm_rail
             self.sim_model.bank_on_psu = bank_on_psu
             self.sim_model.psu_to = psu_to
             self.sim_model.ch1_probe = ch1_probe
@@ -171,6 +173,17 @@ class Bench:
         if not 0 <= volts <= limit:
             raise InstrumentError(f"refusing to drive VIN to {volts} V from the wavegen (limit {limit} V)")
         self.awg.set_dc(self.cfg.ad2.wavegen_channel, volts)
+        self._awg_on = True
+
+    def vin_sine_from_wavegen(self, *, dc: float, amplitude: float, frequency: float) -> None:
+        """Wavegen sine (dc +/- amplitude) onto VIN through the BUF634 (PSRR). Its peak obeys dut.vin_max."""
+        limit = min(self.cfg.dut.vin_max, AD2_WAVEGEN_MAX_V)
+        lo, hi = dc - amplitude, dc + amplitude
+        if amplitude <= 0 or lo < 0 or hi > limit + 1e-9:
+            raise InstrumentError(
+                f"refusing to drive VIN with a {lo:.3f}..{hi:.3f} V sine from the wavegen (limit 0..{limit} V)"
+            )
+        self.awg.set_sine(self.cfg.ad2.wavegen_channel, frequency=frequency, low=lo, high=hi)
         self._awg_on = True
 
     def enable_logic(self, on: bool) -> None:

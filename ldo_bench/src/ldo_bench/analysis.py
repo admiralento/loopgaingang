@@ -430,3 +430,37 @@ def step_metrics(t, x, settle_fraction: float = 0.02) -> StepMetrics:
         overshoot=float(max(0.0, norm.max() - 1)),
         peak=peak,
     )
+
+
+@dataclass(frozen=True)
+class SineFit:
+    phasor: complex  # x ~ dc + Re(phasor * exp(j 2 pi f t)) + drift * t
+    dc: float
+    resid_rms: float  # what the sine doesn't explain: noise, harmonics, other tones
+    n: int
+
+    @property
+    def amplitude(self) -> float:
+        return abs(self.phasor)
+
+    @property
+    def amplitude_noise(self) -> float:
+        """1-sigma uncertainty of each quadrature of the phasor (white noise, least squares)."""
+        return self.resid_rms * float(np.sqrt(2.0 / self.n)) if self.n else float("nan")
+
+
+def sine_fit(x, sample_rate: float, frequency: float) -> SineFit:
+    """Least-squares fit of a sine at a known frequency, plus offset and a linear drift (lock-in).
+
+    The fit window doesn't need a whole number of cycles. Time is centred on the capture, so two
+    channels from the same capture share a phase reference and their phasor ratio is the transfer.
+    """
+    x = np.asarray(x, float)
+    n = len(x)
+    t = (np.arange(n) - (n - 1) / 2) / sample_rate
+    w = 2 * np.pi * frequency * t
+    a = np.column_stack([np.cos(w), np.sin(w), np.ones(n), t])
+    coef, *_ = np.linalg.lstsq(a, x, rcond=None)
+    resid = x - a @ coef
+    dof = max(1, n - 4)
+    return SineFit(complex(coef[0], -coef[1]), float(coef[2]), float(np.sqrt(np.sum(resid**2) / dof)), n)
