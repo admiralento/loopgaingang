@@ -95,8 +95,10 @@ Command-line options go through the same checks.
 
 - **Voltage limits:** the PSU and W1 can only reach the DUT through methods that enforce `dut.vin_max` and `psu.v_max`. The load bank refuses any code over `dut.i_max`.
 - **Supply setup:** the current limit and OVP are set before the supply output turns on, and voltage changes are ramped.
-- **Buffer interlock:** line-tran and psrr power the BUF634 rail above the LDO's VIN limit. Before doing that, they check at 1 V that the supply really is on the rail and not on VIN.
-- **psrr peak:** psrr stops if the measured VIN peak goes over `dut.vin_max`.
+- **Buffer interlock:** line-tran and psrr power the BUF634 rail above the LDO's VIN limit. Before doing that, they check at 1 V that the supply isn't on VIN, then, with the rail at `dut.vin_max`, that VIN follows W1 (which also proves the VIN probe is on VIN).
+- **VIN margin:** with VIN driven through the buffer, every limit check keeps the AD2's measurement error (about 20 mV at 1.9 V, an unverified datasheet figure) below `dut.vin_max`.
+- **OVP:** if the supply rejects the OVP setting, the run stops.
+- **psrr peak:** psrr stops if the measured VIN peak goes over that margin.
 - **Shutdown:** however a run ends (finished, error, Ctrl-C), everything is switched off in order: wavegen, AD2 V+, load bank, DIO, supply.
 
 ## Results: real data only

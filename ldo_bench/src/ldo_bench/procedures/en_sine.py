@@ -169,7 +169,7 @@ def run(bench: Bench, es: EnSineConfig) -> EnSineResult:
     # 5 V range (+/-2.5 V) on both: covers the 0-EN_VDD sine and EN_OUT at the best resolution
     setups = {a.vout_channel: ChannelSetup(5.0, 0.0), a.ref_channel: ChannelSetup(5.0, 0.0)}
     bench.vin_from_psu(es.vin)
-    bench.awg.set_sine(es.wavegen_channel, frequency=es.frequency, low=lo, high=hi)
+    bench.en_ain_sine(es.wavegen_channel, frequency=es.frequency, low=lo, high=hi)
     bench.sleep(0.05)  # let the wavegen output start
     rate = es.n_samples / (es.cycles / es.frequency)  # n_samples spread over `cycles` periods
     level = (lo + hi) / 2  # trigger at the sine's midpoint (V)
@@ -197,7 +197,7 @@ def run(bench: Bench, es: EnSineConfig) -> EnSineResult:
             )
             caps.append(bench.scope.capture(**kw, force=True))
             break
-    bench.awg.off(es.wavegen_channel)
+    bench.wavegen_off(es.wavegen_channel)
 
     results = []
     for cap in caps:

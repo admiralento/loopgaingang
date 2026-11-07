@@ -18,7 +18,7 @@ Before creating or moving files, adding a dependency, or changing the build, rea
 
 - **Live runs only when asked.** Any `ldo-bench` command without `--sim` drives real instruments (only `discover` and `check-config` don't). Run one only when I've asked for that specific run. Say first which board, which voltages, and the wiring it expects.
 - **Never weaken a safety limit** without my approval: `dut.vin_max`, `dut.i_max`, `psu.v_max`, `psu.ovp`, `psu.current_limit`, or any cross-check in `config.py`.
-- **Voltages reach the DUT only through the Bench methods** (`vin_from_psu`, `buffer_rail`, `vin_from_wavegen`, `vin_sine_from_wavegen`, `loadbank.set`). Every hardware script ends in the Bench shutdown, including on error and Ctrl-C. A script that holds a state (for probing) has a hard timeout.
+- **Voltages reach the DUT only through the Bench methods** (`vin_from_psu`, `buffer_rail`, `vin_from_wavegen`, `vin_sine_from_wavegen`, `en_ain_sine`, `enable_logic`, `set_enable`, `loadbank.set`). Every hardware script ends in the Bench shutdown, including on error and Ctrl-C. A script that holds a state (for probing) has a hard timeout.
 - **Real data only.** No fallback values, assumed readings, or "fixed up" data. A setup problem is recorded as an issue (an `_INVALID` run, exit code 3), never hidden or worked around. Readings below an instrument's resolution are reported as bounds.
 - **Results.** Never delete or overwrite anything in `results/` without asking. Simulated runs save nothing unless I ask for `--save-sim`.
 - **After a bench session,** update `ldo_bench/docs/bench-log.md` (what ran, what was measured, what went wrong) and the status table in `ldo_bench/README.md`.

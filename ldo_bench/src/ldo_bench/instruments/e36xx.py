@@ -108,9 +108,12 @@ class AgilentE36xx:
             self.t.write("VOLT:PROT:STAT ON")
             errs = self._errors()
             if errs:
-                # Software limits (dut.vin_max / psu.v_max) still apply, but say so loudly.
-                log.warning(
-                    "%s did not accept OVP settings (%s); relying on software limits", self.model, errs
+                # Hardware OVP is one of the safety limits: never run without it unless the config
+                # says so (psu.ovp = None).
+                raise InstrumentError(
+                    f"{self.model} did not accept the OVP setting {ovp:.3f} V ({'; '.join(errs)}). "
+                    "Stopping: set psu.ovp to a level the supply accepts, or remove psu.ovp from the "
+                    "config to run on the software limits alone"
                 )
         log.info(
             "PSU %s OUT%d set up: I limit %.3f A, OVP %s, range %s",

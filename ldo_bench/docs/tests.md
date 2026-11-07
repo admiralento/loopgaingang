@@ -191,9 +191,12 @@ Powers VIN up (default `load_reg.vin`), then reads VOUT, VIN and the supply's V 
   - Scope 2+ -> VIN at the LDO input (trigger + VIN level), 2- -> GND
   - DIO [0, 1, 2, 3, 4] -> load bank bits B0..B4, AD2 GND -> board GND
 - **Does:**
-  1. **Interlock:** powers the rail at only 1.0 V with W1 off, and checks that VIN stays low. If VIN follows the supply, the leads are on VIN, and the test stops before raising the rail above `dut.vin_max`.
-  2. **Calibration:** raises the rail to `psu_voltage` and calibrates out the buffer's offset from VIN measured at the board. The steps land on `vin_low` / `vin_high` within 5 mV. The W1 correction is capped at 250 mV and never goes above `vin_max`.
-  3. **Steps:** steps W1 between the two levels, triggering on VIN itself.
+  1. **Interlock, stage 1:** powers the rail at only 1.0 V with W1 off, and checks that VIN stays low. If VIN follows the supply, the leads are on VIN: stop.
+  2. **Interlock, stage 2:** stage 1 can't tell a correct bench from a VIN probe that's off VIN (both read ~0 V). So the rail goes to `dut.vin_max` (safe even if the supply were on VIN) and W1 steps between the two `proof_levels` (0.1 and 0.3 V). VIN must follow W1. If it doesn't (supply on VIN, probe off, buffer not driving), the test stops before the rail goes above `dut.vin_max`.
+     - **Not yet tried on hardware:** the BUF634 must be able to drive the proof levels with its rail at 1.9 V. If the first real run stops here with the wiring right, change `proof_levels`.
+  3. **Calibration:** raises the rail to `psu_voltage` and calibrates out the buffer's offset from VIN measured at the board (on the AD2's 5 V range). The steps land on `vin_low` / `vin_high` within 5 mV. The W1 correction is capped at 250 mV.
+     - **Hard stop:** any VIN reading above `dut.vin_max` less the AD2's error margin (about 20 mV at 1.9 V).
+  4. **Steps:** steps W1 between the two levels, triggering on VIN itself.
 - **Computes:** everything from the transient analysis, plus the peak VOUT deviation per volt of VIN step (mV/V).
 - **Setup check:** a buffer that can't reach a level (headroom, JP4, W1 wiring).
 - **Options:**
@@ -210,8 +213,8 @@ Powers VIN up (default `load_reg.vin`), then reads VOUT, VIN and the supply's V 
   - Scope 2+ -> VIN at the LDO input pins, 2- -> GND
   - DIO [0, 1, 2, 3, 4] -> load bank bits B0..B4, AD2 GND -> board GND
 - **Does:**
-  1. **Setup:** the same interlock and DC calibration as line-tran, at `vin`.
-  2. **Sine:** at each frequency (`f_start` to `f_stop`, `points_per_decade`), W1 plays `vin ± amplitude`. The peak must be within `dut.vin_max`: the bench refuses a higher setting, and the run stops if the *measured* peak goes over.
+  1. **Setup:** the same two-stage interlock and DC calibration as line-tran, at `vin`.
+  2. **Sine:** at each frequency (`f_start` to `f_stop`, `points_per_decade`), W1 plays `vin ± amplitude`. The peak must be within `dut.vin_max` less the AD2's error margin: the config refuses a higher setting, the amplitude is capped from the *measured* DC level, and the run stops if the measured peak goes over.
   3. **Measurement:** several free-running AD2 captures of VIN and VOUT. Each is sampled at the rate that fits at least `cycles` periods into 8192 samples, up to 100 MS/s.
 - **Analysis:**
   - **Sine fit:** a least-squares fit at the injected frequency on each channel (a lock-in). VOUT/VIN is averaged coherently over the captures, which keeps the phase and averages noise down.
@@ -241,7 +244,7 @@ Powers VIN up (default `load_reg.vin`), then reads VOUT, VIN and the supply's V 
   - AD2 W1 -> EN_FG SMA (J2); J6 5-6: EN_FG -> EN_AIN
   - Scope 2+ -> TP6 (EN_AIN) (trigger), Scope 1+ -> J8.2 (EN_OUT); both - -> GND
   - AD2 GND -> board GND
-- **Does:** a slow sine (0 V to EN_VDD, 1 kHz) into EN_AIN sweeps the input through both thresholds every cycle. The capture is repeated `captures` times to get the spread.
+- **Does:** a slow sine (0 V to EN_VDD, 1 kHz; the bench refuses a top above `dut.vin_max`) into EN_AIN sweeps the input through both thresholds every cycle. The capture is repeated `captures` times to get the spread.
 - **Computes:**
   - **Thresholds:** the input voltage at each output crossing gives VT+ and VT-, and their difference is the hysteresis.
   - **Output levels and edges:** VOH / VOL, 10–90 % edge times (limited by the sample interval) and duty cycle.

@@ -71,7 +71,7 @@ CLI options never bypass this: `cli._load_with()` rebuilds the config with the c
 
 ## The Bench (`bench.py`)
 
-Procedures don't program a voltage onto the DUT directly. They call Bench methods that enforce the limits. The one exception today is `enable-sine`, which sets its W1 sine with `bench.awg.set_sine`; its peak is limited by the config check instead (`en_sine.high` ≤ `dut.vin_max`).
+Procedures never program a voltage onto the DUT directly. They call Bench methods that enforce the limits:
 
 | Method | Drives | Limit |
 |---|---|---|
@@ -80,10 +80,13 @@ Procedures don't program a voltage onto the DUT directly. They call Bench method
 | `psu_output(v)` | PSU with only a meter on it (psu-check) | `psu.v_max` |
 | `vin_from_wavegen(v)` | W1 DC → buffer → VIN | `min(dut.vin_max, 5 V)` |
 | `vin_sine_from_wavegen(dc, amplitude, f)` | W1 sine → buffer → VIN | peak within `min(dut.vin_max, 5 V)` |
+| `en_ain_sine(ch, f, low, high)` | W1 sine → EN_AIN (enable-sine) | −0.3 V to `min(dut.vin_max, 5 V)` |
+| `enable_logic(on)`, `set_enable(on)` | AD2 V+ → V_33, DIO → EN_CTRL_33 | fixed by `[enable]` |
 | `loadbank.set(code)` | AD2 DIO → load bank | `dut.i_max` |
 
 Other things the Bench does:
-- **Supply setup:** the PSU current limit and OVP are set before the output is first turned on, and voltage changes are ramped in `psu.ramp_step` steps.
+- **Supply setup:** the PSU current limit and OVP are set before the output is first turned on, and voltage changes are ramped in `psu.ramp_step` steps. If the supply rejects the OVP setting, the run stops; only `psu.ovp` left out of the config runs without hardware OVP.
+- **VIN through the buffer** (line-tran, psrr): VIN is read on the AD2's fine 5 V range whenever `dut.vin_max` fits on it, and every limit check keeps a margin for the AD2's error below `dut.vin_max` (`ad2.vin_offset_error` + `ad2.vin_gain_error` × V: about 20 mV at 1.9 V; these figures are from memory of the AD2 datasheet and still need checking). The interlock is in two stages; see [tests.md](tests.md#line-tran-line-transient).
 - **Wiring prompt:** `confirm_wiring()` prints the wiring a test needs and waits for a yes (`--yes` skips it). Its keyword arguments (`ref_probe`, `dmm_probe`, `psu_to`, ...) don't affect real hardware: they tell the simulator how the bench is wired.
 - **Shutdown:** leaving the `with` block for any reason (end of test, exception, Ctrl-C) runs `shutdown()`. It turns off, in order: wavegen, AD2 V+, load bank, DIO, PSU output (then the setpoint goes to 0 V), and closes every instrument. Each step runs even if an earlier one fails.
 - **Measurements:** `measure_dc()` averages both AD2 channels, `measure_point()` takes VOUT from the DMM when there is one, and `vout_issue()` is the standard "is VOUT where it should be?" check.

@@ -77,14 +77,6 @@ def test_scpi_error_raises():
         p.setup(current_limit=99, ovp=None, voltage_range=None)
 
 
-def test_ovp_rejection_is_only_a_warning(caplog):
-    t = FakeTransport()
-    p = AgilentE36xx(t)
-    t.errors = ['+0,"No error"', '-113,"Undefined header"']  # CURR ok, OVP rejected
-    p.setup(current_limit=0.3, ovp=6.0, voltage_range=None)
-    assert "software limits" in caplog.text
-
-
 def test_parse_prologix():
     assert parse_prologix("prologix:COM5:5") == ("COM5", 5)
     assert parse_prologix("prologix:/dev/tty.usbserial-A1:12") == ("/dev/tty.usbserial-A1", 12)

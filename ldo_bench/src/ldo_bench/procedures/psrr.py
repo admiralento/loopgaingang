@@ -23,7 +23,7 @@ run() steps:
    measure. If VIN's amplitude is off by more than level_tolerance (buffer / board roll-off at
    high frequency), W1's amplitude is scaled to compensate (at most 2 x the target, never past
    the wavegen / vin_max limit) and the point is measured again. After every measurement the
-   measured VIN peak is checked against dut.vin_max + PEAK_MARGIN (hard stop).
+   measured VIN peak is checked against dut.vin_max less the AD2's error margin (hard stop).
 4. W1 off, load bank off.
 
 Validity check per point: VIN must carry at least MIN_INJECTION of the target amplitude,
@@ -46,14 +46,13 @@ from ldo_bench.analysis import sine_fit
 from ldo_bench.bench import Bench
 from ldo_bench.config import AD2_WAVEGEN_MAX_V, PsrrConfig
 from ldo_bench.instruments.base import ChannelSetup, InstrumentError
-from ldo_bench.procedures.line_tran import _calibrate, _interlock
+from ldo_bench.procedures.line_tran import _calibrate, _interlock, _vin_limit
 
 log = logging.getLogger(__name__)
 
 NAME = "psrr"
 FLOOR_SIGMA = 3.0  # a VOUT phasor smaller than this many noise sigmas counts as "not measured"
 MIN_INJECTION = 0.3  # VIN amplitude below this fraction of the target: the sine isn't reaching VIN
-PEAK_MARGIN = 0.01  # V over dut.vin_max that stops the run
 SUMMARY_FREQS = (100.0, 1e3, 10e3, 100e3, 1e6)  # Hz, reported in summary.json when measured nearby
 
 
@@ -304,15 +303,17 @@ def wiring(bench: Bench, ps: PsrrConfig) -> list[str]:
 
 
 def _check_peak(bench: Bench, tone: Tone, f: float) -> None:
-    """Hard stop: W1 off and InstrumentError if the measured VIN peak (DC + amplitude) is over
-    dut.vin_max + PEAK_MARGIN. Backs up the setpoint check in bench.vin_sine_from_wavegen, which
-    can't see the buffer's offset or gain.
+    """Hard stop: W1 off and InstrumentError if the measured VIN peak (DC + amplitude) is above
+    dut.vin_max less the AD2's error margin (ad2.vin_margin), i.e. if the true peak could be over
+    the limit. Backs up the setpoint check in bench.vin_sine_from_wavegen, which can't see the
+    buffer's offset or gain.
     """
     peak = tone.vin_dc + abs(tone.vin)
-    if peak > bench.cfg.dut.vin_max + PEAK_MARGIN:
+    if peak > _vin_limit(bench):
         bench.wavegen_off()
         raise InstrumentError(
-            f"at {f:g} Hz VIN peaks at {peak:.3f} V, above dut.vin_max ({bench.cfg.dut.vin_max} V): stopped"
+            f"at {f:g} Hz VIN peaks at {peak:.3f} V, above dut.vin_max ({bench.cfg.dut.vin_max} V) "
+            "less the AD2's error margin: stopped"
         )
 
 
@@ -326,7 +327,7 @@ def run(bench: Bench, ps: PsrrConfig, meter: PsrrMeter | None = None) -> PsrrRes
     a = cfg.ad2
     bench.confirm_wiring("PSRR", wiring(bench, ps), ref_probe=("vin", 0), psu_to="rail")
     bench.loadbank.set(ps.load_code)
-    _interlock(bench, ps.psu_voltage)
+    _interlock(bench, ps.psu_voltage, ps.proof_levels)
     bench.buffer_rail(ps.psu_voltage)
     w_dc, v_dc, cal = _calibrate(bench, ps.vin)
     vout_dc, _ = bench.measure_dc(0.05)
@@ -335,8 +336,10 @@ def run(bench: Bench, ps: PsrrConfig, meter: PsrrMeter | None = None) -> PsrrRes
         log.warning("psrr: %s (running anyway; the data will show it)", i)
     i_load = bench.loadbank.current(ps.load_code, cfg.dut.vout_nominal)
     meter = meter or Ad2SineFit(bench, ps)
-    w_limit = min(cfg.dut.vin_max, AD2_WAVEGEN_MAX_V) - w_dc  # largest amplitude W1 may play
-    # (the sine's peak, w_dc + amplitude, then stays within what vin_sine_from_wavegen allows)
+    # Largest amplitude W1 may play: the W1 peak within the bench's wavegen limit, and the VIN peak
+    # (the measured DC level + amplitude, the buffer being unity gain) within vin_max less the AD2's
+    # error margin. The second matters when the buffer's offset puts VIN above W1.
+    w_limit = min(min(cfg.dut.vin_max, AD2_WAVEGEN_MAX_V) - w_dc, _vin_limit(bench) - v_dc)
 
     amp = min(ps.amplitude, w_limit)
     points = []

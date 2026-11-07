@@ -133,6 +133,20 @@ class Ad2Config(_Model):
     wavegen_channel: Literal[1, 2] = Field(
         1, description="Wavegen output (W1/W2) that drives VIN via the BUF634"
     )
+    # How far a DC reading on the fine (5 V) range can be from the truth. Used as the margin
+    # between a measured VIN and dut.vin_max whenever the wavegen drives VIN through the buffer.
+    # UNVERIFIED: recalled from the AD2 datasheet (about +/-10 mV +/-0.5 %); confirm against
+    # Digilent's specification before relying on it.
+    vin_offset_error: float = Field(
+        0.010, ge=0, description="AD2 DC offset error on the 5 V range (V); unverified datasheet value"
+    )
+    vin_gain_error: float = Field(
+        0.005, ge=0, lt=0.1, description="AD2 DC gain error on the 5 V range (fraction); unverified"
+    )
+
+    def vin_margin(self, volts: float) -> float:
+        """Worst-case error (V) of an AD2 reading of `volts` on the 5 V range."""
+        return self.vin_offset_error + self.vin_gain_error * abs(volts)
 
     @model_validator(mode="after")
     def _distinct(self) -> Ad2Config:
@@ -523,7 +537,26 @@ class IqConfig(_Model):
         return self
 
 
-class PsrrConfig(_Model):
+class BufferProofConfig(_Model):
+    """Settings for proving the buffer path before the rail goes above dut.vin_max (line-tran, psrr)."""
+
+    proof_levels: tuple[float, float] = Field(
+        (0.1, 0.3),
+        description=(
+            "Two W1 levels (V) played with the buffer rail held at dut.vin_max: VIN must follow them "
+            "before the rail is raised further. They must be within what the BUF634 can drive at that rail"
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _proof_levels(self):
+        lo, hi = self.proof_levels
+        if not 0 <= lo < hi <= AD2_WAVEGEN_MAX_V:
+            raise ValueError("proof_levels must be two rising levels within 0..5 V")
+        return self
+
+
+class PsrrConfig(BufferProofConfig):
     """[psrr] (psrr): a sine on VIN through the BUF634 (line transient path), its amplitude on VIN and VOUT.
 
     The PSU powers the buffer rail, not VIN; the wavegen sets VIN's DC level and the sine on it.
@@ -580,7 +613,7 @@ class PsrrConfig(_Model):
         return out
 
 
-class LineTranConfig(TransientCaptureConfig):
+class LineTranConfig(TransientCaptureConfig, BufferProofConfig):
     """[line_tran] (line-tran): W1 steps VIN between two levels through the BUF634; PSU on the buffer rail."""
 
     psu_voltage: float = Field(gt=0, description="PSU voltage on VS_BUFF (buffer supply) (V)")
@@ -715,6 +748,13 @@ class BenchConfig(_Model):
                 raise ValueError(
                     f"psrr.vin + amplitude ({ps.vin + ps.amplitude} V) exceeds dut.vin_max ({self.dut.vin_max} V)"
                 )
+            peak = ps.vin + ps.amplitude
+            if peak + self.ad2.vin_margin(peak) > self.dut.vin_max:
+                # The run measures VIN with the AD2; leave room for its error below the limit.
+                raise ValueError(
+                    f"psrr.vin + amplitude ({peak} V) is within the AD2's measurement error "
+                    f"(~{self.ad2.vin_margin(peak) * 1e3:.0f} mV) of dut.vin_max ({self.dut.vin_max} V)"
+                )
             code_ok("psrr.load_code", ps.load_code)
         if self.line_tran:
             lt = self.line_tran
@@ -723,6 +763,11 @@ class BenchConfig(_Model):
                 raise ValueError(f"line_tran.psu_voltage exceeds psu.v_max ({self.psu.v_max} V)")
             if lt.vin_high > self.dut.vin_max:
                 raise ValueError(f"line_tran.vin_high exceeds dut.vin_max ({self.dut.vin_max} V)")
+            if lt.vin_high + self.ad2.vin_margin(lt.vin_high) > self.dut.vin_max:
+                raise ValueError(
+                    f"line_tran.vin_high ({lt.vin_high} V) is within the AD2's measurement error "
+                    f"(~{self.ad2.vin_margin(lt.vin_high) * 1e3:.0f} mV) of dut.vin_max ({self.dut.vin_max} V)"
+                )
             code_ok("line_tran.load_code", lt.load_code)
         return self
 

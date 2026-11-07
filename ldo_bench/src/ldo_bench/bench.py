@@ -251,9 +251,23 @@ class Bench:
             levels[e.dio_pin_n] = not on
         self.dio.write_pins(levels)
 
-    def wavegen_off(self) -> None:
-        """Turn off the configured wavegen channel (ad2.wavegen_channel)."""
-        self.awg.off(self.cfg.ad2.wavegen_channel)
+    def en_ain_sine(self, channel: int, *, frequency: float, low: float, high: float) -> None:
+        """Wavegen sine (low..high V) into the enable block's EN_AIN (enable-sine).
+
+        EN_AIN is powered from VIN (EN_VDD), so the sine's top is held to dut.vin_max (and the
+        wavegen's 5 V); its bottom may go to -0.3 V, the usual input clamp limit.
+        """
+        limit = min(self.cfg.dut.vin_max, AD2_WAVEGEN_MAX_V)
+        if not -0.3 <= low < high <= limit + 1e-9:
+            raise InstrumentError(
+                f"refusing to drive EN_AIN with a {low:.3f}..{high:.3f} V sine (limit -0.3..{limit} V)"
+            )
+        self.awg.set_sine(channel, frequency=frequency, low=low, high=high)
+        self._awg_on = True
+
+    def wavegen_off(self, channel: int | None = None) -> None:
+        """Turn off a wavegen channel (default ad2.wavegen_channel)."""
+        self.awg.off(self.cfg.ad2.wavegen_channel if channel is None else channel)
         self._awg_on = False
 
     # --- Measurements -------------------------------------------------------

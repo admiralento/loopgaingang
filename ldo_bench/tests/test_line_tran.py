@@ -56,7 +56,16 @@ def test_buffer_without_headroom_is_reported(jafwak):
     seen = []
 
     def weak_buffer(b):
-        b.sim_model.buffer_dropout = 2.5  # 4.0 V rail can only reach 1.5 V
+        # healthy through the interlock's proof (rail at vin_max), weak at the full rail:
+        # the 4.0 V rail can then only reach 1.5 V
+        rail = b.buffer_rail
+
+        def weak_at_full_rail(v):
+            if v > b.cfg.dut.vin_max:
+                b.sim_model.buffer_dropout = 2.5
+            rail(v)
+
+        b.buffer_rail = weak_at_full_rail
         orig = b.awg.set_dc
         b.awg.set_dc = lambda ch, v: (seen.append(v), orig(ch, v))
 
