@@ -2,21 +2,25 @@
 
 method "shunt": DMM DC volts across R13 (0.1 ohm between VIN and INB, J13.1 / J13.2), 100 mV range.
 Everything the board draws from VIN goes through it: the LDO, the BGR, the enable block, the level
-shifters' low side and the ~VOUT / 1 Mohm into the AD2's scope 1. At 6.5 digits that's 0.1 uV, i.e.
-1 uA per count: fine for Iq, not for shutdown current (those points come out as "below the floor").
+shifters' low side and the ~VOUT / 1 Mohm into the AD2's scope 1. At 10 NPLC (6.5 digits) that's
+0.1 uV, i.e. 1 uA per count: fine for Iq, not for shutdown current (those points come out as "below
+the floor"). Shorter integration times have coarser counts (RESOLUTION).
 
 method "series": DMM DC amps (I / LO terminals) in place of one J1 jumper, which isolates that rail,
-or between the PSU and VIN_DC (rail "total"). Resolution 10 nA on the 10 mA range; the meter's burden
-(~5 ohm on 10 mA) drops a little of that rail's voltage.
+or between the PSU and VIN_DC (rail "total"). On a fixed range (10 mA unless dmm_range says otherwise,
+never autorange, so the zero and the points share a range): 10 nA per count at 10 NPLC. The meter's
+burden (~5 ohm on 10 mA) drops a little of that rail's voltage.
 
-Before the PSU turns on, the DMM reads the zero (offset and thermal EMF), which is subtracted from
+With the supply output switched off (it may have been left on), the DMM reads the zero (offset and thermal EMF), which is subtracted from
 every point; the spread of those readings sets the floor. In the shunt method a known load is then
 switched in once to prove the meter sees the current through R13.
 
 run() steps:
 1. Check the DMM driver can do the chosen method; confirm the wiring; configure the DMM (DC volts
    on 100 mV for shunt, DC amps for series).
-2. Load bank and wavegen off; read the zero. floor = max(3 x the zero's spread, one DMM count).
+2. Load bank and wavegen off, supply output off; read the zero. floor = max(3 x the zero's spread,
+   one DMM count). The floor uses one reading's spread, though each point is a mean of `readings`
+   minus a mean of `readings`, so it's conservative by sqrt(readings / 2).
 3. If any "disabled" points are wanted: AD2 V+ on (V_33) and the LDO enabled.
 4. Shunt load check (shunt method, check_code set, "enabled" in states): at vin_stop, read the
    current, switch in check_code, read again; the difference should be the bank's current at the
@@ -25,10 +29,10 @@ run() steps:
    VOUT (AD2), the DMM current (zero subtracted), and the PSU's voltage and current readback.
 6. Enable low, load bank off, then the checks below.
 
-Checks and corrections:
-- Reversed leads: if the load check (or else the median enabled current) is negative beyond the
-  floor, every sign is flipped and a note says so.
-- Setup issues (run invalid): the load check off by more than check_tolerance; a DMM overload;
+Checks (the data is never corrected):
+- Setup issues (run invalid): reversed leads (the load check, or else the median enabled current,
+  negative beyond the floor); the load check off by more than check_tolerance, or overloaded; a
+  DMM overload (at the zero, every current is then NaN);
   enabled points with VOUT not near nominal or a current under the floor (meter shorted out or
   not in the path); disabled points with VOUT above 20 % of nominal (enable path not working).
 - Notes (run still valid): the ~1 uA the AD2 scope draws from VOUT is included for the "total"
@@ -56,7 +60,10 @@ J1_RAIL = {
     "en": ("EN_VDD", "9-11"),
     "ota": ("OTA_VDD", "13-15"),
 }
-DIGITS = 1e-6  # 34401A at 6.5 digits: one count = range x 1e-6
+# 34401A resolution (one count, x range) by integration time, from its manual's resolution table
+# (recalled, not yet checked against the manual): 6.5 digits only at 10 NPLC and above.
+RESOLUTION = {0.02: 1e-4, 0.2: 1e-5, 1: 3e-6, 10: 1e-6, 100: 3e-7}
+SERIES_RANGE = 0.01  # A: the DCI range used unless iq.dmm_range says otherwise (fixed, never auto)
 SCOPE_INPUT_OHM = 1e6  # AD2 scope input, loading VOUT
 
 
@@ -246,14 +253,17 @@ def run(bench: Bench, iq: IqConfig) -> IqResult:
         en_pin=cfg.enable.dio_pin if use_enable else None,
     )
     nplc = iq.nplc or (cfg.dmm.nplc if cfg.dmm else 10)
+    count = RESOLUTION[nplc]
     if shunt:
         rng = iq.dmm_range or 0.1
         dmm.configure_dcv(range=rng, nplc=nplc)
         # volts across R13 -> amps; one count of the range, in amps, is the best case floor
-        scale, resolution = 1 / iq.sense_ohm, rng * DIGITS / iq.sense_ohm
+        scale, resolution = 1 / iq.sense_ohm, rng * count / iq.sense_ohm
     else:
-        dmm.configure_dci(range=iq.dmm_range, nplc=nplc)
-        scale, resolution = 1.0, (iq.dmm_range or 0.01) * DIGITS  # auto: the 10 mA range's count
+        # A fixed range: with autorange the zero and the points could be read on different ranges.
+        rng = iq.dmm_range or SERIES_RANGE
+        dmm.configure_dci(range=rng, nplc=nplc)
+        scale, resolution = 1.0, rng * count
 
     def read() -> tuple[float, float]:
         """(mean, std) of iq.readings DMM readings in A; (nan, nan) if any overloaded."""
@@ -264,15 +274,18 @@ def run(bench: Bench, iq: IqConfig) -> IqResult:
 
     bench.loadbank.off()
     bench.wavegen_off()
-    # The meter's offset / thermal EMF. Assumes the PSU output is off: this run hasn't switched it
-    # on yet (the bench only forces it off on the first vin_from_psu).
+    # The meter's offset / thermal EMF, with nothing flowing: the supply is switched off first, as
+    # it may have been left on from its front panel.
+    bench.supply_off()
+    bench.sleep(iq.settle_time)
     log.info("Reading the DMM zero (PSU output off) ...")
     zero, zero_std = read()
     setup_issues: list[str] = []
     if not np.isfinite(zero):
+        # no zero, so no current can be worked out: every point stays NaN (no stand-in value)
         setup_issues.append("the DMM overloads with the PSU off: check its function / leads")
-        zero, zero_std = 0.0, 0.0
-    floor = max(3 * zero_std, resolution)  # 3 sigma of the zero's noise, never below one count
+    # 3 sigma of the zero's noise, never below one count
+    floor = max(3 * zero_std, resolution) if np.isfinite(zero_std) else resolution
     log.info("zero %s, floor %s", fmt_a(zero), fmt_a(floor))
 
     if use_enable:
@@ -316,25 +329,29 @@ def run(bench: Bench, iq: IqConfig) -> IqResult:
         bench.set_enable(False)
     bench.loadbank.off()
 
-    # leads the other way round read negative: say so and show magnitudes
+    # Leads the other way round read negative. The data stays as measured (no sign flip): it's a
+    # setup problem to fix, then run again.
     notes: list[str] = []
     ref = (
         check["measured"]
         if check
         else np.nanmedian([p.current for p in points if p.state == "enabled"] or [0])
     )
-    if np.isfinite(ref) and ref < -floor:
-        notes.append(
-            "the DMM leads are reversed (readings were negative): currents shown with the sign flipped"
+    reversed_leads = bool(np.isfinite(ref) and ref < -floor)
+    if reversed_leads:
+        setup_issues.append(
+            "the DMM reads the current negative: its leads are reversed (swap HI / COM, or I / LO). "
+            "Currents are saved as measured"
         )
-        for p in points:
-            p.current = -p.current
-        if check:
-            check["measured"] = -check["measured"]
 
-    if check:
+    if check and not reversed_leads:
         c = check
-        if abs(c["measured"] - c["expected"]) > iq.check_tolerance * c["expected"]:
+        if not np.isfinite(c["measured"]):
+            setup_issues.append(
+                f"the DMM overloaded during the load check (code {c['code']}), so nothing proves it sees the "
+                "current through R13: check its range and that it's on the V terminals"
+            )
+        elif abs(c["measured"] - c["expected"]) > iq.check_tolerance * c["expected"]:
             setup_issues.append(
                 f"switching in load code {c['code']} should add {fmt_a(c['expected'])} through R13, the DMM saw "
                 f"{fmt_a(c['measured'])}: are the DMM V / COM leads on J13.1 / J13.2, and is it on the "

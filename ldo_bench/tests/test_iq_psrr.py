@@ -100,14 +100,14 @@ def test_iq_dmm_not_on_r13_is_flagged(jafwak):
     assert any("below the DMM floor" in i for i in res.issues)
 
 
-def test_iq_reversed_leads_noted_and_flipped(jafwak):
+def test_iq_reversed_leads_are_an_issue_and_not_flipped(jafwak):
     def reverse(b):
         read = b.dmm.read
         b.dmm.read = lambda: -read()
 
     res, _ = run_iq(jafwak, setup=reverse)
-    assert not res.issues and any("reversed" in n for n in res.notes)
-    assert all(p.current > 100e-6 for p in res.points if p.state == "enabled")
+    assert any("reversed" in i for i in res.issues)
+    assert all(p.current < -100e-6 for p in res.points if p.state == "enabled")  # as measured
 
 
 def test_iq_enable_path_not_working_is_flagged(jafwak):

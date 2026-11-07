@@ -506,12 +506,12 @@ class IqConfig(_Model):
         default_factory=lambda: ["enabled", "disabled"],
         description="disabled = through the [enable] path; leave it out on a board with no enable control",
     )
-    readings: int = Field(5, ge=1, description="DMM readings averaged per point (and for the zero)")
+    readings: int = Field(5, ge=3, description="DMM readings averaged per point (and for the zero)")
     settle_time: float = Field(0.5, ge=0, description="Wait after each VIN / enable change (s)")
     dmm_range: float | None = Field(
         None,
         gt=0,
-        description="DMM range: V for shunt (default 0.1 = 100 mV), A for series (default auto)",
+        description="DMM range: V for shunt (default 0.1 = 100 mV), A for series (default 0.01 = 10 mA); never autorange",
     )
     nplc: Literal[0.02, 0.2, 1, 10, 100] | None = Field(None, description="None = dmm.nplc")
     check_code: int = Field(

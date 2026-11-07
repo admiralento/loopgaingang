@@ -131,9 +131,9 @@ Powers VIN up (default `load_reg.vin`), then reads VOUT, VIN and the supply's V 
   - AD2 GND -> board GND
 - **Two methods** (`iq.method`, `--method`):
   - **`shunt`:** DMM DC volts across R13 (0.1 Ω) on the 100 mV range. This is everything drawn from VIN: the LDO, BGR, enable block, the level shifters' low side, and ~1.2 µA into the AD2 scope on VOUT. One count is 1 µA, which is fine for Iq but too coarse for shutdown current.
-  - **`series`:** DMM DC amps (I and LO jacks) in place of one J1 jumper (`--rail bgr|vdd|en|ota`), or between the PSU and VIN_DC (`--rail total`). One count is 10 nA, so this resolves shutdown current. The meter's burden (~5 Ω on the 10 mA range) drops a little of that rail's voltage.
+  - **`series`:** DMM DC amps (I and LO jacks) in place of one J1 jumper (`--rail bgr|vdd|en|ota`), or between the PSU and VIN_DC (`--rail total`). It uses a fixed range, 10 mA unless `dmm_range` says otherwise, so the zero and every point are read on the same range. One count is 10 nA, so this resolves shutdown current. The meter's burden (~5 Ω on the 10 mA range) drops a little of that rail's voltage.
 - **Does:**
-  1. Reads the DMM with the PSU off: the zero (offset, thermal EMF). It's subtracted from every point, and the spread of those readings sets the floor.
+  1. Switches the supply output off (it may have been left on), then reads the DMM: the zero (offset, thermal EMF). It's subtracted from every point. The spread of those readings (at least 3) sets the floor, never below one DMM count at the chosen NPLC (1 µV on 100 mV at 10 NPLC; coarser at shorter integration times).
   2. Shunt method: switches in a known load (`check_code`, 4.8 mA) once, to prove the DMM sees the current through R13.
   3. Sweeps VIN (1.4–1.9 V) with the LDO enabled, then disabled through the enable path.
 - **Reports:** current per point. Points under the floor are shown as "< floor", not as a number.
@@ -142,7 +142,8 @@ Powers VIN up (default `load_reg.vin`), then reads VOUT, VIN and the supply's V 
   - an enabled current under the floor (meter not across R13 / not in series, or the jumper still shorting it)
   - VOUT off nominal when enabled, or still up when disabled (enable path not working)
   - meter overload
-  - reversed leads are noted, and the signs flipped
+  - reversed leads (an issue: the currents are saved as measured, not flipped)
+  - an overload during the zero (every current is then NaN) or the load check
 - **Options:**
   - `--method series --rail bgr`
   - `--vin 1.8` (one point)

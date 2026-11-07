@@ -208,6 +208,16 @@ class Bench:
             )
         self.sleep(self.cfg.psu.settle_time)
 
+    def supply_off(self) -> None:
+        """Make sure the PSU output is off now (setting the supply up first if this run hasn't).
+
+        For readings that must have nothing powered, e.g. iq's zero: the supply may have been left
+        on from its front panel.
+        """
+        self._ensure_psu()
+        self.psu.output(False)
+        self._psu_on = False
+
     def vin_from_psu(self, volts: float) -> None:
         """PSU drives the LDO's VIN directly: ramp to `volts` (V), at most min(dut.vin_max, psu.v_max)."""
         self._psu_ramp(volts, min(self.cfg.dut.vin_max, self.cfg.psu.v_max))
