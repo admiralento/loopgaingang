@@ -5,6 +5,26 @@ between the two codes (the same setup as the WaveForms workspaces: Scope 2+ on
 DIO 4 / J4). Each edge is captured `averages` times and averaged; the response
 repeats on every step, so averaging removes noise without blurring it. The
 analysis is the Python port of load_tran_script.js.
+
+Signal path: PSU -> VIN (DC); AD2 DIO -> load bank gates; scope vout channel on
+VOUT, scope ref channel on the one DIO pin that changes between the codes (the
+trigger). The optional 54621A watches the same two signals as a cross-check.
+
+run() steps:
+1. Pick the trigger pin (trigger_pin, else the highest bit that differs between
+   code_low and code_high) and
+   whether it rises when the load steps up; confirm the wiring.
+2. Load bank to code_low, PSU ramps VIN to `vin`, and a quick DC read of VOUT
+   checks it is near nominal (a setup issue if not; the run continues).
+3. For each edge in `edges`: `averaged_step` toggles the bank between the two
+   codes and averages the captures; `settling_analysis` gives nominal, peak
+   deviation, settling time (to within settle_fraction of the peak deviation)
+   and pre-step noise; `capture_issues` checks the data (step present, ref
+   swing = dio_high_level, VOUT near nominal).
+4. Load bank off. The PSU stays on until the bench shuts down.
+
+Step currents in the title / CSV are the bank's resistor currents at the
+nominal VOUT (what the step should be), not a measurement.
 """
 
 from __future__ import annotations
@@ -37,19 +57,21 @@ NAME = "load-tran"
 
 @dataclass
 class EdgeResult:
+    """One load step (up or down), averaged, with its settling metrics."""
+
     edge: str  # "rising" = load stepped up (code_low -> code_high)
-    code_from: int
+    code_from: int  # load bank code before / after the step
     code_to: int
-    i_from: float
+    i_from: float  # A, bank current for those codes at the nominal VOUT
     i_to: float
     metrics: SettlingResult
     t: np.ndarray  # s, 0 at the step
-    vout: np.ndarray
-    vout_smoothed: np.ndarray
-    ref: np.ndarray
-    trigger_level: float | None = None
-    issues: list[str] = field(default_factory=list)
-    vout_channel: int = 1
+    vout: np.ndarray  # V, averaged VOUT
+    vout_smoothed: np.ndarray  # V, VOUT after glitch removal and the moving average
+    ref: np.ndarray  # V, the trigger DIO pin as the scope saw it
+    trigger_level: float | None = None  # V, the AD2 trigger level (drawn on the plot)
+    issues: list[str] = field(default_factory=list)  # setup problems: non-empty = not a valid edge
+    vout_channel: int = 1  # AD2 scope channel on VOUT (for the plot label)
     xcheck: XCheck | None = None  # the 54621A's view of the same edge, if enabled
 
     @property
@@ -62,11 +84,17 @@ class EdgeResult:
 
 @dataclass
 class LoadTranResult:
-    vin: float
-    trigger_pin: int
-    averages: int
+    """The whole load-transient run: one EdgeResult per edge in load_tran.edges.
+
+    `issues` combines the setup issues with each edge's own (prefixed by the edge); any issue
+    makes the run invalid. `rows` is data.csv (one row per edge), `extra_csvs` the waveforms.
+    """
+
+    vin: float  # V, PSU setpoint on VIN
+    trigger_pin: int  # DIO pin on the scope ref channel
+    averages: int  # captures averaged per edge
     edges: list[EdgeResult]
-    vout_nominal: float = 1.0
+    vout_nominal: float = 1.0  # V, dut.vout_nominal (drawn on invalid plots)
     setup_issues: list[str] = field(default_factory=list)  # found before any capture
     plot_window: float | None = None  # s after the step shown in plot.png (None = automatic)
 
@@ -139,7 +167,11 @@ class LoadTranResult:
 
 
 def trigger_setup(bench: Bench, lt: LoadTranConfig) -> tuple[int, bool]:
-    """(DIO pin on the ref channel, whether it rises when the load steps up)."""
+    """(DIO pin on the ref channel, whether it rises when the load steps up).
+
+    With no trigger_pin configured the load bank picks the highest bit that differs between the codes.
+    A configured pin that doesn't change between them is refused: the scope could never trigger.
+    """
     bank = bench.loadbank
     if lt.trigger_pin is None:
         return bank.trigger_pin(lt.code_low, lt.code_high)
@@ -153,6 +185,7 @@ def trigger_setup(bench: Bench, lt: LoadTranConfig) -> tuple[int, bool]:
 
 
 def wiring(bench: Bench, pin: int) -> list[str]:
+    """Wiring lines shown before the run; `pin` is the trigger DIO from trigger_setup."""
     a, lb = bench.cfg.ad2, bench.cfg.loadbank
     bit = lb.dio_pins.index(pin)
     return [
@@ -164,6 +197,12 @@ def wiring(bench: Bench, pin: int) -> list[str]:
 
 
 def run(bench: Bench, lt: LoadTranConfig, an: AnalysisConfig) -> LoadTranResult:
+    """Measure each load edge in lt.edges (see the module docstring for the steps).
+
+    lt: the [load_tran] section (codes, VIN, capture settings). an: the [analysis] settings for
+    settling_analysis. Setup problems are recorded in the result, not raised; a trigger pin that
+    never moves raises InstrumentError before anything is powered.
+    """
     bank, a = bench.loadbank, bench.cfg.ad2
     pin, rises_with_load = trigger_setup(bench, lt)
     bench.confirm_wiring("load transient", wiring(bench, pin), ref_probe=("dio", pin))
@@ -182,6 +221,8 @@ def run(bench: Bench, lt: LoadTranConfig, an: AnalysisConfig) -> LoadTranResult:
     results = []
     for edge in lt.edges:
         c_from, c_to = (lt.code_low, lt.code_high) if edge == "rising" else (lt.code_high, lt.code_low)
+        # the trigger pin may fall when the load rises (an active-low bank, or a configured pin
+        # whose bit turns off), so the scope edge is the pin's direction, not the load's
         pin_rises = rises_with_load if edge == "rising" else not rises_with_load
         trig_edge = "rising" if pin_rises else "falling"
         sc = averaged_step(
@@ -194,6 +235,7 @@ def run(bench: Bench, lt: LoadTranConfig, an: AnalysisConfig) -> LoadTranResult:
             start=lambda c=c_from: bank.set(c),
             step=lambda c=c_to: bank.set(c),
             label=f"load step {edge}",
+            # DIO edge at a quarter of the screen height, centred on the trigger level
             xscope=XScopeSetup(ref_range=4 * lt.dio_high_level, ref_offset=lt.dio_high_level / 2),
         )
         cap, trig_issues = sc.cap, sc.issues
@@ -249,6 +291,10 @@ def run(bench: Bench, lt: LoadTranConfig, an: AnalysisConfig) -> LoadTranResult:
 
 
 def plot(res: LoadTranResult, dut: str, full: bool = False):
+    """plot.png: one column per edge (trigger DIO on top, VOUT below), zoomed on the step.
+
+    full=True shows the whole capture instead (plot_full.png).
+    """
     span = ""
     if full and res.edges:
         t = res.edges[0].t * 1e3

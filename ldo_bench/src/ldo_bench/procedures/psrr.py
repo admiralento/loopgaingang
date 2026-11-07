@@ -14,6 +14,22 @@ reach roughly 70-80 dB here. A spectrum analyzer on VOUT can take over that end:
 PsrrMeter that reads VOUT's amplitude from it (VIN still from AD2 scope 2).
 
 PSRR (dB) = 20 log10(|VIN| / |VOUT|), positive = rejection.
+
+run() steps:
+1. Confirm the wiring, set the load code, interlock (line_tran._interlock), buffer rail to
+   psu_voltage, calibrate W1's DC level so VIN = psrr.vin at the board (line_tran._calibrate).
+2. VOUT DC check (setup issue if not near nominal).
+3. For each frequency: W1 plays dc +/- amplitude, wait settle_cycles periods (at least 50 ms),
+   measure. If VIN's amplitude is off by more than level_tolerance (buffer / board roll-off at
+   high frequency), W1's amplitude is scaled to compensate (at most 2 x the target, never past
+   the wavegen / vin_max limit) and the point is measured again. After every measurement the
+   measured VIN peak is checked against dut.vin_max + PEAK_MARGIN (hard stop).
+4. W1 off, load bank off.
+
+Validity check per point: VIN must carry at least MIN_INJECTION of the target amplitude,
+else the sine isn't reaching VIN (setup issue). Notes (run still valid): VOUT following VIN
+(< 3 dB) at the lowest valid frequency, which suggests dropout or a probe on VIN; and any
+floor-limited points.
 """
 
 from __future__ import annotations
@@ -38,7 +54,7 @@ NAME = "psrr"
 FLOOR_SIGMA = 3.0  # a VOUT phasor smaller than this many noise sigmas counts as "not measured"
 MIN_INJECTION = 0.3  # VIN amplitude below this fraction of the target: the sine isn't reaching VIN
 PEAK_MARGIN = 0.01  # V over dut.vin_max that stops the run
-SUMMARY_FREQS = (100.0, 1e3, 10e3, 100e3, 1e6)
+SUMMARY_FREQS = (100.0, 1e3, 10e3, 100e3, 1e6)  # Hz, reported in summary.json when measured nearby
 
 
 @dataclass
@@ -49,25 +65,33 @@ class Tone:
     vout: complex
     vin_floor: float  # V peak: smallest amplitude the meter resolves on each channel
     vout_floor: float
-    vin_dc: float
-    sample_rate: float = float("nan")
-    cycles: float = float("nan")
+    vin_dc: float  # V, VIN's DC level during the measurement
+    sample_rate: float = float("nan")  # Hz, of the captures (if the meter has one)
+    cycles: float = float("nan")  # sine periods per capture
 
 
 class PsrrMeter(Protocol):
-    name: str
+    """Anything that can measure the VIN and VOUT tones at one frequency (W1 is already playing)."""
+
+    name: str  # shown in the report and plot title
 
     def measure(self, frequency: float) -> Tone: ...
 
 
 class Ad2SineFit:
-    """VIN (scope ref channel) and VOUT (scope vout channel) from the same AD2 captures."""
+    """VIN (scope ref channel) and VOUT (scope vout channel) from the same AD2 captures.
+
+    Each capture is fitted separately; the transfer VOUT/VIN is averaged as a complex number over
+    the captures (coherent averaging: noise in VOUT averages down by sqrt(averages), the phase is
+    kept). The floors are FLOOR_SIGMA x the fit's amplitude uncertainty, also / sqrt(averages).
+    """
 
     name = "AD2 sine fit"
 
     def __init__(self, bench: Bench, ps: PsrrConfig) -> None:
         self.bench, self.ps = bench, ps
         a = bench.cfg.ad2
+        # VIN's highest point, allowing for levelling up to 2 x the target amplitude
         peak = ps.vin + 2 * ps.amplitude
         # the 5 V (+/-2.5 V) range has 10x the resolution of the 50 V one: use it when VIN fits
         vin_range = 5.0 if peak < 2.4 else 50.0
@@ -78,7 +102,9 @@ class Ad2SineFit:
         }
 
     def measure(self, frequency: float) -> Tone:
+        """Take ps.averages free-running captures and fit the sine at `frequency` on both channels."""
         b, ps, a = self.bench, self.ps, self.bench.cfg.ad2
+        # ps.cycles periods per capture, unless that needs more than max_sample_rate (then more cycles)
         rate = min(ps.max_sample_rate, ps.n_samples * frequency / ps.cycles)
         h, vin_amp, sig_in, sig_out, dc = [], [], [], [], []
         cap = None
@@ -105,6 +131,7 @@ class Ad2SineFit:
         k = len(h)
         vin = float(np.mean(vin_amp))
         n = len(cap.ch1)
+        # VIN is the phase reference (real); VOUT = averaged transfer x VIN amplitude
         return Tone(
             vin=complex(vin, 0.0),
             vout=complex(np.mean(h)) * vin,
@@ -118,23 +145,27 @@ class Ad2SineFit:
 
 @dataclass
 class PsrrPoint:
-    frequency: float
+    """One frequency's result. Amplitudes in V peak, PSRR in dB."""
+
+    frequency: float  # Hz
     tone: Tone
     w1_amplitude: float  # what W1 played (after levelling)
-    issues: list[str] = field(default_factory=list)
+    issues: list[str] = field(default_factory=list)  # setup problems at this frequency
 
     @property
     def vin_amp(self) -> float:
+        """VIN amplitude (V peak)."""
         return abs(self.tone.vin)
 
     @property
     def vout_amp(self) -> float:
+        """VOUT amplitude at the injected frequency (V peak)."""
         return abs(self.tone.vout)
 
     @property
     def limited(self) -> bool:
         """VOUT is under the meter's floor: the PSRR is at least `floor_db`."""
-        return not self.vout_amp > self.tone.vout_floor
+        return not self.vout_amp > self.tone.vout_floor  # `not >`: a NaN amplitude counts as limited
 
     @property
     def floor_db(self) -> float:
@@ -162,18 +193,20 @@ class PsrrPoint:
 
 @dataclass
 class PsrrResult:
-    rail: float
+    """The whole PSRR sweep. `issues` = setup issues plus every point's (each listed once)."""
+
+    rail: float  # V, buffer rail (PSU setpoint)
     vin_dc: float  # measured at the board after calibration
-    w1_dc: float
+    w1_dc: float  # V, W1's DC setpoint after calibration
     amplitude: float  # target VIN amplitude (V peak)
-    load_code: int
-    i_load: float
-    averages: int
-    meter: str
+    load_code: int  # load bank code held during the sweep
+    i_load: float  # A, that code's current at the nominal VOUT
+    averages: int  # captures per frequency
+    meter: str  # the PsrrMeter's name
     points: list[PsrrPoint]
-    vout_nominal: float
-    setup_issues: list[str] = field(default_factory=list)
-    notes: list[str] = field(default_factory=list)
+    vout_nominal: float  # V
+    setup_issues: list[str] = field(default_factory=list)  # calibration / VOUT problems
+    notes: list[str] = field(default_factory=list)  # findings that don't invalidate the run
 
     @property
     def issues(self) -> list[str]:
@@ -206,6 +239,7 @@ class PsrrResult:
         ]
 
     def at(self, f: float) -> PsrrPoint | None:
+        """The measured point nearest `f` (Hz) on a log scale, if within 0.2 decades (a factor ~1.6)."""
         if not self.points:
             return None
         p = min(self.points, key=lambda q: abs(math.log10(q.frequency / f)))
@@ -255,6 +289,7 @@ class PsrrResult:
 
 
 def wiring(bench: Bench, ps: PsrrConfig) -> list[str]:
+    """Wiring lines shown before the run (the load bank line only if a load code is set)."""
     a, lb = bench.cfg.ad2, bench.cfg.loadbank
     lines = [
         f"PSU OUT{bench.cfg.psu.channel} -> buffer rail VS_BUFF / VDD_BUF and GND. NOT on VIN: "
@@ -269,6 +304,10 @@ def wiring(bench: Bench, ps: PsrrConfig) -> list[str]:
 
 
 def _check_peak(bench: Bench, tone: Tone, f: float) -> None:
+    """Hard stop: W1 off and InstrumentError if the measured VIN peak (DC + amplitude) is over
+    dut.vin_max + PEAK_MARGIN. Backs up the setpoint check in bench.vin_sine_from_wavegen, which
+    can't see the buffer's offset or gain.
+    """
     peak = tone.vin_dc + abs(tone.vin)
     if peak > bench.cfg.dut.vin_max + PEAK_MARGIN:
         bench.wavegen_off()
@@ -278,6 +317,11 @@ def _check_peak(bench: Bench, tone: Tone, f: float) -> None:
 
 
 def run(bench: Bench, ps: PsrrConfig, meter: PsrrMeter | None = None) -> PsrrResult:
+    """Measure PSRR at each of ps.frequencies() (see the module docstring for steps and checks).
+
+    ps: the [psrr] section. meter: how the tones are measured (default Ad2SineFit). The interlock,
+    dut.vin_max and the wavegen limit raise InstrumentError; other problems are recorded as issues.
+    """
     cfg = bench.cfg
     a = cfg.ad2
     bench.confirm_wiring("PSRR", wiring(bench, ps), ref_probe=("vin", 0), psu_to="rail")
@@ -292,20 +336,22 @@ def run(bench: Bench, ps: PsrrConfig, meter: PsrrMeter | None = None) -> PsrrRes
     i_load = bench.loadbank.current(ps.load_code, cfg.dut.vout_nominal)
     meter = meter or Ad2SineFit(bench, ps)
     w_limit = min(cfg.dut.vin_max, AD2_WAVEGEN_MAX_V) - w_dc  # largest amplitude W1 may play
+    # (the sine's peak, w_dc + amplitude, then stays within what vin_sine_from_wavegen allows)
 
     amp = min(ps.amplitude, w_limit)
     points = []
     freqs = ps.frequencies()
     for n, f in enumerate(freqs, 1):
         bench.vin_sine_from_wavegen(dc=w_dc, amplitude=amp, frequency=f)
-        bench.sleep(max(0.05, ps.settle_cycles / f))
+        bench.sleep(max(0.05, ps.settle_cycles / f))  # let the LDO reach steady state at this tone
         tone = meter.measure(f)
         _check_peak(bench, tone, f)
         got = abs(tone.vin)
         # level W1 so VIN keeps the target amplitude (the buffer / board roll off at high f)
         if got > MIN_INJECTION * ps.amplitude and abs(got - ps.amplitude) > ps.level_tolerance * ps.amplitude:
+            # scale by target / measured; capped at 2 x target so a bad reading can't push it far
             new = min(amp * ps.amplitude / got, 2 * ps.amplitude, w_limit)
-            if abs(new - amp) > 1e-4:
+            if abs(new - amp) > 1e-4:  # skip re-measuring for a change under 0.1 mV
                 amp = new
                 bench.vin_sine_from_wavegen(dc=w_dc, amplitude=amp, frequency=f)
                 bench.sleep(max(0.05, ps.settle_cycles / f))
@@ -355,6 +401,9 @@ def run(bench: Bench, ps: PsrrConfig, meter: PsrrMeter | None = None) -> PsrrRes
 
 
 def plot(res: PsrrResult, dut: str):
+    """Top: PSRR (dB) vs frequency, with the measurement limit dashed and floor-limited points as
+    hollow triangles ("at least"). Bottom: VIN, VOUT and VOUT floor amplitudes (mV peak, log).
+    """
     fig, (ax, ax_a) = plotting.figure(
         2, 1, size=(8.0, 6.4), sharex=True, gridspec_kw={"height_ratios": [1.6, 1]}
     )

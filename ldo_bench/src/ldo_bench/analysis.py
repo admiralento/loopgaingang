@@ -1,4 +1,15 @@
-"""Pure-numpy analysis. No instrument code here, so it is easy to unit-test."""
+"""Pure-numpy analysis. No instrument code here, so it is easy to unit-test.
+
+Every function takes plain arrays (volts, amps, seconds) and returns a frozen dataclass whose
+`as_dict()` goes into summary.json. NaN means "not measurable from this data" (e.g. the LDO
+never settled within the capture), never an error.
+
+  linear_fit / load_regulation / line_regulation / find_dropout   DC tests
+  settling_analysis (with find_step, smooth)                      load-tran, line-tran
+  schmitt_analysis                                                enable-sine
+  step_metrics                                                    enable-startup
+  sine_fit                                                        psrr
+"""
 
 from __future__ import annotations
 
@@ -9,15 +20,19 @@ import numpy as np
 
 @dataclass(frozen=True)
 class LinearFit:
+    """y = slope * x + intercept; r2 is the coefficient of determination (1 = perfect fit)."""
+
     slope: float
     intercept: float
     r2: float
 
     def __call__(self, x):
+        """Evaluate the fit line at x."""
         return self.slope * np.asarray(x) + self.intercept
 
 
 def linear_fit(x, y) -> LinearFit:
+    """Least-squares straight line through (x, y). All NaN if there are < 2 points or x doesn't vary."""
     x, y = np.asarray(x, float), np.asarray(y, float)
     if len(x) < 2 or np.ptp(x) == 0:
         return LinearFit(float("nan"), float("nan"), float("nan"))
@@ -35,6 +50,10 @@ class LoadRegulation:
     `slope` is dVout/dIload from a least-squares fit (V/A, which is also mV/mA);
     it is negative for a normal LDO, and -slope is the DC output resistance.
     `delta_v` = Vout(lightest load) - Vout(heaviest load).
+
+    i_min / i_max: lightest / heaviest load current measured (A).
+    v_at_i_min / v_at_i_max: VOUT at those points (V), raw readings, not the fit.
+    intercept: fit VOUT at zero load (V). r2: fit quality.
     """
 
     i_min: float
@@ -49,13 +68,20 @@ class LoadRegulation:
 
     @property
     def r_out(self) -> float:
+        """DC output resistance (ohm) = -dVout/dIload."""
         return -self.slope
 
     def as_dict(self) -> dict:
+        """Fields plus r_out, for summary.json."""
         return {**asdict(self), "r_out": self.r_out}
 
 
 def load_regulation(i_load, vout) -> LoadRegulation:
+    """Load regulation from VOUT (V) measured at each load current (A).
+
+    The endpoints are the points with the lowest and highest current (not the first and last
+    rows); the slope is a least-squares fit over all points.
+    """
     i, v = np.asarray(i_load, float), np.asarray(vout, float)
     lo, hi = int(np.argmin(i)), int(np.argmax(i))
     fit = linear_fit(i, v)
@@ -81,6 +107,9 @@ class LineRegulation:
     Dropout: VOUT reference = VOUT at the highest VIN; the dropout point is
     where VOUT falls `dropout_fraction` below it (interpolated), and
     `dropout_voltage` = VIN - VOUT there. NaN if the sweep never reached it.
+
+    v_ref: VOUT at the highest VIN (V). fit_vin_min / fit_vin_max: VIN range actually fitted (V).
+    dropout_vin: VIN at the dropout point (V).
     """
 
     v_ref: float
@@ -96,11 +125,18 @@ class LineRegulation:
     dropout_fraction: float
 
     def as_dict(self) -> dict:
+        """Fields as a dict, for summary.json."""
         return asdict(self)
 
 
 def find_dropout(vin, vout, fraction: float) -> tuple[float, float]:
-    """(VIN, VOUT) where VOUT first stays within `fraction` of its max-VIN value (interpolated)."""
+    """(VIN, VOUT) where VOUT first stays within `fraction` of its max-VIN value (interpolated).
+
+    vin, vout in V (any order; sorted by VIN here). The threshold is (1 - fraction) * VOUT at
+    the highest VIN; the returned point is where VOUT last crosses up through it, linearly
+    interpolated between the two samples either side, so the returned VOUT is the threshold.
+    (NaN, NaN) if VOUT is above the threshold everywhere, or below it at the top of the sweep.
+    """
     order = np.argsort(vin)
     x, y = np.asarray(vin, float)[order], np.asarray(vout, float)[order]
     threshold = (1.0 - fraction) * y[-1]
@@ -118,7 +154,12 @@ def find_dropout(vin, vout, fraction: float) -> tuple[float, float]:
 def line_regulation(
     vin, vout, *, dropout_fraction: float = 0.01, fit_vin_min: float | None = None, knee_margin: float = 0.0
 ) -> LineRegulation:
-    """`knee_margin`: how far above the dropout point the fit starts when fit_vin_min is not given."""
+    """Line regulation from a VIN sweep (vin, vout in V).
+
+    Finds the dropout point (find_dropout), then fits VOUT vs VIN over VIN >= fit_vin_min.
+    `knee_margin` (V): how far above the dropout point the fit starts when fit_vin_min is not
+    given; with no dropout point in the sweep, the fit uses every point.
+    """
     x, y = np.asarray(vin, float), np.asarray(vout, float)
     v_ref = float(y[np.argmax(x)])
     d_vin, d_vout = find_dropout(x, y, dropout_fraction)
@@ -153,6 +194,11 @@ class SettlingResult:
     level + band] for the last time, where level is `nominal` ('pre', like the
     WaveForms script) or the final VOUT ('post'). NaN if it never settles in the
     capture. noise: RMS of the smoothed trace before the step; should be <= band / 3.
+
+    All voltages in V, settling_time in s (measured from the step). settle_level: the level the
+    band is centred on. final: mean smoothed VOUT over the last 10 % of the capture (V).
+    sample_rate: Hz. step_index: sample index of the step (-1 if no edge was found).
+    reference: 'pre' or 'post', as passed in.
     """
 
     nominal: float
@@ -168,14 +214,17 @@ class SettlingResult:
 
     @property
     def deviation(self) -> float:
+        """Signed peak excursion (V): negative for a dip (load step up), positive for overshoot."""
         return self.peak - self.nominal
 
     @property
     def upper(self) -> float:
+        """Top of the settling band (V)."""
         return self.settle_level + self.band
 
     @property
     def lower(self) -> float:
+        """Bottom of the settling band (V)."""
         return self.settle_level - self.band
 
     @property
@@ -184,6 +233,7 @@ class SettlingResult:
         return bool(np.isfinite(self.noise) and np.isfinite(self.band) and self.noise <= self.band / 3)
 
     def as_dict(self) -> dict:
+        """Fields plus the derived properties, for summary.json."""
         return {
             **asdict(self),
             "deviation": self.deviation,
@@ -199,7 +249,11 @@ def _js_round(x: float) -> int:
 
 
 def find_step(ref, edge: str) -> int:
-    """First crossing of the ref channel's midpoint in the given direction, or -1."""
+    """First crossing of the ref channel's midpoint in the given direction, or -1.
+
+    Midpoint = (min + max) / 2 of the trace; returns the index of the first sample at or past it.
+    `edge` is 'rising' or 'falling' (anything else is treated as falling).
+    """
     s = np.asarray(ref, float)
     mid = (s.min() + s.max()) / 2
     if edge == "rising":
@@ -213,7 +267,7 @@ def smooth(x, h: int) -> np.ndarray:
     """Centred moving average over i-h..i+h, shrinking at the ends (as in the JS)."""
     x = np.asarray(x, float)
     n = len(x)
-    p = np.concatenate([[0.0], np.cumsum(x)])
+    p = np.concatenate([[0.0], np.cumsum(x)])  # prefix sums: sum(x[a:b]) = p[b] - p[a]
     i = np.arange(n)
     a, b = np.maximum(0, i - h), np.minimum(n, i + h + 1)
     return (p[b] - p[a]) / (b - a)
@@ -231,7 +285,21 @@ def settling_analysis(
     blank_time: float = 0.5e-6,
     reference: str = "pre",
 ) -> tuple[SettlingResult, np.ndarray]:
-    """Return (metrics, smoothed VOUT). Step numbers match load_tran_script.js."""
+    """Return (metrics, smoothed VOUT). Step numbers match load_tran_script.js.
+
+    A port of the WaveForms custom-measurement JavaScript in ../AD_workspaces/load_tran_script.js,
+    so the bench and a manual WaveForms session give the same numbers (including JS rounding).
+
+    vout, ref: one capture of VOUT and of the reference / trigger channel (V), same length.
+    sample_rate: Hz. edge: 'rising' or 'falling' on `ref`. The keyword arguments are
+    [analysis] settings (fractions, times in s); see AnalysisConfig.
+
+    Algorithm: find the step on `ref`; blank the switching glitch +/- blank_time with a straight
+    line; smooth with a smooth_time moving average; nominal = mean before the step; peak = the
+    largest deviation within peak_window; band = settle_fraction * |peak - nominal|; settling
+    time = after the last smoothed sample outside the band. All NaN if no edge is found or it
+    is too close to the start of the capture.
+    """
     d = np.asarray(vout, float)
     n = len(d)
     dt = 1.0 / sample_rate
@@ -239,9 +307,9 @@ def settling_analysis(
 
     # 1. step = ref channel edge through its midpoint
     i_step = find_step(ref, edge)
-    nb = max(1, _js_round(blank_time / dt))
+    nb = max(1, _js_round(blank_time / dt))  # blanking half-width (samples)
     i_a, i_b = i_step - nb, min(n - 1, i_step + nb)
-    if i_step < 0 or i_a <= 10:
+    if i_step < 0 or i_a <= 10:  # no edge, or too few samples before it for a nominal
         return SettlingResult(nan, nan, nan, nan, nan, nan, nan, sample_rate, i_step, reference), d.copy()
 
     # 2. nominal = mean of raw VOUT before the step (excluding the glitch)
@@ -276,6 +344,7 @@ def settling_analysis(
         t_set = 0.0
     else:
         i_last = i_step + int(outside[-1])
+        # still outside at the last usable sample: it never settled within the capture
         t_set = (i_last + 1 - i_step) * dt if i_last < i_stop - 1 else nan
 
     return (
@@ -292,6 +361,11 @@ class SchmittResult:
     vt_rise / vt_fall: input voltage when the output crosses its midpoint going up / down (median over
     the edges in the capture). At 1 kHz into a 0-1.8 V sine, a 100 ns output delay shifts these by < 1 mV.
     edges_per_cycle: output rising edges per input cycle; > 1 means it chatters on each crossing.
+
+    voh / vol: output high / low levels (V), the 95th / 5th percentile of the output.
+    n_rise / n_fall: output edges found. input_cycles: sine cycles in the capture.
+    For an inverting stage, vt_rise is the input level on the *falling* input crossing, so the
+    hysteresis comes out negative.
     """
 
     vt_rise: float
@@ -308,9 +382,11 @@ class SchmittResult:
 
     @property
     def hysteresis(self) -> float:
+        """vt_rise - vt_fall (V)."""
         return self.vt_rise - self.vt_fall
 
     def as_dict(self) -> dict:
+        """Fields plus hysteresis, for summary.json."""
         return {**asdict(self), "hysteresis": self.hysteresis}
 
 
@@ -336,6 +412,12 @@ def _edge_time(x: np.ndarray, k: float, lo: float, hi: float, rising: bool, fs: 
 
 
 def schmitt_analysis(ain, aout, sample_rate: float, frequency: float) -> SchmittResult:
+    """Comparator thresholds from one capture of its sine input `ain` and output `aout` (V).
+
+    sample_rate and frequency (the input sine's) in Hz. The output's midpoint crossings are
+    found with sub-sample interpolation, and the input voltage at each crossing (interpolated)
+    gives the thresholds; the median over all edges is reported.
+    """
     vin, vout = np.asarray(ain, float), np.asarray(aout, float)
     vol, voh = float(np.percentile(vout, 5)), float(np.percentile(vout, 95))
     mid = (vol + voh) / 2
@@ -386,17 +468,26 @@ class StepMetrics:
 
     @property
     def step(self) -> float:
+        """after - before (same unit as the signal)."""
         return self.after - self.before
 
     @property
     def rise_time(self) -> float:
+        """10-90 % time (s); also the fall time for a falling step."""
         return self.t90 - self.t10
 
     def as_dict(self) -> dict:
+        """Fields plus step and rise_time, for summary.json."""
         return {**asdict(self), "step": self.step, "rise_time": self.rise_time}
 
 
 def step_metrics(t, x, settle_fraction: float = 0.02) -> StepMetrics:
+    """Delay, rise time, settling and overshoot of `x` after an edge at t = 0.
+
+    t: time (s) with the edge at 0 (negative before it). x: the signal (V, or A for currents).
+    The signal is normalised so 0 = before and 1 = after; times are the first sample at or past
+    10 % / 90 %, which works for rising and falling steps alike. Times are NaN if not reached.
+    """
     t, x = np.asarray(t, float), np.asarray(x, float)
     pre, post = x[t < 0], x[t >= 0]
     tp = t[t >= 0]
@@ -434,6 +525,12 @@ def step_metrics(t, x, settle_fraction: float = 0.02) -> StepMetrics:
 
 @dataclass(frozen=True)
 class SineFit:
+    """Result of sine_fit: the tone at the known frequency in one channel.
+
+    phasor: complex amplitude (peak, V) with phase relative to the centre of the capture.
+    dc: offset (V) at the centre of the capture. n: samples fitted.
+    """
+
     phasor: complex  # x ~ dc + Re(phasor * exp(j 2 pi f t)) + drift * t
     dc: float
     resid_rms: float  # what the sine doesn't explain: noise, harmonics, other tones
@@ -441,6 +538,7 @@ class SineFit:
 
     @property
     def amplitude(self) -> float:
+        """Peak amplitude (V), not peak-to-peak."""
         return abs(self.phasor)
 
     @property
@@ -454,6 +552,7 @@ def sine_fit(x, sample_rate: float, frequency: float) -> SineFit:
 
     The fit window doesn't need a whole number of cycles. Time is centred on the capture, so two
     channels from the same capture share a phase reference and their phasor ratio is the transfer.
+    x in V, sample_rate and frequency in Hz.
     """
     x = np.asarray(x, float)
     n = len(x)
@@ -462,5 +561,6 @@ def sine_fit(x, sample_rate: float, frequency: float) -> SineFit:
     a = np.column_stack([np.cos(w), np.sin(w), np.ones(n), t])
     coef, *_ = np.linalg.lstsq(a, x, rcond=None)
     resid = x - a @ coef
-    dof = max(1, n - 4)
+    dof = max(1, n - 4)  # 4 fitted parameters
+    # x = a cos + b sin = Re((a - jb) e^{jwt}), hence the minus sign on the sine coefficient
     return SineFit(complex(coef[0], -coef[1]), float(coef[2]), float(np.sqrt(np.sum(resid**2) / dof)), n)

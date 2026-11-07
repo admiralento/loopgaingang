@@ -5,6 +5,21 @@ PSU current is the baseline (it includes the readback offset); then each bit
 is switched on alone and the extra current is compared with V / R for that
 bit. A bit that draws another bit's current points to swapped wires; a bit
 that draws nothing points to an open gate wire or a missing AD2 ground.
+
+Wiring: PSU across the load bank's VIN / GND (J5 / J6), AD2 DIO on the gate
+headers, AD2 GND on the bank's GND. No DUT, so dut.i_max does not apply (the
+bank's limit is lifted for this test only); loadbank_check.voltage (<= 1.5 V)
+keeps the resistors within their power rating.
+
+run() steps:
+1. Confirm the wiring, every bit off, PSU to `voltage`, wait settle_time.
+2. Baseline: PSU voltage and current readback (mean of `readings`) with the bank off.
+3. For each bit: switch it on alone, wait, read the current, subtract the baseline.
+   Expected = V / (R + switch_resistance). A bit passes if it is within
+   tolerance x expected + abs_tolerance (A).
+4. Every bit off. `diagnosis()` turns failures into likely causes.
+
+This test has no `issues`: a failing bit is the result, not a setup problem.
 """
 
 from __future__ import annotations
@@ -25,8 +40,13 @@ NAME = "loadbank-check"
 
 @dataclass
 class LoadBankCheckResult:
+    """Per-bit currents. Each row: bit, dio_pin, resistor_ohm, expected_a, measured_a (baseline
+    subtracted), ratio (measured / expected), closest_bit (whose expected current is nearest the
+    measurement) and ok.
+    """
+
     voltage: float  # PSU readback with the bank off
-    baseline_a: float
+    baseline_a: float  # A, PSU current readback with every bit off (subtracted from each bit)
     rows: list[dict]
 
     @property
@@ -34,10 +54,12 @@ class LoadBankCheckResult:
         return all(r["ok"] for r in self.rows)
 
     def diagnosis(self) -> list[str]:
+        """One line per failed bit, with the likely cause."""
         notes = []
         for r in self.rows:
             if r["ok"]:
                 continue
+            # under a quarter of the expected current: the gate isn't being driven at all
             if r["measured_a"] < 0.25 * r["expected_a"]:
                 notes.append(
                     f"DIO {r['dio_pin']} (bit {r['bit']}) draws no current: check that wire to the "
@@ -80,10 +102,15 @@ class LoadBankCheckResult:
 
 
 def _current(bench: Bench, n: int) -> float:
+    """PSU current readback (A), mean of n readings."""
     return float(np.mean([bench.psu.measure_current() for _ in range(n)]))
 
 
 def run(bench: Bench, lc: LoadBankCheckConfig) -> LoadBankCheckResult:
+    """Confirm the wiring, then measure every bit with the bank's current limit lifted.
+
+    lc: the [loadbank_check] section. The PSU goes through bench.psu_output (only psu.v_max).
+    """
     bank, lb = bench.loadbank, bench.cfg.loadbank
     ch = bench.cfg.psu.channel
     bench.confirm_wiring(
@@ -101,6 +128,7 @@ def run(bench: Bench, lc: LoadBankCheckConfig) -> LoadBankCheckResult:
 
 
 def _run(bench: Bench, lc: LoadBankCheckConfig) -> LoadBankCheckResult:
+    """The measurement itself (steps 1-4 in the module docstring)."""
     bank, lb = bench.loadbank, bench.cfg.loadbank
     bank.off()
     bench.psu_output(lc.voltage)
@@ -109,6 +137,7 @@ def _run(bench: Bench, lc: LoadBankCheckConfig) -> LoadBankCheckResult:
     baseline = _current(bench, lc.readings)
     log.info("bank off: %.4f V, %.2f mA (baseline)", v, baseline * 1e3)
 
+    # every bit's expected current, so a wrong reading can be matched to the bit it looks like
     expected_all = [v / (r + lb.switch_resistance) for r in lb.resistors]
     rows = []
     for bit, (pin, r) in enumerate(zip(lb.dio_pins, lb.resistors, strict=True)):
@@ -135,6 +164,7 @@ def _run(bench: Bench, lc: LoadBankCheckConfig) -> LoadBankCheckResult:
 
 
 def plot(res: LoadBankCheckResult, dut: str):
+    """Bar chart: expected and measured current per bit; failed bits are marked with a cross."""
     del dut
     bits = [f"B{r['bit']}\nDIO {r['dio_pin']}\n{r['resistor_ohm']:g} Ω" for r in res.rows]
     exp = np.array([r["expected_a"] for r in res.rows]) * 1e3

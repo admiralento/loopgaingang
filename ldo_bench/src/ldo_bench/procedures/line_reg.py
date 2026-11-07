@@ -4,6 +4,25 @@ The sweep starts low (in or near dropout) and goes up, so the same run gives
 the dropout knee and the in-regulation slope. VIN is measured at the board
 with the AD2 and that measured value is used for the fit, so cable drop does
 not distort it. VOUT comes from the DMM when one is configured.
+
+With line_reg.vin_source = "psu" and a DMM, VIN is the PSU's own readback instead and no scope
+probes are needed (the DMM measures VOUT); that readback includes cable drop and the PSU's
+readback error.
+
+run() steps:
+1. Confirm the wiring, set the load code (held for the whole sweep).
+2. For each VIN in `sweep_points` (vin_start to vin_stop, low to high): PSU to that VIN, then one
+   `bench.measure_point` (VOUT, VIN, optionally the PSU's V / I readback).
+3. Load bank off. `analysis.line_regulation` on (measured VIN, VOUT): VOUT at the highest VIN is
+   the reference; the dropout point is where VOUT falls `dropout_fraction` below it; the slope
+   (dVOUT/dVIN, V/V) is a straight-line fit from fit_vin_min, or by default from KNEE_STEPS sweep
+   steps above the dropout point, to the top of the sweep.
+
+Validity check: at every point with VIN at least 0.5 V above vout_nominal (or at the top point
+if the sweep stops lower), where the LDO should be regulating, VOUT must be near nominal
+(bench.vout_issue). Points below that are in or near
+dropout and are allowed to be low. Any failure makes the run invalid and the plot shows only the
+measured data, with no fit.
 """
 
 from __future__ import annotations
@@ -21,19 +40,21 @@ from ldo_bench.config import LineRegConfig
 log = logging.getLogger(__name__)
 
 NAME = "line-reg"
-KNEE_STEPS = 3  # default fit starts this many sweep steps above the dropout point
+KNEE_STEPS = 3  # default fit starts this many sweep steps above the dropout point (clear of the knee's curve)
 
 
 @dataclass
 class LineRegResult:
-    load_code: int
-    i_load: float
+    """A VIN sweep at one load. `rows` is data.csv: one dict per VIN point (volts, amps)."""
+
+    load_code: int  # load bank code held during the sweep
+    i_load: float  # A, that code's current at the nominal VOUT
     rows: list[dict]
-    reg: LineRegulation
-    vout_source: str
-    vin_source: str = "ad2"
-    vout_nominal: float = 1.0
-    issues: list[str] = field(default_factory=list)
+    reg: LineRegulation  # slope, fit range, dropout (see analysis.LineRegulation)
+    vout_source: str  # "dmm" or "ad2"
+    vin_source: str = "ad2"  # "ad2" = measured at the board, "psu" = PSU readback
+    vout_nominal: float = 1.0  # V
+    issues: list[str] = field(default_factory=list)  # setup problems: non-empty = not valid
 
     @property
     def vin_label(self) -> str:
@@ -83,6 +104,8 @@ class LineRegResult:
 
 
 def sweep_points(lr: LineRegConfig) -> np.ndarray:
+    """VIN setpoints (V): vin_start to vin_stop in vin_step, always ending exactly on vin_stop."""
+    # 1e-9 so float error doesn't drop the last whole step
     n = int(np.floor((lr.vin_stop - lr.vin_start) / lr.vin_step + 1e-9)) + 1
     pts = lr.vin_start + lr.vin_step * np.arange(n)
     if pts[-1] < lr.vin_stop - 1e-9:
@@ -91,6 +114,7 @@ def sweep_points(lr: LineRegConfig) -> np.ndarray:
 
 
 def wiring(bench: Bench, lr: LineRegConfig) -> list[str]:
+    """Wiring lines shown before the run; the scope lines depend on vin_source and the DMM."""
     a, lb = bench.cfg.ad2, bench.cfg.loadbank
     lines = ["PSU -> VIN (DC input, not through the buffer)"]
     if lr.vin_source == "psu" and bench.dmm is not None:
@@ -105,6 +129,11 @@ def wiring(bench: Bench, lr: LineRegConfig) -> list[str]:
 
 
 def run(bench: Bench, lr: LineRegConfig) -> LineRegResult:
+    """Sweep VIN and fit line regulation (see the module docstring for the steps and checks).
+
+    lr: the [line_reg] section. Every setpoint goes through bench.vin_from_psu, which refuses
+    anything above dut.vin_max. Setup problems are recorded in `issues`, never raised.
+    """
     bank = bench.loadbank
     vins = sweep_points(lr)
     bench.confirm_wiring("line regulation", wiring(bench, lr), ref_probe=("vin", 0))
@@ -129,7 +158,7 @@ def run(bench: Bench, lr: LineRegConfig) -> LineRegResult:
             "vout_source": p.source,
             "vout_ad2_v": p.vout_ad2,
             "load_code": lr.load_code,
-            "i_est_a": bank.current(lr.load_code, p.vout),
+            "i_est_a": bank.current(lr.load_code, p.vout),  # bank resistors at the measured VOUT
         }
         if lr.psu_readback:
             # With vin_source="psu" the voltage readback is already vin_v.
@@ -208,6 +237,9 @@ def _plot_invalid(res: LineRegResult, dut: str):
 
 
 def plot(res: LineRegResult, dut: str):
+    """Top: VOUT over the whole sweep with the dropout point and fit range. Bottom: the fit range
+    zoomed in, as mV from VOUT at the highest VIN, with the fit line. Invalid runs: _plot_invalid.
+    """
     if res.issues:
         return _plot_invalid(res, dut)
     r = res.reg

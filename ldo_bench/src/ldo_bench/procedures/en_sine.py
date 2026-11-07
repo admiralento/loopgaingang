@@ -5,6 +5,22 @@ EN_VDD (J1 9-11 to INB = VIN through R13). EN_OUT is on J8.2, EN_AIN on TP6. A s
 between 0 V and EN_VDD sweeps the input through both thresholds every cycle, so the output's
 crossings give VT+ and VT- (and their difference, the hysteresis), its levels VOH / VOL, its edge
 times and whether it chatters. Several separate captures give the spread of the thresholds.
+
+Scope ref channel on TP6 (EN_AIN, also the trigger), scope vout channel on J8.2 (EN_OUT); both on
+the 5 V range. The thresholds are read from EN_AIN as measured at the pin, so R23 and the
+wavegen's own error don't matter.
+
+run() steps:
+1. Confirm the wiring, PSU ramps VIN (EN_VDD comes from it), W1 starts the sine.
+2. `captures` captures, each triggered on EN_AIN rising through the sine's midpoint and spanning
+   `cycles` periods. If one never triggers, a forced capture is recorded with an issue and the
+   loop stops.
+3. W1 off. `analysis.schmitt_analysis` on every capture.
+4. Validity checks on the first capture: the EN_AIN swing within SWING_TOLERANCE of the sine's
+   (scope on TP6, J6 at 5-6), and EN_OUT swinging at least 30 % of VIN with at least one rising
+   edge (scope on EN_OUT, EN_VDD powered). These are issues (the run is invalid).
+5. Only on a valid run, findings about the block itself go in `notes` (the run stays valid):
+   more than 1.2 output edges per input cycle (chatter), VOH under 80 % of EN_VDD, no hysteresis.
 """
 
 from __future__ import annotations
@@ -23,16 +39,21 @@ from ldo_bench.instruments.base import Capture, ChannelSetup, InstrumentError
 log = logging.getLogger(__name__)
 
 NAME = "enable-sine"
-SWING_TOLERANCE = 0.3
+SWING_TOLERANCE = 0.3  # EN_AIN's measured swing must be within 30 % of the sine's peak-to-peak
 
 
 @dataclass
 class EnSineResult:
-    vin: float
-    frequency: float
-    low: float
+    """Thresholds from every capture, plus the first capture's waveforms.
+
+    The summary and report give the mean and spread (standard deviation) over the captures.
+    """
+
+    vin: float  # V, PSU setpoint (EN_VDD is VIN through R13)
+    frequency: float  # Hz, sine frequency
+    low: float  # V, sine minimum / maximum as programmed on W1
     high: float
-    captures: list[SchmittResult]
+    captures: list[SchmittResult]  # one per capture
     t: np.ndarray  # first capture, for plotting / CSV
     ain: np.ndarray
     aout: np.ndarray
@@ -40,6 +61,7 @@ class EnSineResult:
     notes: list[str] = field(default_factory=list)  # real findings worth a look (chatter, weak VOH)
 
     def _stat(self, key: str) -> tuple[float, float]:
+        """(mean, std) of one SchmittResult field over the captures, ignoring NaNs."""
         v = np.array([getattr(c, key) for c in self.captures], float)
         v = v[np.isfinite(v)]
         return (float(v.mean()), float(v.std())) if len(v) else (float("nan"), float("nan"))
@@ -124,6 +146,7 @@ class EnSineResult:
 
 
 def wiring(bench: Bench, es: EnSineConfig) -> list[str]:
+    """Wiring lines shown before the run."""
     a = bench.cfg.ad2
     return [
         "PSU -> VIN_DC (JP4 to DC); J1 9-11: EN_VDD from INB (other J1 rails as you like)",
@@ -134,17 +157,22 @@ def wiring(bench: Bench, es: EnSineConfig) -> list[str]:
 
 
 def run(bench: Bench, es: EnSineConfig) -> EnSineResult:
+    """Sweep EN_AIN with the sine and analyse EN_OUT (see the module docstring for the steps).
+
+    es: the [en_sine] section. Setup problems are recorded in `issues`, never raised.
+    """
     a = bench.cfg.ad2
     lo, hi = es.low, es.sine_high
     bench.confirm_wiring(
         "enable block (sine)", wiring(bench, es), ref_probe=("en_ain", 0), ch1_probe="en_out"
     )
+    # 5 V range (+/-2.5 V) on both: covers the 0-EN_VDD sine and EN_OUT at the best resolution
     setups = {a.vout_channel: ChannelSetup(5.0, 0.0), a.ref_channel: ChannelSetup(5.0, 0.0)}
     bench.vin_from_psu(es.vin)
     bench.awg.set_sine(es.wavegen_channel, frequency=es.frequency, low=lo, high=hi)
-    bench.sleep(0.05)
-    rate = es.n_samples / (es.cycles / es.frequency)
-    level = (lo + hi) / 2
+    bench.sleep(0.05)  # let the wavegen output start
+    rate = es.n_samples / (es.cycles / es.frequency)  # n_samples spread over `cycles` periods
+    level = (lo + hi) / 2  # trigger at the sine's midpoint (V)
     issues: list[str] = []
     caps: list[Capture] = []
     for k in range(es.captures):
@@ -156,7 +184,7 @@ def run(bench: Bench, es: EnSineConfig) -> EnSineResult:
             "trigger_level": level,
             "edge": "rising",
             "pre_trigger": 0.1,
-            "stimulus": lambda: None,
+            "stimulus": lambda: None,  # the sine runs continuously: nothing to do once armed
             "timeout": es.timeout,
         }
         try:
@@ -186,6 +214,7 @@ def run(bench: Bench, es: EnSineConfig) -> EnSineResult:
             f"scope {a.ref_channel} swings {swing_in:.2f} V but the sine is {hi - lo:.2f} V: is it on TP6 (EN_AIN), "
             "and is J6 at 5-6 (EN_FG -> EN_AIN)?"
         )
+    # EN_OUT swings rail to rail of EN_VDD (~VIN) when it works; under 30 % of that it isn't switching
     if (r0.voh - r0.vol) < 0.3 * es.vin or r0.n_rise == 0:
         issues.append(
             f"EN_OUT doesn't switch (scope {a.vout_channel} swings {r0.voh - r0.vol:.2f} V, {r0.n_rise} rising "
@@ -194,7 +223,7 @@ def run(bench: Bench, es: EnSineConfig) -> EnSineResult:
     notes = []
     if not issues:
         epc = np.nanmean([r.edges_per_cycle for r in results])
-        if epc > 1.2:
+        if epc > 1.2:  # a clean comparator gives exactly 1; allow a little for partial cycles
             notes.append(f"EN_OUT toggles {epc:.1f} times per input cycle: it chatters around the threshold")
         if r0.voh < 0.8 * es.vin:
             notes.append(f"VOH {r0.voh:.2f} V is below 80 % of EN_VDD ({es.vin:.2f} V)")
@@ -207,6 +236,10 @@ def run(bench: Bench, es: EnSineConfig) -> EnSineResult:
 
 
 def plot(res: EnSineResult, dut: str):
+    """EN_AIN and EN_OUT against time (left) and EN_OUT against EN_AIN, the transfer (right).
+
+    Valid runs mark VT+ / VT- from the first capture; invalid runs show the issues in a red box.
+    """
     import matplotlib.pyplot as plt
 
     fig = plt.figure(figsize=(11.0, 5.6), layout="constrained")

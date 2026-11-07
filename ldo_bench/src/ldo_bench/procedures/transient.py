@@ -1,4 +1,24 @@
-"""Shared machinery for the transient tests: repeated triggered captures, aligned and averaged."""
+"""Shared machinery for the transient tests: repeated triggered captures, aligned and averaged.
+
+Used by load-tran and line-tran. A transient test repeats the same step (load bank code change or
+VIN step) `averages` times. Each repetition is one triggered AD2 capture of two channels: VOUT and
+the "ref" channel, which carries the stimulus and is also the trigger source. Because the LDO's
+response is the same on every repetition, averaging the captures with their trigger points lined
+up (`align_average`) removes random noise without smearing the response.
+
+Flow for one edge (the test module calls these in order):
+
+1. `averaged_step` arms the optional 54621A cross-check scope, then takes the AD2 captures and
+   averages them. If the AD2 never triggers it records one forced (untriggered) capture instead of
+   failing, so the plot shows what was actually on the channels.
+2. The test runs `analysis.settling_analysis` on the averaged VOUT / ref traces.
+3. `capture_issues` checks the data for setup problems (no edge on ref, ref swinging the wrong
+   amount, VOUT not near nominal before the step). Any issue makes the edge invalid: its data is
+   still saved and plotted, but no metrics are reported.
+4. `analyse_xcheck` runs the same analysis on the cross-check scope's traces. Its problems are
+   reported separately and never make the AD2 result invalid.
+5. `edge_report` / `plot_edges` format the result (one report block / plot column per edge).
+"""
 
 from __future__ import annotations
 
@@ -18,9 +38,17 @@ log = logging.getLogger(__name__)
 
 
 def align_average(captures: list[Capture]) -> Capture:
-    """Average captures sample-by-sample with their trigger points lined up."""
+    """Average captures sample-by-sample with their trigger points lined up.
+
+    Each capture's trigger_index can differ by a few samples (the driver finds the edge in the
+    data), so every capture is cut to the same number of samples before and after its own trigger:
+    the largest window that all of them cover. The result's trigger_index is that common pre-trigger
+    length, and edge_found is True only if every capture found its edge. Raises ValueError if the
+    list is empty.
+    """
     if not captures:
         raise ValueError("no captures")
+    # common window: the shortest pre-trigger and post-trigger stretch among the captures
     pre = min(c.trigger_index for c in captures)
     post = min(len(c.ch1) - c.trigger_index for c in captures)
 
@@ -38,13 +66,23 @@ SWING_TOLERANCE = 0.3  # the trigger channel's step should be within 30 % of wha
 def capture_issues(
     bench: Bench, metrics, cap: Capture, ref: np.ndarray, *, expected_swing: float, ref_desc: str
 ) -> list[str]:
-    """Setup problems visible in a transient capture. Empty list = it shows the real stimulus and VOUT."""
+    """Setup problems visible in a transient capture. Empty list = it shows the real stimulus and VOUT.
+
+    metrics: the SettlingResult from settling_analysis on this capture. ref: the ref channel's
+    samples (V). expected_swing: the step the ref channel should show (V), e.g. the DIO high level
+    or vin_high - vin_low. ref_desc: what the ref channel should be on, used in the messages.
+
+    Checks, in order: the driver found an edge in the data; the analysis found the step; the ref
+    channel's swing is within SWING_TOLERANCE of expected_swing (a probe on the wrong signal);
+    VOUT before the trigger is near dut.vout_nominal (bench.vout_issue).
+    """
     ch, vch = bench.cfg.ad2.ref_channel, bench.cfg.ad2.vout_channel
     issues = []
     if not cap.edge_found:
         issues.append(f"the scope triggered but scope {ch}'s data shows no clean edge: is it on {ref_desc}?")
     if metrics.step_index < 0:
         issues.append(f"no step found on scope {ch}: is it on {ref_desc}?")
+    # 2nd / 98th percentiles rather than min / max, so single-sample switching spikes don't count
     lo, hi = np.percentile(ref, 2), np.percentile(ref, 98)
     swing = hi - lo
     if abs(swing - expected_swing) > SWING_TOLERANCE * expected_swing:
@@ -52,6 +90,7 @@ def capture_issues(
             f"scope {ch} swings {swing:.3f} V but {ref_desc} should swing {expected_swing:.3f} V: "
             "probably on the wrong signal"
         )
+    # pre-trigger VOUT, stopping 10 samples short of the trigger to stay clear of the step itself
     before = cap.channel(vch)[: max(10, cap.trigger_index - 10)].mean()
     issue = bench.vout_issue(float(before), source=f"scope {vch}")
     if issue:
@@ -61,32 +100,42 @@ def capture_issues(
 
 @dataclass
 class XScopeSetup:
-    """How the cross-check scope's channels are set for one test (the rest comes from [xscope])."""
+    """How the cross-check scope's channels are set for one test (the rest comes from [xscope]).
 
-    ref_range: float
-    ref_offset: float
+    The ref channel's scale depends on the stimulus (a 3.3 V DIO edge or a small VIN step), so each
+    test passes it; the VOUT channel's range and the channel numbers come from the config.
+    """
+
+    ref_range: float  # V, full screen (8 divisions) on the 54621A
+    ref_offset: float  # V at the screen centre
 
 
 @dataclass
 class XCheck:
-    """One edge as seen by the cross-check scope (54621A), analysed like the AD2 capture."""
+    """One edge as seen by the cross-check scope (54621A), analysed like the AD2 capture.
 
-    model: str
-    averages: int
+    When the scope gave no data (not opened, busy, failed to arm or never completed), the arrays
+    are empty, metrics is None and issues says why.
+    """
+
+    model: str  # instrument model, e.g. "54621A"
+    averages: int  # acquisitions the scope averaged (0 = no data)
     t: np.ndarray  # s, 0 at the step it found (else at its trigger)
-    vout: np.ndarray
-    vout_smoothed: np.ndarray
-    ref: np.ndarray
-    metrics: SettlingResult | None
-    issues: list[str] = field(default_factory=list)
+    vout: np.ndarray  # V, averaged VOUT from the scope
+    vout_smoothed: np.ndarray  # V, VOUT after settling_analysis' glitch removal and moving average
+    ref: np.ndarray  # V, the scope's ref (trigger) channel
+    metrics: SettlingResult | None  # None when there was no data
+    issues: list[str] = field(default_factory=list)  # cross-check problems only (never the AD2's)
 
 
 @dataclass
 class StepCapture:
+    """What `averaged_step` returns for one edge."""
+
     cap: Capture  # the AD2's averaged capture
-    issues: list[str]
+    issues: list[str]  # AD2 trigger problems (empty if every capture triggered)
     xtraces: dict | None = None  # cross-check scope traces by channel, if it delivered
-    xissue: str | None = None
+    xissue: str | None = None  # why the cross-check scope has no traces, if it doesn't
 
 
 def averaged_step(
@@ -110,8 +159,16 @@ def averaged_step(
 
     With a cross-check scope (bench.xscope and `xscope` given) its averaged acquisition is armed
     first, sees the same steps, and is collected afterwards. Its problems never affect the AD2's.
+
+    setups: AD2 channel range / offset by channel. trigger_channel / trigger_level (V) /
+    trigger_edge: the AD2 trigger, on the ref channel. label: name used in log messages.
+
+    If the AD2 times out on capture k, the run is not stopped: the issue is recorded, a forced
+    capture is taken, and the function returns early with the average of the captures that did
+    trigger (or the forced capture if none did). The cross-check scope is still collected.
     """
     xs, xs_issue, xs_traces = bench.xscope if xscope is not None else None, None, None
+    # A 54621A left mid-:DIGitize by an earlier edge queues every command, so don't touch it.
     if xs is not None and xs.busy:
         xs, xs_issue = None, f"skipped: the {xs.model} is still busy from an earlier edge (press Run/Stop)"
     if xs is not None:
@@ -136,15 +193,18 @@ def averaged_step(
             xs, xs_issue = None, f"could not arm: {e}"
 
     def again() -> None:
+        """One more step for the cross-check scope, if it missed triggers during the AD2 captures."""
         start()
         bench.sleep(tc.rest_time)
         step()
 
     def collect_x() -> None:
+        """Wait for the cross-check scope's average and read it; failures only set xs_issue."""
         nonlocal xs_traces, xs_issue
         if xs is None:
             return
         try:
+            # up to 2 x averages extra steps if it missed some of the AD2's
             xs_traces = xs.collect(again, 2 * tc.averages, bench.cfg.xscope.timeout)
         except InstrumentError as e:
             xs_issue = str(e)
@@ -152,7 +212,7 @@ def averaged_step(
     caps: list[Capture] = []
     for k in range(tc.averages):
         start()
-        bench.sleep(tc.rest_time)
+        bench.sleep(tc.rest_time)  # let VOUT settle at the starting level before the next step
         kw = {
             "sample_rate": tc.sample_rate,
             "n_samples": tc.n_samples,
@@ -176,6 +236,7 @@ def averaged_step(
             )
             start()
             bench.sleep(tc.rest_time)
+            # force=True: acquire without waiting for the trigger (the step is still applied)
             forced = bench.scope.capture(**kw, force=True)
             collect_x()
             return StepCapture(align_average(caps) if caps else forced, [issue], xs_traces, xs_issue)
@@ -193,7 +254,13 @@ def analyse_xcheck(
     expected_swing: float,
     ref_desc: str,
 ) -> XCheck | None:
-    """Run the same settling analysis on the cross-check scope's traces, with their own checks."""
+    """Run the same settling analysis on the cross-check scope's traces, with their own checks.
+
+    Returns None when no cross-check scope was wanted. When it was wanted but has no data, returns
+    an XCheck with empty arrays and the reason in issues. Otherwise the checks are the same as
+    capture_issues (step found, ref swing within SWING_TOLERANCE, VOUT near nominal before t = 0),
+    and the time axis is shifted so 0 is the step the analysis found.
+    """
     if bench.xscope is None:
         if bench.xscope_issue:  # wanted but couldn't be opened: say so on every edge
             empty = np.array([])
@@ -205,7 +272,7 @@ def analyse_xcheck(
         return XCheck(model, 0, empty, empty, empty, empty, None, [sc.xissue or "no data"])
     xc = bench.cfg.xscope
     tv, tr = sc.xtraces[xc.vout_channel], sc.xtraces[xc.ref_channel]
-    fs = 1.0 / float(tv.t[1] - tv.t[0])
+    fs = 1.0 / float(tv.t[1] - tv.t[0])  # the scope returns a uniform time axis
     m, smoothed = settling_analysis(
         tv.v,
         tr.v,
@@ -236,7 +303,10 @@ def analyse_xcheck(
 
 
 def xcheck_row(x: XCheck | None) -> dict:
-    """Cross-check fields for data.csv / summary.json (empty if no cross-check scope)."""
+    """Cross-check fields for data.csv / summary.json (empty if no cross-check scope).
+
+    Metrics are NaN unless the cross-check is clean, so a bad cross-check never looks like a number.
+    """
     if x is None:
         return {}
     m = x.metrics
@@ -253,6 +323,7 @@ def xcheck_row(x: XCheck | None) -> dict:
 
 
 def xcheck_csv(x: XCheck) -> list[dict]:
+    """The cross-check scope's waveform as CSV rows (t in s, voltages in V)."""
     return [
         {"t_s": float(t), "vout_v": float(v), "vout_smoothed_v": float(f), "ref_v": float(r)}
         for t, v, f, r in zip(x.t, x.vout, x.vout_smoothed, x.ref, strict=True)
@@ -260,7 +331,10 @@ def xcheck_csv(x: XCheck) -> list[dict]:
 
 
 def xcheck_report(e) -> list[str]:
-    """Cross-check scope lines for one edge (never affects the AD2 result's validity)."""
+    """Cross-check scope lines for one edge (never affects the AD2 result's validity).
+
+    `e` is a test's EdgeResult. The difference from the AD2's peak is shown only when both are valid.
+    """
     x = getattr(e, "xcheck", None)
     if x is None:
         return []
@@ -277,7 +351,13 @@ def xcheck_report(e) -> list[str]:
 
 
 def edge_report(e, extra: list[str] | None = None) -> list[str]:
-    """Report lines for one edge. Invalid edges list their setup issues and no metrics."""
+    """Report lines for one edge. Invalid edges list their setup issues and no metrics.
+
+    `e` is a test's EdgeResult (needs .title, .metrics, .issues, optionally .xcheck). `extra` lines
+    (e.g. line-tran's mV per V) go between the peak and the settling time. Also warns when, with
+    settle_reference "pre", VOUT ends outside the band around the pre-step level (a DC shift
+    bigger than the band, e.g. load regulation on a large step), since it can then never settle.
+    """
     lines = [f"  {e.title}"]
     issues = list(getattr(e, "issues", []))
     if issues:
@@ -320,6 +400,11 @@ def plot_edges(
     the issues in a red box, so a wrong setup is obvious and nothing looks like a result.
     Separate panels rather than two y-axes on one plot (V and mV scales are easy to misread).
     Each edge needs .title, .metrics, .t, .vout, .vout_smoothed, .ref, .trigger_level, .issues.
+
+    ref_label: y label of the top panel. vout_nominal: drawn as the expected VOUT on invalid edges.
+    full: show the whole capture instead of zooming on the step (plot_full.png). window: time after
+    the step to show (s); None picks it from the settling times. The cross-check scope's traces,
+    if any, are overlaid in another colour. Returns the matplotlib Figure.
     """
     from matplotlib.ticker import FormatStrFormatter
 
@@ -418,6 +503,7 @@ def plot_edges(
                     fontsize=8,
                     color=plotting.INK_2,
                 )
+            # the sample closest to the peak value (the analysis returns the value, not its index)
             i_pk = int(np.argmin(np.abs(e.vout_smoothed - m.peak)))
             ax.plot(
                 us[i_pk],

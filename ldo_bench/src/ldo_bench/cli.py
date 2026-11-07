@@ -1,4 +1,26 @@
-"""Command-line interface: `uv run ldo-bench --help`."""
+"""Command-line interface: `uv run ldo-bench --help`.
+
+One command per test (load-tran, line-tran, load-reg, line-reg, iq, psrr, enable-sine,
+enable-startup, psu-check, loadbank-check), plus check-config, discover and smoke. Every test
+command follows the same pattern:
+
+  1. Load and validate the config (`_load`). Nothing is touched if it's invalid.
+  2. Apply command-line overrides by copying the test's section with the new values and
+     re-validating the whole config (`_load_with`), so an option goes through exactly the
+     same safety checks as the TOML file.
+  3. Open the bench (`_bench`), which shuts everything down on the way out.
+  4. Run the procedure: `procedures.<test>.run(bench, section, ...)` returns a result object.
+  5. Save the run folder (`_save`; see results.py), inside the `with` block so instrument
+     IDs are still available.
+  6. Print the report (`_echo_report`) and where it was saved (`_saved`).
+
+Exit codes:
+  0    success
+  1    instrument error (not found, refused a command, a safety limit tripped)
+  2    bad config file or command-line option
+  3    the test finished but found a setup problem (data saved, folder marked _INVALID)
+  130  Ctrl-C, or wiring not confirmed (outputs are off)
+"""
 
 from __future__ import annotations
 
@@ -16,6 +38,7 @@ from ldo_bench.instruments.base import InstrumentError
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 
+# Options shared by several commands.
 ConfigOpt = Annotated[
     Path, typer.Option("--config", "-c", exists=True, dir_okay=False, help="Bench TOML config")
 ]
@@ -72,6 +95,7 @@ class _ConsoleFormatter(logging.Formatter):
 
 
 def _logging(verbose: bool) -> None:
+    """Send log messages to the console: INFO and up, or DEBUG with -v. Quietens noisy libraries."""
     handler = logging.StreamHandler()
     handler.setFormatter(_ConsoleFormatter(verbose))
     logging.basicConfig(level=logging.DEBUG if verbose else logging.INFO, handlers=[handler], force=True)
@@ -80,6 +104,7 @@ def _logging(verbose: bool) -> None:
 
 
 def _load(path: Path) -> BenchConfig:
+    """Load and validate the config; on any validation error print it and exit 2."""
     try:
         return load_config(path)
     except ValidationError as e:
@@ -97,7 +122,11 @@ def _bench(
     use_dmm: bool = True,
     use_xscope: bool = False,
 ):
-    """Open the bench and turn instrument errors and Ctrl-C into clean exits."""
+    """Open the bench and turn instrument errors and Ctrl-C into clean exits.
+
+    InstrumentError -> exit 1; KeyboardInterrupt (Ctrl-C or wiring not confirmed) -> exit 130.
+    Bench.shutdown has already run by the time either is reported.
+    """
     try:
         with open_bench(
             cfg,
@@ -164,12 +193,14 @@ def smoke(
     """Quick sanity check: power up, read VOUT at no load and full load, power down."""
     _logging(verbose)
     cfg = _load(config)
+    # --vin isn't re-validated here; Bench.vin_from_psu still refuses anything above the ceilings.
     vin = vin if vin is not None else (cfg.load_reg.vin if cfg.load_reg else cfg.dut.vout_nominal + 0.6)
     with _bench(cfg, sim, psu, ad_serial, yes) as bench:
         _smoke(bench, vin)
 
 
 def _smoke(bench: Bench, vin: float) -> None:
+    """Body of `smoke`: VIN on, print a table at code 0 and at the heaviest allowed code, load off."""
     if bench.is_sim:
         typer.secho(SIM_BANNER, fg="magenta", bold=True)
     a = bench.cfg.ad2
@@ -198,6 +229,7 @@ def _smoke(bench: Bench, vin: float) -> None:
 
 
 def _section(cfg: BenchConfig, name: str):
+    """The config section for a test ('load-tran' -> cfg.load_tran); exit 2 if the file has none."""
     sec = getattr(cfg, name.replace("-", "_"))
     if sec is None:
         typer.secho(f"The config has no [{name.replace('-', '_')}] section.", fg="red", err=True)
@@ -206,7 +238,12 @@ def _section(cfg: BenchConfig, name: str):
 
 
 def _load_with(cfg: BenchConfig, **sections) -> BenchConfig:
-    """Re-validate the config with some sections replaced (keeps the safety checks)."""
+    """Re-validate the config with some sections replaced (keeps the safety checks).
+
+    `sections` maps a section name to its new model, e.g. load_tran=lt.model_copy(update=...).
+    model_copy doesn't validate, so this dump-and-validate is what checks the new values. Exit 2
+    if they're invalid.
+    """
     data = cfg.model_dump()
     data.update({k: v.model_dump() for k, v in sections.items()})
     try:
@@ -224,6 +261,10 @@ def _save(
     Everything saved is what was measured. Runs with setup problems are saved too, so the plot
     shows what went wrong, but their folder ends in _INVALID and summary.json has valid=false.
     Simulated runs are not saved unless --save-sim (then marked SIM everywhere).
+
+    `module` is the procedure module (its NAME, plot() and optional extra_plots()); `res` is its
+    result (rows, summary(), optional issues and extra_csvs()). Returns the run folder, or None
+    if nothing was saved.
     """
     from ldo_bench import plotting
     from ldo_bench.results import RunDir
@@ -252,12 +293,17 @@ SIM_BANNER = "SIMULATED (--sim): these numbers come from the simulator, not the 
 
 
 def _echo_report(bench: Bench, res) -> None:
+    """Print the procedure's text report, under the SIM banner if simulated."""
     if bench.is_sim:
         typer.secho(SIM_BANNER, fg="magenta", bold=True)
     typer.echo(res.report())
 
 
 def _saved(path: Path | None, *, fg: str = "green", res=None) -> None:
+    """Print where the run was saved and any setup problems; exit 3 if there were any.
+
+    `fg` is the colour of the "Saved to" line when there are no issues (e.g. yellow for a failed check).
+    """
     issues = list(getattr(res, "issues", []) or [])
     if issues:
         typer.secho("SETUP PROBLEM: this run is NOT a valid measurement.", fg="red", bold=True)
@@ -304,7 +350,7 @@ def load_tran(
     lt = _section(cfg, "load-tran")
     update = {}
     try:
-        bank = LoadBank(cfg.loadbank, None)
+        bank = LoadBank(cfg.loadbank, None)  # no DIO: only used to convert currents to codes
         if low is not None:
             update["code_low"] = parse_load(low, bank, cfg.dut.vout_nominal)
         if high is not None:
@@ -321,7 +367,7 @@ def load_tran(
         if window_ms <= 0:
             typer.secho("--window-ms must be positive", fg="red", err=True)
             raise typer.Exit(2)
-        update["sample_rate"] = lt.n_samples / (window_ms * 1e-3)
+        update["sample_rate"] = lt.n_samples / (window_ms * 1e-3)  # keep n_samples, stretch the window
     if averages is not None:
         update["averages"] = averages
     if update:
@@ -521,6 +567,7 @@ def iq(
     if states is not None:
         update["states"] = [s.strip() for s in states.split(",") if s.strip()]
     if update:
+        # Validate the section on its own first (a clearer error); _load_with then checks the whole config.
         try:
             sec = type(sec).model_validate(sec.model_dump() | update)
         except ValidationError as e:
@@ -712,4 +759,5 @@ def load_reg(
 
 
 def main() -> None:
+    """Entry point for the `ldo-bench` script and `python -m ldo_bench`."""
     app()

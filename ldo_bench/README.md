@@ -1,254 +1,144 @@
 # ldo-bench
 
-Bench automation for characterizing the LDO on the JAFWAK board. It covers load regulation, line regulation, load transient and line transient.
+Bench automation for characterizing our LDO (the JAFWAK board) and the TPS7A7001 demo board. One command per test: it checks the config, tells you how to wire the bench, runs the measurement, then saves the data, a plot and a summary.
 
-Hardware:
-- Agilent E3648A (dual output) or E3638A power supply over GPIB (XyphroLabs UsbGpib adapter)
-- Digilent Analog Discovery 2
-- Agilent 34401A DMM (optional) on its RS-232 port through a USB-serial adapter. It measures VOUT in the DC tests.
+| Test | Command | Measures |
+|---|---|---|
+| Load regulation | `load-reg` | VOUT vs load current → output resistance |
+| Line regulation | `line-reg` | VOUT vs VIN → mV/V and the dropout voltage |
+| Load transient | `load-tran` | VOUT after a load step → peak deviation, settling time |
+| Line transient | `line-tran` | VOUT after a VIN step (through the BUF634) |
+| PSRR | `psrr` | VIN ripple rejection, 100 Hz – 1 MHz |
+| Quiescent current | `iq` | supply current enabled / disabled vs VIN |
+| Enable thresholds | `enable-sine` | enable comparator VT+, VT-, hysteresis (JAFWAK) |
+| Startup | `enable-startup` | VOUT / VREF / current after the enable edge (JAFWAK) |
+| Bench checks | `discover`, `psu-check`, `loadbank-check`, `smoke` | instruments found, supply accuracy, load bank wiring, quick power-up |
 
-## Setup
+**Docs:**
+- [docs/tests.md](docs/tests.md): each test's wiring, what it does, what it computes, its options.
+- [docs/instruments.md](docs/instruments.md): setting up the supply, DMM, AD2 and 54621A, and the GPIB / RS-232 connections.
+- [docs/architecture.md](docs/architecture.md): how the code is organised, the safety layer, the simulator, adding a test or an instrument.
+- [docs/bench-log.md](docs/bench-log.md): what we built and measured on 2026-11-06, and the problems we hit.
 
-1. Install [uv](https://docs.astral.sh/uv/).
-2. Install the [Digilent WaveForms](https://digilent.com/reference/software/waveforms/waveforms-3/start) runtime. It provides the AD2 driver library.
-3. Run `uv sync` in this folder.
-4. GPIB adapter (XyphroLabs UsbGpib, a USBTMC device):
-   - **macOS / Linux:** nothing to install. pyvisa-py talks to it through the bundled libusb.
-   - **Windows:** install NI-VISA, which supports USBTMC natively.
-5. Run `uv run ldo-bench discover` to check that both instruments are found.
+## Hardware
 
-### UsbGpib adapter
+- **Agilent E3648A** (dual output; an E3638A works too): VIN, or the BUF634 rail for line-tran / psrr. On GPIB through a XyphroLabs UsbGpib adapter.
+- **Digilent Analog Discovery 2:** scope (VOUT, VIN / trigger), W1 (line-tran, psrr and enable-sine stimulus), DIO 0–4 (load bank), DIO 5–6 and V+ (JAFWAK enable).
+- **Agilent 34401A:** VOUT in the DC tests, and the `iq` measurement. On RS-232 through a USB-serial adapter.
+- **Agilent 54621A** (optional): an independent capture of every transient edge.
+- **Load banks:** binary-weighted resistors switched by FETs from AD2 DIO 0–4. JAFWAK has one on board (`load_cell.kicad_sch`); the demo board uses `Switched_R_Load_Bank`.
+- **Spectrum analyzer:** coming, for PSRR past what the AD2 can resolve.
 
-The adapter only appears on USB when the power supply is **on** with its **GPIB interface enabled**. On the supply, set the I/O config on the front panel to GPIB/HP-IB, not RS-232.
+## Quick start
 
-The LED shows the adapter's state:
-- **On:** connected to the instrument and visible on USB.
-- **Blinking:** the instrument is off or its GPIB port is disabled. The adapter is not visible on USB.
-- **Off:** no USB power.
-
-The adapter finds the instrument's GPIB address on its own.
-
-Close the WaveForms GUI before running tests, because only one program can open the AD2.
-
-### 34401A DMM (RS-232)
-
-On the meter's front panel (**Shift > I/O MENU**), set:
-- INTERFACE: **RS-232**
-- BAUD RATE: **9600** (or match `dmm.baud`)
-- PARITY: to match `dmm.parity`. Our bench meter is on **EVEN: 7 BITS**, so the configs say `parity = "even"`. NONE: 8 BITS would be `"none"`.
-
-The cable must be a **full-handshake null-modem** cable (TX/RX and DTR/DSR crossed, e.g. Agilent 34398A). A straight-through or 3-wire cable won't work: the meter won't transmit until it sees our DTR.
-
-If the parity in the config is wrong, auto-discovery still finds the meter and tells you which setting to use. The script puts the meter in remote mode while it runs and returns it to local afterwards, so the front panel works again.
-
-When `[dmm]` is enabled, the DC tests read VOUT from the DMM (10 NPLC, autozero, >10 GΩ input) and VIN from the AD2. The AD2's own VOUT reading is still saved as `vout_ad2_v` for comparison. Use `--no-dmm` or `dmm.enabled = false` to use the AD2 for VOUT instead.
+1. **Install** [uv](https://docs.astral.sh/uv/) and the [Digilent WaveForms](https://digilent.com/reference/software/waveforms/waveforms-3/start) runtime. On Windows, also install NI-VISA.
+2. **Set up the environment:**
+   ```
+   cd ldo_bench
+   uv sync
+   uv run pytest -q          # 174 tests, no hardware needed
+   ```
+3. **Try it on the simulator** (no hardware; prints a SIMULATED report and saves nothing):
+   ```
+   uv run ldo-bench load-tran -c configs/demo_board.toml --sim
+   ```
+4. **Switch on the instruments.** Set the supply's I/O to GPIB and the DMM's to RS-232 (see [instruments.md](docs/instruments.md)). Close the WaveForms GUI, then:
+   ```
+   uv run ldo-bench discover -c configs/demo_board.toml
+   ```
+5. **First session on a board**, in this order:
+   1. `psu-check`
+   2. `loadbank-check`
+   3. `smoke`
+   4. `load-reg`
+   5. `line-reg`
+   6. `load-tran`
+   7. then the rest
 
 ```
 uv run ldo-bench --help
-uv run ldo-bench check-config -c configs/jafwak.toml       # custom LDO (1.2 V)
-uv run ldo-bench check-config -c configs/demo_board.toml   # TPS7A7001 demo board (1.0 V)
+uv run ldo-bench check-config -c configs/jafwak.toml      # validate a config, touch nothing
+
+uv run ldo-bench psu-check      -c configs/demo_board.toml   # supply setpoint/readback vs DMM
+uv run ldo-bench loadbank-check -c configs/demo_board.toml   # load bank straight on the supply: DIO -> J0..J4
+uv run ldo-bench smoke          -c configs/demo_board.toml   # power up, VOUT at no / full load
+uv run ldo-bench load-reg       -c configs/demo_board.toml   # --vin 2.0
+uv run ldo-bench line-reg       -c configs/demo_board.toml   # --load 30mA --vin-from psu
+uv run ldo-bench load-tran      -c configs/demo_board.toml   # --from 4mA --to 67mA --avg 32 --plot-us 100
+uv run ldo-bench line-tran      -c configs/jafwak.toml       # --low 1.75 --high 1.85 --load 19mA
+uv run ldo-bench psrr           -c configs/jafwak.toml       # --fstart 100 --fstop 1e6 --amp-mv 20
+uv run ldo-bench iq             -c configs/jafwak.toml       # --method series --rail bgr
+uv run ldo-bench enable-sine    -c configs/jafwak.toml       # --freq 1e3
+uv run ldo-bench enable-startup -c configs/jafwak.toml       # --ch2 iin
 ```
 
-There is one config per board. Each holds the wiring, load-bank pins and resistors, voltage limits, and test conditions.
-
-### macOS: `ModuleNotFoundError: No module named 'ldo_bench'`
-
-If the repo is in an iCloud-synced folder (e.g. `~/Documents`), macOS marks files inside `.venv` as hidden, and Python 3.12+ skips hidden `.pth` files. Fix it once by keeping the virtualenv outside the synced folder, with `.venv` as a symlink to it:
-
-```
-cd ldo_bench
-rm -rf .venv
-uv venv --python 3.12 ~/.venvs/ldo-bench
-ln -s ~/.venvs/ldo-bench .venv
-uv sync
-```
-
-After that, `uv run ldo-bench ...` works as usual. Windows is not affected.
-
-## Tests
-
-All commands take `-c <config>`. They also accept:
+Every command also takes:
 - `--sim`: no hardware
-- `--psu` / `--ad-serial`: pick an instrument when several are connected
+- `--save-sim`: keep a simulated run, marked SIM
 - `--yes`: skip the wiring prompt
 - `-v`: debug log
+- `--psu` / `--ad-serial`: pick an instrument when several are connected
 
-```
-uv run ldo-bench smoke     -c configs/demo_board.toml   # power up, read VOUT at no / full load
-uv run ldo-bench psu-check -c configs/demo_board.toml   # PSU setpoint/readback vs DMM (DMM across the PSU only)
-uv run ldo-bench loadbank-check -c configs/demo_board.toml  # load bank straight on the PSU: checks DIO -> J0..J4 wiring
-uv run ldo-bench load-reg  -c configs/demo_board.toml   # load regulation (all 32 load codes)
-uv run ldo-bench line-reg  -c configs/demo_board.toml   # line regulation + dropout (--load 30mA)
-uv run ldo-bench load-tran -c configs/demo_board.toml   # load steps: peak + settling (--from 4mA --to 67mA --avg 32)
-uv run ldo-bench line-tran -c configs/jafwak.toml       # VIN steps via W1 + BUF634 (--low 1.8 --high 2.0 --load 19mA)
-uv run ldo-bench enable-sine -c configs/jafwak.toml     # enable block: sine in, square out -> VT+/VT-, hysteresis (--freq 1e3)
-uv run ldo-bench enable-startup -c configs/jafwak.toml  # enable edge -> VOUT + VREF (or current) startup timing (--ch2 iin)
-uv run ldo-bench iq -c configs/jafwak.toml              # quiescent + shutdown current vs VIN (DMM; --method series --rail bgr)
-uv run ldo-bench psrr -c configs/jafwak.toml            # PSRR 100 Hz - 1 MHz, sine on VIN through the BUF634 (--amp-mv 20)
-```
+## Configs
 
-**Everything saved and plotted is what was measured: nothing is filled in or assumed.** Each test runs to the end and checks that it really measured the board:
-- **VOUT is near the board's nominal output:** within `dut.vout_tolerance`, 20 %, checked at every point.
-- **For transients:** the trigger channel shows a step, and its swing is the commanded stimulus.
-- **If the scope never triggers:** one untriggered capture records what is actually on the channels.
+There is one TOML file per board in `configs/`:
+- **`jafwak.toml`:** our LDO. VOUT 1.2 V, VIN nominal 1.8 V and **max 1.9 V**, load **max 20 mA** (codes 0–4).
+- **`demo_board.toml`:** TPS7A7001 evaluation board, VOUT 1.0 V, plus the Switched_R_Load_Bank.
 
-**When a check fails:**
-- **Plot:** the problem is obvious there. VOUT is plotted in absolute volts against a red dashed "expected VOUT" line, with a red **SETUP PROBLEM** box saying what to check. Peak, band, settling and fit markers are left off, so nothing looks like a result.
-- **Saved data:** the measured data is still saved. The folder name ends in `_INVALID`, `summary.json` has `"valid": false` plus the list of issues, the terminal prints them in red, and the command exits with code 3.
+A config holds everything board-specific: the limits (`[dut]`, `[psu]`), the wiring (`[ad2]`, `[loadbank]`, `[enable]`), the instruments (`[dmm]`, `[xscope]`) and one section per test. It's validated before any instrument is touched:
+- a misspelt key is an error
+- no test can be configured to exceed `dut.vin_max`, `psu.v_max` or `dut.i_max`
 
-Safety limits still stop a run immediately: the line-transient interlock, `dut.i_max` and `dut.vin_max`.
+Command-line options go through the same checks.
 
-`--sim` runs print the report marked SIMULATED and save nothing. With `--save-sim`, the folder ends in `_SIM` and the plot carries a SIMULATED banner.
+## Safety
 
-**Latest plots:** after every saved run, its plots are also copied to fixed names. Keep one open in VS Code and it updates when the next run finishes:
-- `results/latest.png`: the most recent run of any test
-- `results/<test>/latest.png` and `latest_full.png`: the most recent run of that test
-- `results/latest_run.txt`: names the run folder they came from
+- **Voltage limits:** the PSU and W1 can only reach the DUT through methods that enforce `dut.vin_max` and `psu.v_max`. The load bank refuses any code over `dut.i_max`.
+- **Supply setup:** the current limit and OVP are set before the supply output turns on, and voltage changes are ramped.
+- **Buffer interlock:** line-tran and psrr power the BUF634 rail above the LDO's VIN limit. Before doing that, they check at 1 V that the supply really is on the rail and not on VIN.
+- **psrr peak:** psrr stops if the measured VIN peak goes over `dut.vin_max`.
+- **Shutdown:** however a run ends (finished, error, Ctrl-C), everything is switched off in order: wavegen, AD2 V+, load bank, DIO, supply.
 
-Each run writes a folder under `results/<test>/`, e.g. `results/load-tran/20261106-143714_TPS7A7001-demo-board_load-tran/`:
+## Results: real data only
+
+**Nothing saved or plotted is filled in or assumed.** Each test checks that it really measured the board: VOUT near nominal, the trigger channel actually stepping by the commanded amount, the stimulus reaching VIN, and the meter seeing the current.
+
+When a check fails, the test still finishes and saves the real data, so the problem is obvious rather than hidden:
+- the folder name ends in `_INVALID`
+- the plot shows a red **SETUP PROBLEM** box saying what to check
+- `summary.json` has `"valid": false`
+- the terminal lists the problems
+- the command exits with code 3
+
+Readings below an instrument's resolution are reported as bounds ("< 4 µA", "≥ 72 dB").
+
+Each run writes a folder under `results/<test>/`, e.g. `results/load-tran/20261106-164746_TPS7A7001-demo-board_load-tran/`:
 - `data.csv`: every point
 - `summary.json`: the headline numbers
 - `meta.json`: config, instrument IDs, git commit, package versions
-- `plot.png`
+- `plot.png`: plus `plot_full.png` and `waveform_*.csv` for transients
 
-### Load bank check
+`results/latest.png` is always the newest plot: keep it open in VS Code and it updates after each run. `results/` isn't in git, so runs stay on the machine that made them.
 
-Run this before load regulation. Connect the load bank **directly** to the supply: OUT1 + to J5, − to J6. Wire the AD2 DIO 0–4 to J0–J4, plus **AD2 GND to J6**. The J0–J4 headers carry only the gate signal, with no ground.
+## Status (2026-11-06)
 
-At 1.0 V, each bit is switched on alone and its extra current is compared with V/R. The no-load current is subtracted first, which cancels the supply's readback offset. The report says which bit draws nothing (open wire or missing ground), or which J header a DIO pin really seems to be wired to.
+| | Hardware-tested |
+|---|---|
+| psu-check, loadbank-check, load-reg, line-reg, load-tran (demo board) | yes, valid results in [bench-log.md](docs/bench-log.md) |
+| E3648A over GPIB (UsbGpib), 34401A over RS-232, AD2 DC / DIO / triggered capture | yes |
+| line-tran, psrr, iq, enable-sine, enable-startup | simulator only |
+| 54621A, supply over RS-232, Prologix adapters | simulator / fake instruments only |
+| any JAFWAK measurement | not yet |
 
-### Load regulation
+## Development
 
-The PSU drives VIN directly. The AD2 measures VOUT and VIN at the board, averaged over 0.1 s (a whole number of 50/60 Hz cycles), so drop in the supply cables doesn't count against the LDO.
+```
+uv run pytest -q             # check the exit code, not just the last line
+uv run ruff check src tests
+uv run ruff format src tests
+```
 
-Load current is estimated as VOUT / R from the bank resistors. The PSU current readback is also recorded; it adds the LDO's quiescent current. That readback costs about 0.8 s per point over GPIB. Set `load_reg.psu_readback = false` to skip it.
+- **Simulator:** every test runs end to end on it (`instruments/sim.py`), including deliberately miswired cases. Drivers are tested against fake serial / VISA links.
+- **Git:** work happens on the `ldo-bench` branch, one commit per step.
 
-The result is the slope dVOUT/dI_load (mV/mA, equal to the output resistance) and the total ΔVOUT (mV and %).
-
-### Line regulation
-
-At a fixed load, VIN sweeps upward from `vin_start` to `vin_stop`. Starting below VOUT + dropout means the same run captures the dropout knee as well as the regulation slope.
-
-- **Measured VIN:** the analysis uses measured VIN, never the setpoint. Where it comes from is set by `line_reg.vin_source` (or `--vin-from`):
-  - `"ad2"`: scope ref channel at the board. This excludes cable drop.
-  - `"psu"`: the supply's own readback. Only the DMM on VOUT is needed, no scope probes. It includes cable drop and the supply's ~1–3 mV readback error, which is negligible for the slope. The demo board config uses this.
-- **Dropout:** the point where VOUT falls `dropout_fraction` (1 %) below its value at the highest VIN, interpolated between points.
-- **Slope:** dVOUT/dVIN in mV/V and %/V, fitted from 3 steps above the knee (or from `fit_vin_min`).
-
-### Load transient
-
-The load bank steps between `code_low` and `code_high`. The AD2 triggers on scope channel 2, wired to a DIO pin that changes between the two codes (`trigger_pin`; on the demo board that's DIO 4 / J4, as in the WaveForms workspaces). Each edge is captured `averages` times. The captures are lined up on the trigger and averaged; the response repeats on every step, so this removes noise without blurring it.
-
-The analysis is a Python port of `AD_workspaces/load_tran_script.js`, using the same `[analysis]` settings, so the numbers match the WaveForms custom measurements:
-- **Nominal:** VOUT before the step.
-- **Peak:** the largest dip or overshoot within 20 µs.
-- **Settling band:** ±10 % of the peak deviation.
-- **Settling time:** after the last 1 µs-smoothed sample outside the band.
-- **Noise:** should be at most band / 3, or noise sets the settling time.
-
-If VOUT's final level after the step is outside the band (DC load regulation), it can never settle back to the pre-step level. The report says so and suggests `settle_reference = "post"`.
-
-There are two plots per run:
-- `plot.png` zooms in on the step and settling. **Every edge uses the same time span**, so the panels compare directly. The default span is 2.5 × the slowest settling time + 10 µs. Set it yourself with `--plot-us 100` (or `load_tran.plot_window = 100e-6`) to match a scope at 10 µs/div. A settling time beyond the span is noted in the corner.
-- `plot_full.png` shows each edge over the whole capture window: about −0.16 to +0.66 ms by default (8192 samples at 10 MS/s).
-
-For a longer window, `--window-ms 5` lowers the sample rate to fit 5 ms into the same 8192 samples. Fast details are coarser at lower rates, e.g. the 1 µs smoothing becomes a 3-sample average at 1.6 MS/s, which slightly reduces the reported peak.
-
-The run folder also contains `waveform_rising.csv` and `waveform_falling.csv` (averaged and smoothed VOUT, plus the trigger channel).
-
-### Line transient
-
-VIN is driven by the AD2 wavegen through the board's BUF634 buffer:
-- **Signal path:** W1 → VIN_FG / V_SIG SMA → BUF634 → VIN (JP4 set to the buffer).
-- **Power:** the supply powers the **buffer rail** (VS_BUFF / VDD_BUF), not VIN. The rail must sit about 2 V above `vin_high`, which can be above the LDO's own VIN limit.
-- **Interlock:** before raising the rail, the test powers it at only 1.0 V with W1 off and checks that VIN stays low. If VIN follows the supply, the leads are on VIN. The test then stops before applying the full rail voltage.
-- **Calibration:** the buffer's offset is calibrated out from VIN measured at the board (scope ch2), so the steps land on `vin_low` / `vin_high` within 5 mV. If the buffer can't reach a level, the test says to check headroom, JP4 and the W1 wiring.
-- **Measurement:** the scope triggers on VIN itself. Each edge is averaged and analysed like load transient. The report also gives the peak VOUT deviation per volt of VIN step (mV/V).
-
-### Enable block (JAFWAK)
-
-**`enable-sine`** tests the enable block on its own.
-- **Stimulus:** AD2 W1 drives a sine (0 V to VIN, 1 kHz) into `EN_AIN`, through the EN_FG SMA (J2), J6 5-6 and R23. `EN_VDD` comes from INB through J1 9-11.
-- **Scope:** ch2 on TP6 (`EN_AIN`), which is also the trigger; ch1 on J8.2 (`EN_OUT`).
-- **Measured:** the input voltage at each output crossing gives **VT+** and **VT-**, and their difference is the hysteresis. Also VOH/VOL, 10-90 % edge times (limited by the sample interval), duty cycle, and output edges per input cycle (more than 1 means it chatters). Several captures give the spread of the thresholds.
-- **Plot:** input and output against time, and output against input (the hysteresis loop).
-
-**`enable-startup`** steps the enable line through the board's enable path.
-- **Enable path:** AD2 DIO `enable.dio_pin` → J13.12 `EN_CTRL_33` → level shifter → `EN_CTRL_18` → J6 7-8 → `EN_AIN` → enable block → `EN_OUT` → J8 1-2 → `EN_IN`. `~EN_IN` comes from `~EN_OUT` through J8 9-10, and `enable.dio_pin_n` drives `~EN_CTRL_33` inverted.
-- **Level-shifter supply:** the AD2's V+ supplies 3.3 V to `V_33` (J13.14), switched off at the end of the run.
-- **Trigger:** the scope triggers on the AD2's own DIO edge, so both channels are free.
-  - ch1 is VOUT.
-  - ch2 (`startup.ch2` / `--ch2`) is `vref` (TP3, the BGR output), `iin` (across R13, J13.1–J13.2) or `iout` (across R1, J13.4–J13.3).
-- **Measured:** for each edge (enable and disable), averaged:
-  - 10 %/90 % times from the edge (which include the level shifter and the enable block)
-  - rise or fall time, time to settle within 2 %, and overshoot
-  - for currents: the levels before and after, and the peak (inrush)
-- **Setup checks:** VOUT already up before the enable edge (the enable path isn't controlling the LDO), VOUT not reaching nominal after enabling, and VREF off its expected level (`vref_nominal`).
-
-### Quiescent current and PSRR
-
-**`iq`** measures the supply current with no load, enabled and disabled (through the enable path), across a VIN sweep. The DMM does the measuring:
-- **`method = "shunt"`:** DMM DC volts across R13 (J13.1 / J13.2, 0.1 Ω) on the 100 mV range. This is the total current from VIN, including the enable block, the level shifters' low side and ~1.2 µA into the AD2 scope on VOUT. One count is 1 µA, which is fine for Iq but not for shutdown current: those points are reported as "< floor", not as a number.
-- **`method = "series"`:** DMM DC amps (I / LO jacks) in place of one J1 jumper (`rail = "bgr"`, `"vdd"`, `"en"`, `"ota"`), or between the PSU and VIN_DC (`rail = "total"`). One count is 10 nA, so this resolves shutdown current.
-- **Zero:** the DMM is read with the PSU off and that offset (thermal EMF) is subtracted; the spread of those readings sets the floor.
-- **Setup checks:**
-  - shunt: one known load (`check_code`) is switched in briefly, and the DMM must see its current through R13 within 15 %
-  - an enabled current under the floor: the meter isn't across R13 / in series
-  - VOUT off nominal when enabled, or still up when disabled
-  - reversed leads are noted, and the signs flipped
-
-**`psrr`** puts a sine on VIN through the line-transient path (W1 → BUF634 → VIN, PSU on the buffer rail) and measures how much of it reaches VOUT, from 100 Hz to 1 MHz.
-- **Safety:** the same interlock and DC calibration as `line-tran`. The sine's peak (`vin + amplitude`) must be within `dut.vin_max`; the bench refuses a higher setting, and the run stops if the measured VIN peak goes above it.
-- **Measurement:** free-running AD2 captures of VIN (scope 2) and VOUT (scope 1), with a least-squares sine fit at the injected frequency on each (a lock-in). VOUT/VIN is averaged coherently over `averages` captures. W1's amplitude is re-levelled if VIN drifts more than 15 % from the target.
-- **Floor:** whatever the fit can't explain sets the smallest VOUT ripple the AD2 resolves (roughly 70-80 dB of PSRR at 50 mV). Points below that are drawn hollow and reported as "≥ X dB".
-- **Spectrum analyzer:** the VOUT measurement goes through a small `PsrrMeter` interface (`procedures/psrr.py`). A spectrum analyzer driver plugs in there to measure past the AD2's floor.
-
-Neither the enable tests nor `iq` / `psrr` have been run on hardware yet. The AD2's digital trigger in particular (Digital In's detector driving the scope trigger) needs checking on the first run.
-
-### Interfaces: GPIB or RS-232, for every instrument
-
-The supply, DMM and 54621A scope each work over any of these connections:
-
-| Connection | `resource` | Notes |
-|---|---|---|
-| VISA GPIB (GPIB card, Keysight 82357B, NI GPIB-USB) | `GPIB0::5::INSTR` | needs NI-VISA / Keysight IO Libraries |
-| XyphroLabs UsbGpib | `USB0::0x03EB::0x2065::…::INSTR` | one instrument per adapter; works with pyvisa-py on macOS |
-| Prologix-style USB-GPIB | `prologix:COM5:5` | several instruments on one GPIB bus |
-| The instrument's own RS-232 port | `serial:COM3`, `serial:/dev/cu.usbserial-…` | USB-serial adapter + null-modem cable |
-
-**Searching:** leave `resource = ""` to have the instrument searched for in this order:
-1. VISA
-2. RS-232 ports, using that instrument's `baud` / `parity` / `stopbits` / `flow`. The supply and DMM are also tried at the other parity settings.
-3. Prologix adapters, at every GPIB address.
-
-Each scan runs once per run, and a port that one instrument has claimed is never probed for another. `ldo-bench discover -c <config>` lists everything on every interface, using that config's RS-232 settings.
-
-**RS-232 specifics:**
-- The serial settings are ignored on GPIB.
-- On RS-232, the supply and DMM are put in remote mode while the run lasts (`SYST:REM`) and handed back to the front panel afterwards (`SYST:LOC`).
-- The supply's RS-232 path (HP style: 2 stop bits, DTR/DSR) hasn't been tested on the bench yet; the bench unit has only been run over GPIB so far.
-
-### 54621A cross-check scope (optional)
-
-An Agilent 54621A (on GPIB or RS-232) can capture every transient edge alongside the AD2, as an independent check. Configure it under `[xscope]` in the board config, and skip it for a run with `--no-xscope`.
-
-**Scope setup:**
-- **Interface:** on the scope, **Utility > I/O**. On GPIB, note the address. On RS-232, set the baud rate to `xscope.baud` (57600 is fastest) and the handshake to **DTR** (`flow = "dsrdtr"`) or XON/XOFF.
-- **Cable:** on RS-232 the port is fixed at 8N1; use a null-modem cable to a USB-serial adapter.
-- **Ch1:** on VOUT, at the same point as AD2 scope 1.
-- **Ch2:** on the same trigger signal as AD2 scope 2: the DIO pin for load transient, VIN for line transient.
-
-**How a capture works:**
-- **Arming:** for each edge the scope is armed first. Its timebase matches the AD2 window, ch1 is at `vout_range` centred on the nominal VOUT, it edge-triggers on ch2, and it averages as many triggers as the AD2 takes captures.
-- **Collection:** the AD2 steps the load as usual, and every step also triggers the scope. If the scope missed some triggers, the step is repeated until its average completes. Both channels are then read back as 16-bit WORD data.
-- **Results:** its trace is overlaid on the VOUT plot (the "54621A" line). The report gives its peak and settling time and the difference from the AD2, and the run folder gets `waveform_xcheck_*.csv`.
-
-**When the scope has a problem:**
-- **It never affects the AD2 result's validity**, whether the scope is missing, on the wrong signal, or never completes its average. The problem is listed under the cross-check only.
-- **If it never completes**, it's left waiting for triggers. Press **Run/Stop** on the scope to free it.
-
-The driver follows the Agilent 54620-Series Programmer's Guide (pub. 54622-97038), but it hasn't been tested on a real scope yet.
-
-### Load current limit
-
-`dut.i_max` caps the load any test may switch in. It's estimated at `vout_nominal`, and both the config check and the load bank enforce it. JAFWAK is limited to 20 mA (codes 0–4). `loadbank-check` lifts the limit, because no DUT is connected in that test.
+**macOS:** keep the repo and its `.venv` out of iCloud-synced folders (`~/Documents`, `~/Desktop`). iCloud hides files inside `.venv`, which breaks the install with `ModuleNotFoundError: No module named 'ldo_bench'`. It can also evict the repo's files when the disk is full.

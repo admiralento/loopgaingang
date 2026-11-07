@@ -8,6 +8,12 @@ Set the instrument's `resource` to any of those forms, or leave it '' and it is 
 VISA first, then RS-232 ports (with that instrument's serial settings, and the other parities
 for the HP-style ones), then Prologix adapters (every GPIB address). One Finder per run caches
 each scan, and a port or adapter address claimed by one instrument is never probed for another.
+
+Why this order: VISA listing is fast and harmless. RS-232 probing has to try each framing,
+because an HP instrument set to 7E2 answers garbage (or nothing) at 8N2; the HP ones also need
+SYST:REM before they answer at all. Prologix is last because it means talking to up to 30 GPIB
+addresses per adapter. The 54621A is fixed at 8N1 and is probed only with its own settings.
+USB serial ports from Digilent (the AD2) and non-USB ports are never probed.
 """
 
 from __future__ import annotations
@@ -44,6 +50,8 @@ SCAN_TIMEOUT = 0.5  # s per probe while scanning
 
 @dataclass(frozen=True)
 class Found:
+    """An instrument that answered *IDN?, and the resource string that reaches it."""
+
     resource: str
     idn: str
     serial: SerialSettings | None = None  # RS-232 instruments: the settings that worked
@@ -101,6 +109,7 @@ def _list(rm, query: str) -> tuple[str, ...]:
 
 
 def _visa_candidates() -> list[Found]:
+    """*IDN? of every GPIB / USB VISA instrument, on the installed VISA and on pyvisa-py."""
     found: list[Found] = []
     for backend in ("", "@py"):
         try:
@@ -127,6 +136,7 @@ def _visa_candidates() -> list[Found]:
 
 
 def _serial_ports() -> list[str]:
+    """USB serial ports that might be an instrument or a Prologix adapter."""
     try:
         from serial.tools import list_ports
     except ImportError:
@@ -193,7 +203,12 @@ def _prologix_candidates(preferred_address: int, skip: frozenset[str] = frozense
 # --- the search ------------------------------------------------------------------------------
 @dataclass
 class Finder:
-    """One search per run, shared by all instruments. Scans happen only when needed, once."""
+    """One search per run, shared by all instruments. Scans happen only when needed, once.
+
+    `claimed` holds resource strings and bare port names already in use, so e.g. once the DMM
+    owns /dev/cu.usbserial-X, looking for the supply never sends it SYST:REM / *IDN?.
+    RS-232 probe results are cached per (port, settings).
+    """
 
     gpib_address: int = 5
     claimed: set[str] = field(default_factory=set)  # resources and local ports in use
@@ -202,6 +217,7 @@ class Finder:
     _serial: dict[tuple[str, SerialSettings], str | None] = field(default_factory=dict)
 
     def claim(self, f: Found | str) -> None:
+        """Mark a resource (and its local port, if any) as taken."""
         if isinstance(f, str):
             f = Found(f, "")
         self.claimed.add(f.resource)
@@ -209,12 +225,18 @@ class Finder:
             self.claimed.add(f.port)
 
     def visa(self) -> list[Found]:
+        """Unclaimed VISA instruments (scanned on first call)."""
         if self._visa is None:
             with _step("Checking VISA (GPIB / USB) instruments"):
                 self._visa = _visa_candidates()
         return [f for f in self._visa if f.resource not in self.claimed]
 
     def serial(self, variants: list[SerialSettings], remote: bool) -> list[Found]:
+        """Whatever answers on each unclaimed USB serial port, trying `variants` in order.
+
+        The first settings that get a reply win for that port. remote=True sends SYST:REM first
+        (HP supply / DMM); the 54621A doesn't need it.
+        """
         out = []
         for port in _serial_ports():
             if port in self.claimed or self._is_prologix_port(port):
@@ -229,6 +251,7 @@ class Finder:
         return out
 
     def prologix(self) -> list[Found]:
+        """Unclaimed instruments on Prologix-style adapters (scanned once, every address 1-30)."""
         if self._prologix is None:
             with _step("Checking for Prologix-style GPIB adapters (all GPIB addresses)"):
                 skip = frozenset(p for p in self.claimed if not p.startswith(("GPIB", "USB")))
@@ -271,6 +294,7 @@ class Finder:
 
 
 def _open_at(resource: str, serial: SerialSettings, what: str, hint: str, make):
+    """Open a configured resource with driver factory `make`; failures carry the setup hint."""
     with _step(f"Opening the {what} at {resource}"):
         try:
             return make(open_transport(resource, serial=serial, timeout=5.0))
@@ -287,6 +311,11 @@ def open_psu(
     serial: SerialSettings | None = None,
     finder: Finder | None = None,
 ) -> AgilentE36xx:
+    """The power supply at `resource`, or the one found by searching if it's ''.
+
+    serial: the supply's RS-232 settings (default 9600 8N2, DSR pacing); when searching, the
+    other parities are tried too and a mismatch with the config is logged.
+    """
     serial = serial or SerialSettings(9600, "none", 2, "dsr-pacing")
     finder = finder or Finder(gpib_address)
     make = lambda t: AgilentE36xx(t, channel)  # noqa: E731
@@ -316,6 +345,7 @@ def open_dmm(
     serial: SerialSettings | None = None,
     finder: Finder | None = None,
 ) -> HP34401A:
+    """The 34401A at `resource`, or the one found by searching if it's ''. RS-232 as for open_psu()."""
     serial = serial or SerialSettings(baud, parity, 2, "dsr-pacing")
     finder = finder or Finder()
     hint = f"{RS232_HINT}\nRun without the DMM with --no-dmm, or set dmm.enabled = false."
@@ -344,6 +374,7 @@ def open_xscope(
     finder: Finder | None = None,
     skip: frozenset[str] = frozenset(),
 ) -> Agilent54621A:
+    """The cross-check scope at `resource`, or found by searching. `skip`: ports not to probe."""
     serial = serial or SerialSettings(baud, "none", 1, flow)
     finder = finder or Finder()
     for p in skip:
@@ -359,6 +390,7 @@ def open_xscope(
 
 
 def open_ad2(serial: str = "") -> Oscilloscope:
+    """The Analog Discovery 2 (by serial number, or the only one attached)."""
     from ldo_bench.instruments.ad2 import open_ad2_device
 
     with _step("Opening the Analog Discovery 2" + (f" {serial}" if serial else "")):
@@ -366,6 +398,7 @@ def open_ad2(serial: str = "") -> Oscilloscope:
 
 
 def _ad2_lines() -> list[str]:
+    """`discover` report lines for the attached AD2s (found through the WaveForms SDK, not VISA)."""
     from ldo_bench.instruments.ad2 import list_ad2, load_library
 
     try:

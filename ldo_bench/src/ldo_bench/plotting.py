@@ -3,6 +3,9 @@
 Colors come from the reference chart palette: categorical slot 1 for the
 measured series, secondary ink for reference marks (fits, limits), recessive
 gridlines and axes.
+
+Importing this module selects the headless Agg backend and applies STYLE globally,
+so procedures just call `figure()` and the run folder saves the result.
 """
 
 from __future__ import annotations
@@ -56,6 +59,7 @@ plt.rcParams.update(STYLE)  # applies at plot and save time too, unlike rc_conte
 
 
 def figure(nrows: int = 1, ncols: int = 1, *, size=(7.0, 4.2), **kw):
+    """(fig, axes) like plt.subplots, with constrained layout; `size` in inches."""
     return plt.subplots(nrows, ncols, figsize=size, layout="constrained", **kw)
 
 
@@ -65,6 +69,7 @@ def subtitle(ax, text: str) -> None:
 
 
 def close(fig) -> None:
+    """Free a figure's memory once it's saved."""
     plt.close(fig)
 
 
@@ -109,5 +114,5 @@ def issue_box(ax, issues: list[str], *, width: int = 58) -> None:
 
 
 def mark_invalid(fig, issues: list[str]) -> None:
-    """Figure-level version of issue_box, for plots without a natural single axes."""
+    """Figure-level version of issue_box, for plots without a natural single axes (uses the first axes)."""
     issue_box(fig.axes[0], issues)

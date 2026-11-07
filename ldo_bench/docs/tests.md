@@ -1,0 +1,283 @@
+# The tests
+
+Every test is one command:
+
+```
+uv run ldo-bench <command> -c configs/<board>.toml [options]
+```
+
+Every command also takes:
+- `--sim`: no hardware, the simulator. Saves nothing unless `--save-sim`.
+- `--yes`: skip the wiring prompt.
+- `-v`: debug log.
+- `-o <folder>`: results folder (default `results/`).
+- `--psu` / `--ad-serial`: pick an instrument when there are several.
+
+Before powering anything up, each command prints the wiring it expects and asks you to confirm it. The wiring lists below are exactly what the commands print. Option values in the examples are just examples; defaults come from the board's config section, which is named under each test.
+
+How a run decides it measured the board, and what `_INVALID` means, is covered in [architecture.md](architecture.md#real-data-only-the-validity-model).
+
+**Hardware status (2026-11-06):**
+- **Run on real hardware, demo board:**
+  - `psu-check`
+  - `loadbank-check`
+  - `load-reg`
+  - `line-reg`
+  - `load-tran`
+- **JAFWAK:** no valid run yet. Its load-transient runs had the scope off VOUT (see [bench-log.md](bench-log.md)).
+- **Simulator only so far:** `line-tran`, `enable-sine`, `enable-startup`, `iq` and `psrr`.
+
+Suggested order for a first session on a board:
+1. `discover`
+2. `psu-check`
+3. `loadbank-check`
+4. `smoke`
+5. `load-reg`
+6. `line-reg`
+7. `load-tran`
+8. `line-tran`, then the rest
+
+---
+
+## Bench checks
+
+### `discover`
+Lists every instrument it can reach over VISA (GPIB, USB), RS-232 and Prologix adapters, plus any Analog Discovery 2. Pass `-c <config>` to probe RS-232 ports with that config's serial settings. Nothing is powered or changed.
+
+### `psu-check`: is the supply telling the truth?
+- **Wiring:**
+  - DMM V+ / COM -> PSU OUT1 + / -, directly
+  - Nothing else connected to the PSU output
+- **Does:** steps the output through `psu_check.points` (0.5–5 V). At each point it compares the setpoint, the supply's own readback and the DMM. The errors are judged against the E3648A's published accuracy.
+- **Why:** the regulation tests care about millivolts. Today's run showed the output is within 1.2 mV of the setpoint, but the readback reads 1–2.7 mV high. That's why VOUT is never taken from the supply.
+- **Setup check:** a DMM reading nowhere near the setpoint means the DMM isn't across the output.
+- **Config:** `[psu_check]`.
+
+### `loadbank-check`: does each DIO pin switch the right resistor?
+- **Wiring:** the load bank straight on the supply, no LDO.
+  - PSU OUT1 + -> load bank VIN (J5), PSU - -> load bank GND (J6)
+  - AD2 DIO [0, 1, 2, 3, 4] -> load bank J0..J4
+  - AD2 GND -> load bank GND (the FET gates are driven relative to it)
+- **Does:** at 1.0 V, it reads the supply current with every bit off. Then it turns on each bit alone and compares the extra current with V/R for that bit.
+  - The no-load current is subtracted first, which cancels the supply's current-readback offset.
+  - `dut.i_max` doesn't apply here, since no DUT is connected.
+- **Diagnoses:**
+  - a bit that draws nothing (open wire, missing ground, bad solder)
+  - a DIO pin that seems to be wired to a different J header
+- **Note:** J0–J4 carry only the gate signal, with no ground. Without the AD2 GND wire nothing switches.
+- **Config:** `[loadbank_check]`.
+
+### `smoke`
+Powers VIN up (default `load_reg.vin`), then reads VOUT, VIN and the supply's V and I at no load and at the largest allowed load, and powers down. Prints a table; saves nothing. Use `--vin` to set VIN.
+
+---
+
+## DC tests
+
+### `load-reg`: load regulation
+- **Wiring (demo board):**
+  - PSU -> VIN (DC input, not through the buffer)
+  - Scope 1+ -> VOUT at the output pins, 1- -> GND; DMM V+/COM -> VOUT / GND at the output pins (DMM is the VOUT reference)
+  - Scope 2+ -> VIN at the board, 2- -> GND
+  - DIO [0, 1, 2, 3, 4] -> load bank bits B0..B4
+- **Does:** holds VIN at `load_reg.vin` and steps the load bank through every allowed code. At each code it reads:
+  - VOUT from the DMM (10 NPLC; the AD2 if there's no DMM)
+  - VIN at the board from AD2 scope 2, averaged over 0.1 s (a whole number of 50/60 Hz cycles)
+  - optionally, the supply's V/I readback (about 0.8 s per point)
+- **Computes:**
+  - **Load current:** estimated as VOUT / R from the bank resistors.
+  - **Output resistance:** the slope dVOUT/dI (mV/mA, equal to the output resistance).
+  - **Total change:** ΔVOUT over the range (mV and %).
+- **Setup check:** VOUT within `dut.vout_tolerance` (20 %) of nominal at every point.
+- **Options:**
+  - `--vin 2.0`
+  - `--no-dmm`
+- **Config:** `[load_reg]`.
+
+### `line-reg`: line regulation and dropout
+- **Wiring (demo board, `vin_source = "psu"`):**
+  - PSU -> VIN (DC input, not through the buffer)
+  - DMM V+/COM -> VOUT / GND at the output pins (no scope probes needed)
+  - DIO [0, 1, 2, 3, 4] -> load bank bits B0..B4, AD2 GND -> board GND
+- **Does:** at a fixed load, sweeps VIN upward from `vin_start` to `vin_stop`. Starting below VOUT + dropout means one run captures both the dropout knee and the regulation slope.
+- **Measured VIN:** the analysis always uses measured VIN, never the setpoint. Where it comes from is set by `vin_source` (or `--vin-from`):
+  - `"ad2"`: scope 2 at the board, which excludes cable drop.
+  - `"psu"`: the supply's own readback. It needs no scope probes, but includes cable drop and the 1–3 mV readback error. That's negligible for the slope.
+- **Computes:**
+  - **Dropout:** the point where VOUT falls `dropout_fraction` (1 %) below its value at the highest VIN, interpolated between points.
+  - **Line regulation:** dVOUT/dVIN in mV/V and %/V, fitted from 3 steps above the knee (or from `fit_vin_min`).
+- **Options:**
+  - `--load 30mA` (or a code)
+  - `--vin-from psu`
+  - `--no-dmm`
+- **Config:** `[line_reg]`.
+
+### `iq`: quiescent and shutdown current
+- **Wiring (JAFWAK, shunt method):**
+  - PSU -> VIN_DC (JP4 to DC); nothing on the load bank (it stays off)
+  - DMM V (HI) -> J13.1 (VIN), COM -> J13.2 (INB): across R13. The DMM floats, so no ground lead; nothing else on the V terminals
+  - J1: every rail you want powered (BGR_VDD 1-3, VDD 5-7, EN_VDD 9-11, OTA_VDD 13-15)
+  - Scope 1+ -> J13.3 (VOUT), 1- -> GND (VOUT check; draws ~1 uA)
+  - Enable path: J6 7-8 (EN_CTRL_18 -> EN_AIN), J8 1-2 (EN_OUT -> EN_IN), J8 9-10 (~EN_OUT -> ~EN_IN)
+  - AD2 DIO 5 -> J13.12 (EN_CTRL_33), DIO 6 -> J13.10 (~EN_CTRL_33); AD2 V+ -> J13.14 (V_33)
+  - AD2 GND -> board GND
+- **Two methods** (`iq.method`, `--method`):
+  - **`shunt`:** DMM DC volts across R13 (0.1 Ω) on the 100 mV range. This is everything drawn from VIN: the LDO, BGR, enable block, the level shifters' low side, and ~1.2 µA into the AD2 scope on VOUT. One count is 1 µA, which is fine for Iq but too coarse for shutdown current.
+  - **`series`:** DMM DC amps (I and LO jacks) in place of one J1 jumper (`--rail bgr|vdd|en|ota`), or between the PSU and VIN_DC (`--rail total`). One count is 10 nA, so this resolves shutdown current. The meter's burden (~5 Ω on the 10 mA range) drops a little of that rail's voltage.
+- **Does:**
+  1. Reads the DMM with the PSU off: the zero (offset, thermal EMF). It's subtracted from every point, and the spread of those readings sets the floor.
+  2. Shunt method: switches in a known load (`check_code`, 4.8 mA) once, to prove the DMM sees the current through R13.
+  3. Sweeps VIN (1.4–1.9 V) with the LDO enabled, then disabled through the enable path.
+- **Reports:** current per point. Points under the floor are shown as "< floor", not as a number.
+- **Setup checks:**
+  - the load check misses by more than 15 %
+  - an enabled current under the floor (meter not across R13 / not in series, or the jumper still shorting it)
+  - VOUT off nominal when enabled, or still up when disabled (enable path not working)
+  - meter overload
+  - reversed leads are noted, and the signs flipped
+- **Options:**
+  - `--method series --rail bgr`
+  - `--vin 1.8` (one point)
+  - `--states enabled`
+- **Config:** `[iq]`.
+
+---
+
+## Transient tests
+
+### How a transient capture works (load-tran, line-tran)
+- **Settings:** the AD2 captures 8192 samples at 10 MS/s (819 µs), with 20 % before the trigger.
+- **Averaging:** each edge (rising, falling) is captured `averages` times. The captures are lined up on the trigger and averaged; the response repeats on every step, so this removes noise without blurring it.
+- **Analysis:** a Python port of `AD_workspaces/load_tran_script.js` with the same `[analysis]` settings, so the numbers match the WaveForms custom measurements:
+  - **Nominal:** VOUT before the step.
+  - **Peak:** the largest dip or overshoot within 20 µs.
+  - **Settling band:** ±10 % of the peak deviation.
+  - **Settling time:** after the last 1 µs-smoothed sample outside the band.
+  - **Noise:** should be at most band / 3, or noise sets the settling time.
+- **DC shift after the step:** if VOUT's final level is outside the band (DC load regulation), it can never settle back to the pre-step level. The report says so and suggests `settle_reference = "post"`.
+- **Setup checks:**
+  - VOUT near nominal
+  - the trigger channel actually steps, with the commanded swing
+  - the step's edge is found in the data
+  - if the scope never triggers, one untriggered capture is saved to show what's on the channels
+- **Plots:**
+  - `plot.png` zooms in on the step, with every edge on the same time span. The default is 2.5 × the slowest settling time + 10 µs, or `--plot-us 100` for a scope at 10 µs/div.
+  - `plot_full.png` shows the whole capture.
+  - Both have VOUT on top and the scope 2 (trigger) trace in a panel underneath.
+- **Longer window:** `--window-ms 5` lowers the sample rate to fit 5 ms into the same 8192 samples. Fast details get coarser at lower rates.
+- **54621A cross-check:** optional `[xscope]`. Every edge is also captured on the 54621A, overlaid as "54621A", and its peak and settling time are compared. `--no-xscope` skips it. See [instruments.md](instruments.md#agilent-54621a-cross-check-scope).
+- **Extra files:** `waveform_rising.csv` / `waveform_falling.csv`.
+
+### `load-tran`: load transient
+- **Wiring:**
+  - PSU -> VIN
+  - Scope 1+ -> VOUT at the output pins, 1- -> GND
+  - Scope 2+ -> DIO 4 (load bank bit B4, trigger), 2- -> GND. On JAFWAK, the trigger is DIO 2 (B2).
+  - DIO [0, 1, 2, 3, 4] -> load bank bits B0..B4, AD2 GND -> board GND
+- **Does:** steps the load bank between `code_low` and `code_high` at fixed VIN. It triggers on a DIO pin that changes between the two codes (`trigger_pin`, default: the highest bit that changes).
+- **Options:**
+  - `--from 4mA --to 67mA` (codes or currents)
+  - `--avg 32`
+  - `--window-ms`
+  - `--plot-us`
+  - `--no-xscope`
+- **Config:** `[load_tran]`, `[analysis]`.
+
+### `line-tran`: line transient
+- **Wiring:**
+  - PSU OUT1 -> buffer rail VS_BUFF / VDD_BUF and GND. NOT on VIN: the rail goes above the LDO's VIN limit
+  - AD2 W1 -> buffer input SMA (VIN_FG / V_SIG); buffer output onto VIN (JP4)
+  - Scope 1+ -> VOUT at the output pins, 1- -> GND
+  - Scope 2+ -> VIN at the LDO input (trigger + VIN level), 2- -> GND
+  - DIO [0, 1, 2, 3, 4] -> load bank bits B0..B4, AD2 GND -> board GND
+- **Does:**
+  1. **Interlock:** powers the rail at only 1.0 V with W1 off, and checks that VIN stays low. If VIN follows the supply, the leads are on VIN, and the test stops before raising the rail above `dut.vin_max`.
+  2. **Calibration:** raises the rail to `psu_voltage` and calibrates out the buffer's offset from VIN measured at the board. The steps land on `vin_low` / `vin_high` within 5 mV. The W1 correction is capped at 250 mV and never goes above `vin_max`.
+  3. **Steps:** steps W1 between the two levels, triggering on VIN itself.
+- **Computes:** everything from the transient analysis, plus the peak VOUT deviation per volt of VIN step (mV/V).
+- **Setup check:** a buffer that can't reach a level (headroom, JP4, W1 wiring).
+- **Options:**
+  - `--low 1.75 --high 1.85`
+  - `--load 19mA`
+  - `--avg`, `--window-ms`, `--plot-us`, `--no-xscope`
+- **Config:** `[line_tran]`.
+
+### `psrr`: power-supply rejection vs frequency
+- **Wiring:**
+  - PSU OUT1 -> buffer rail VS_BUFF / VDD_BUF and GND. NOT on VIN: the rail goes above the LDO's VIN limit
+  - AD2 W1 -> buffer input SMA (VIN_FG / V_SIG); buffer output onto VIN (JP4)
+  - Scope 1+ -> VOUT at the output pins, 1- -> GND (short ground lead)
+  - Scope 2+ -> VIN at the LDO input pins, 2- -> GND
+  - DIO [0, 1, 2, 3, 4] -> load bank bits B0..B4, AD2 GND -> board GND
+- **Does:**
+  1. **Setup:** the same interlock and DC calibration as line-tran, at `vin`.
+  2. **Sine:** at each frequency (`f_start` to `f_stop`, `points_per_decade`), W1 plays `vin ± amplitude`. The peak must be within `dut.vin_max`: the bench refuses a higher setting, and the run stops if the *measured* peak goes over.
+  3. **Measurement:** several free-running AD2 captures of VIN and VOUT. Each is sampled at the rate that fits at least `cycles` periods into 8192 samples, up to 100 MS/s.
+- **Analysis:**
+  - **Sine fit:** a least-squares fit at the injected frequency on each channel (a lock-in). VOUT/VIN is averaged coherently over the captures, which keeps the phase and averages noise down.
+  - **Levelling:** W1's amplitude is re-levelled if VIN's amplitude is off by more than 15 % (the buffer and board roll off at high frequency).
+  - **PSRR:** PSRR (dB) = 20·log10(|VIN| / |VOUT|), positive = rejection.
+- **Floor:** what the fit can't explain sets the smallest VOUT ripple the AD2 resolves. That's roughly 70–80 dB of PSRR at 50 mV. Points under it are drawn hollow and reported as "≥ X dB". A spectrum analyzer on VOUT will measure past that (see [architecture.md](architecture.md#recipes)).
+- **Setup checks:**
+  - VIN not carrying the sine (buffer not driving VIN)
+  - VOUT off nominal
+  - a note if VOUT follows VIN at low frequency (dropout, or scope 1 on VIN)
+- **Plot:** PSRR vs frequency, and the VIN / VOUT amplitudes with the VOUT floor.
+- **Options:**
+  - `--fstart`, `--fstop`, `--ppd`
+  - `--amp-mv 20`
+  - `--vin`
+  - `--load`
+  - `--avg`
+- **Config:** `[psrr]`.
+
+---
+
+## Enable block (JAFWAK)
+
+### `enable-sine`: enable comparator thresholds
+- **Wiring:**
+  - PSU -> VIN_DC (JP4 to DC); J1 9-11: EN_VDD from INB (other J1 rails as you like)
+  - AD2 W1 -> EN_FG SMA (J2); J6 5-6: EN_FG -> EN_AIN
+  - Scope 2+ -> TP6 (EN_AIN) (trigger), Scope 1+ -> J8.2 (EN_OUT); both - -> GND
+  - AD2 GND -> board GND
+- **Does:** a slow sine (0 V to EN_VDD, 1 kHz) into EN_AIN sweeps the input through both thresholds every cycle. The capture is repeated `captures` times to get the spread.
+- **Computes:**
+  - **Thresholds:** the input voltage at each output crossing gives VT+ and VT-, and their difference is the hysteresis.
+  - **Output levels and edges:** VOH / VOL, 10–90 % edge times (limited by the sample interval) and duty cycle.
+  - **Chatter:** output edges per input cycle. More than 1 means it chatters.
+- **Plot:** input and output against time, and the transfer curve (output against input: the hysteresis loop).
+- **Setup checks:**
+  - the input swing isn't the sine's (probe not on TP6, J6 wrong)
+  - EN_OUT doesn't switch (probe not on J8.2, EN_VDD unpowered)
+- **Options:**
+  - `--freq 1e3`
+  - `--captures 8`
+- **Config:** `[en_sine]`.
+
+### `enable-startup`: turn-on and turn-off through the enable path
+- **Wiring:**
+  - PSU -> VIN_DC (JP4 to DC); J1: each rail you want powered (BGR_VDD 1-3, VDD 5-7, EN_VDD 9-11, OTA_VDD 13-15)
+  - Enable path: J6 7-8 (EN_CTRL_18 -> EN_AIN), J8 1-2 (EN_OUT -> EN_IN), J8 9-10 (~EN_OUT -> ~EN_IN)
+  - AD2 DIO 5 -> J13.12 (EN_CTRL_33), DIO 6 -> J13.10 (~EN_CTRL_33)
+  - AD2 V+ -> J13.14 (V_33), AD2 GND -> board GND
+  - Scope 1+ -> J13.3 (VOUT), 1- -> GND
+  - Scope 2+ -> TP3 (VREF, the BGR output), 2- -> GND; JP2 closed
+- **Enable path:** DIO 5 → EN_CTRL_33 → FXLP34 level shifter → EN_CTRL_18 → enable block → EN_OUT → EN_IN. DIO 6 drives ~EN_CTRL_33 inverted. The AD2's V+ supplies the level shifters' 3.3 V side.
+- **Does:** steps the enable line. The AD2 triggers on its own DIO edge (the Digital In trigger detector), so both scope channels are free. Each edge (enable, disable) is averaged.
+- **Scope 2** (`--ch2`) is one of:
+  - `vref`: TP3, the BGR output
+  - `iin`: across R13, the input current (inrush)
+  - `iout`: across R1, the output current
+- **Computes:** 10 % / 90 % times from the edge, which include the level shifter and the enable block. Also rise or fall time, settling within 2 %, and overshoot. For currents: the levels before and after, and the peak.
+- **Setup checks:**
+  - VOUT already up before enabling (the enable path isn't controlling the LDO)
+  - VOUT not reaching nominal
+  - VREF off `vref_nominal`, if set
+- **Options:**
+  - `--ch2 iin`
+  - `--avg`
+  - `--window-ms`
+  - `--load`
+- **Config:** `[startup]`, `[enable]`.
+- **First hardware run:** the AD2's digital trigger needs checking.

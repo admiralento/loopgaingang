@@ -12,6 +12,27 @@ or between the PSU and VIN_DC (rail "total"). Resolution 10 nA on the 10 mA rang
 Before the PSU turns on, the DMM reads the zero (offset and thermal EMF), which is subtracted from
 every point; the spread of those readings sets the floor. In the shunt method a known load is then
 switched in once to prove the meter sees the current through R13.
+
+run() steps:
+1. Check the DMM driver can do the chosen method; confirm the wiring; configure the DMM (DC volts
+   on 100 mV for shunt, DC amps for series).
+2. Load bank and wavegen off; read the zero. floor = max(3 x the zero's spread, one DMM count).
+3. If any "disabled" points are wanted: AD2 V+ on (V_33) and the LDO enabled.
+4. Shunt load check (shunt method, check_code set, "enabled" in states): at vin_stop, read the
+   current, switch in check_code, read again; the difference should be the bank's current at the
+   measured VOUT.
+5. For each state, for each VIN from vin_start to vin_stop: PSU to VIN, wait settle_time, read
+   VOUT (AD2), the DMM current (zero subtracted), and the PSU's voltage and current readback.
+6. Enable low, load bank off, then the checks below.
+
+Checks and corrections:
+- Reversed leads: if the load check (or else the median enabled current) is negative beyond the
+  floor, every sign is flipped and a note says so.
+- Setup issues (run invalid): the load check off by more than check_tolerance; a DMM overload;
+  enabled points with VOUT not near nominal or a current under the floor (meter shorted out or
+  not in the path); disabled points with VOUT above 20 % of nominal (enable path not working).
+- Notes (run still valid): the ~1 uA the AD2 scope draws from VOUT is included for the "total"
+  and "vdd" rails; shutdown current under the floor.
 """
 
 from __future__ import annotations
@@ -41,28 +62,32 @@ SCOPE_INPUT_OHM = 1e6  # AD2 scope input, loading VOUT
 
 @dataclass
 class IqPoint:
+    """One VIN point in one enable state."""
+
     state: str  # "enabled" / "disabled"
     vin: float  # PSU readback (V)
     current: float  # A, zero subtracted (nan if the meter overloaded)
-    std: float
+    std: float  # A, standard deviation of the DMM readings at this point
     vout: float  # AD2 scope 1 (V)
     psu_current: float  # PSU readback (A): coarse, a cross-check only
-    below_floor: bool
-    issues: list[str] = field(default_factory=list)
+    below_floor: bool  # |current| < the result's floor: not resolved, shown as "< floor"
+    issues: list[str] = field(default_factory=list)  # setup problems at this point
 
 
 @dataclass
 class IqResult:
-    method: str
-    rail: str
-    sense_ohm: float
+    """The whole iq run. `issues` = setup issues plus every point's issues (each listed once)."""
+
+    method: str  # "shunt" or "series"
+    rail: str  # series method: "total" or a J1 rail key ("bgr", "vdd", "en", "ota")
+    sense_ohm: float  # ohm, R13 (shunt method)
     zero: float  # A, the DMM reading with the PSU off (subtracted)
     floor: float  # A, smallest current the setup resolves
     points: list[IqPoint]
     check: dict | None  # shunt load check: code, expected, measured (A)
-    vout_nominal: float
-    setup_issues: list[str] = field(default_factory=list)
-    notes: list[str] = field(default_factory=list)
+    vout_nominal: float  # V
+    setup_issues: list[str] = field(default_factory=list)  # problems not tied to one point
+    notes: list[str] = field(default_factory=list)  # findings that don't invalidate the run
 
     @property
     def issues(self) -> list[str]:
@@ -73,10 +98,12 @@ class IqResult:
 
     @property
     def states(self) -> list[str]:
+        """The enable states measured, in run order."""
         return list(dict.fromkeys(p.state for p in self.points))
 
     @property
     def what(self) -> str:
+        """What the current is, in words, for the report and plot title."""
         if self.method == "shunt":
             return f"input current across R13 ({self.sense_ohm:g} ohm)"
         if self.rail == "total":
@@ -151,6 +178,7 @@ class IqResult:
 
 
 def fmt_a(i: float) -> str:
+    """A current in A as mA / uA / nA text; NaN (a DMM overload) prints as "overload"."""
     if not np.isfinite(i):
         return "overload"
     a = abs(i)
@@ -162,6 +190,7 @@ def fmt_a(i: float) -> str:
 
 
 def wiring(bench: Bench, iq: IqConfig) -> list[str]:
+    """Wiring lines for the chosen method / rail; the enable lines only if "disabled" is measured."""
     a, e = bench.cfg.ad2, bench.cfg.enable
     if iq.method == "shunt":
         meter = (
@@ -194,6 +223,11 @@ def wiring(bench: Bench, iq: IqConfig) -> list[str]:
 
 
 def run(bench: Bench, iq: IqConfig) -> IqResult:
+    """Measure supply current vs VIN in each state (see the module docstring for steps and checks).
+
+    iq: the [iq] section. Raises InstrumentError if there is no DMM or its driver can't measure
+    this way; setup problems found in the data are recorded, never raised.
+    """
     if bench.dmm is None:
         raise InstrumentError("iq needs the DMM: enable [dmm] in the config and don't pass --no-dmm")
     dmm = bench.dmm
@@ -215,12 +249,14 @@ def run(bench: Bench, iq: IqConfig) -> IqResult:
     if shunt:
         rng = iq.dmm_range or 0.1
         dmm.configure_dcv(range=rng, nplc=nplc)
+        # volts across R13 -> amps; one count of the range, in amps, is the best case floor
         scale, resolution = 1 / iq.sense_ohm, rng * DIGITS / iq.sense_ohm
     else:
         dmm.configure_dci(range=iq.dmm_range, nplc=nplc)
         scale, resolution = 1.0, (iq.dmm_range or 0.01) * DIGITS  # auto: the 10 mA range's count
 
     def read() -> tuple[float, float]:
+        """(mean, std) of iq.readings DMM readings in A; (nan, nan) if any overloaded."""
         x = np.array([dmm.read() for _ in range(iq.readings)], float) * scale
         if not np.all(np.isfinite(x)):
             return float("nan"), float("nan")
@@ -228,16 +264,19 @@ def run(bench: Bench, iq: IqConfig) -> IqResult:
 
     bench.loadbank.off()
     bench.wavegen_off()
+    # The meter's offset / thermal EMF. Assumes the PSU output is off: this run hasn't switched it
+    # on yet (the bench only forces it off on the first vin_from_psu).
     log.info("Reading the DMM zero (PSU output off) ...")
     zero, zero_std = read()
     setup_issues: list[str] = []
     if not np.isfinite(zero):
         setup_issues.append("the DMM overloads with the PSU off: check its function / leads")
         zero, zero_std = 0.0, 0.0
-    floor = max(3 * zero_std, resolution)
+    floor = max(3 * zero_std, resolution)  # 3 sigma of the zero's noise, never below one count
     log.info("zero %s, floor %s", fmt_a(zero), fmt_a(floor))
 
     if use_enable:
+        # V_33 and EN high before VIN comes up, so the LDO starts enabled for the load check
         bench.enable_logic(True)
         bench.set_enable(True)
 
@@ -253,9 +292,11 @@ def run(bench: Bench, iq: IqConfig) -> IqResult:
         vout, _ = bench.measure_dc(0.05)
         bench.loadbank.off()
         expected = bench.loadbank.current(iq.check_code, vout.mean)
+        # the difference cancels the zero and the LDO's own current
         check = {"code": iq.check_code, "expected": expected, "measured": i1 - i0, "vout": vout.mean}
         log.info("load check: expected +%s, measured %s", fmt_a(expected), fmt_a(i1 - i0))
 
+    # + half a step so vin_stop is included despite float error
     vins = np.round(np.arange(iq.vin_start, iq.vin_stop + iq.vin_step / 2, iq.vin_step), 6)
     points: list[IqPoint] = []
     for state in iq.states:
@@ -345,6 +386,7 @@ def run(bench: Bench, iq: IqConfig) -> IqResult:
 
 
 def _unit(values: list[float]) -> tuple[float, str]:
+    """(scale, unit) for plotting currents in A, from the largest finite magnitude."""
     v = [abs(x) for x in values if np.isfinite(x)]
     top = max(v) if v else 1e-6
     if top >= 1e-3:
@@ -355,6 +397,9 @@ def _unit(values: list[float]) -> tuple[float, str]:
 
 
 def plot(res: IqResult, dut: str):
+    """Current vs VIN, one panel per state. The shaded band is +/- the floor; points under it are
+    hollow (not resolved). Issues go in a red box on the top panel.
+    """
     states = res.states or ["enabled"]
     fig, axes = plotting.figure(
         len(states), 1, size=(7.4, 3.0 * len(states) + 0.6), squeeze=False, sharex=True

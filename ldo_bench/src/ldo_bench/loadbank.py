@@ -16,7 +16,12 @@ from ldo_bench.instruments.base import DigitalOut, InstrumentError
 
 
 class LoadBank:
-    """`i_max` / `vout`: refuse any code whose current at `vout` exceeds `i_max` (the DUT's limit)."""
+    """The load bank: converts codes to DIO pin levels and estimates their current.
+
+    `i_max` / `vout`: refuse any code whose current at `vout` exceeds `i_max` (the DUT's limit).
+    `dio` may be None when the bank is only used for code / current arithmetic (the CLI does this
+    to parse --load). `code` is the last code set (None before the first).
+    """
 
     def __init__(
         self,
@@ -35,9 +40,11 @@ class LoadBank:
 
     @property
     def max_code(self) -> int:
+        """Highest code (all bits on), ignoring i_max."""
         return self.cfg.max_code
 
     def _check(self, code: int) -> None:
+        """ValueError if `code` isn't in 0..max_code."""
         if not 0 <= code <= self.max_code:
             raise ValueError(f"load code {code} outside 0..{self.max_code}")
 
@@ -55,17 +62,20 @@ class LoadBank:
         return vout * self.conductance(code)
 
     def pin_levels(self, code: int) -> dict[int, bool]:
+        """{DIO pin: logic level} for `code`, inverted if the bank is active low."""
         self._check(code)
         return {
             pin: bool(code >> bit & 1) == self.cfg.active_high for bit, pin in enumerate(self.cfg.dio_pins)
         }
 
     def allowed(self, code: int) -> bool:
+        """True if `code` draws at most i_max at `vout` (always True with no limit or inside unrestricted())."""
         if self.i_max is None or self.vout is None or not self._limit_on:
             return True
         return self.current(code, self.vout) <= self.i_max
 
     def allowed_codes(self) -> list[int]:
+        """Every allowed code, ascending."""
         return [c for c in range(self.max_code + 1) if self.allowed(c)]
 
     @property
@@ -74,6 +84,7 @@ class LoadBank:
         return max(self.allowed_codes(), key=self.conductance)
 
     def set(self, code: int) -> None:
+        """Switch the bank to `code`. InstrumentError if it's above i_max, ValueError if out of range."""
         if not self.allowed(code):
             raise InstrumentError(
                 f"load code {code} would draw ~{self.current(code, self.vout) * 1e3:.1f} mA, "
@@ -92,10 +103,14 @@ class LoadBank:
             self._limit_on = True
 
     def off(self) -> None:
+        """All resistors out (code 0)."""
         self.set(0)
 
     def code_for_current(self, amps: float, vout: float) -> int:
-        """The code whose estimated current is closest to `amps`."""
+        """The code whose estimated current at `vout` (V) is closest to `amps` (A).
+
+        Searches every code, not just the allowed ones; the config check then refuses one above dut.i_max.
+        """
         return min(range(self.max_code + 1), key=lambda c: abs(self.current(c, vout) - amps))
 
     def trigger_pin(self, code_low: int, code_high: int) -> tuple[int, bool]:
@@ -111,10 +126,12 @@ class LoadBank:
         return self.cfg.dio_pins[bit], self.pin_edge(bit, code_high)
 
     def pin_edge(self, bit: int, code_high: int) -> bool:
+        """True if `bit`'s pin is at logic high in `code_high` (so it rises on the step to code_high)."""
         set_in_high = bool(code_high >> bit & 1)
         return set_in_high == self.cfg.active_high
 
     def bit_for_pin(self, pin: int) -> int:
+        """Bank bit number (0 = LSB) driven by DIO `pin`; ValueError if it isn't a bank pin."""
         try:
             return self.cfg.dio_pins.index(pin)
         except ValueError:
@@ -126,7 +143,11 @@ _SCALE = {"a": 1.0, "ma": 1e-3, "ua": 1e-6}
 
 
 def parse_load(spec: str, bank: LoadBank, vout: float) -> int:
-    """Parse a CLI load spec: a code ("17") or a current ("67mA", "0.1A")."""
+    """Parse a CLI load spec: a code ("17") or a current ("67mA", "0.1A", "500uA").
+
+    A current is rounded to the nearest code at `vout` (V). ValueError if the spec isn't
+    understood or the code is out of range.
+    """
     spec = spec.strip()
     if spec.isdigit():
         code = int(spec)

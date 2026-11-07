@@ -4,6 +4,18 @@ Wire the DMM straight across the PSU output (nothing else connected) and the
 PSU steps through `psu_check.points`. Useful as a quick sanity / calibration
 check before a measurement session. It also shows how far off the PSU's own
 readback is, which is why the regulation tests measure at the board instead.
+
+run() steps, for each setpoint in `points`: PSU output to it (only psu.v_max
+applies, no DUT), wait settle_time, read the PSU's voltage readback and the
+mean of `readings` DMM readings. Two errors per point:
+- output error = DMM - setpoint (how well the PSU programs its output)
+- readback error = PSU readback - DMM (how well it measures it)
+Each is compared with the model's spec from e36xx.ACCURACY (% of value + offset);
+for a model with no entry there, the errors are recorded with no pass / fail.
+
+Validity check: at setpoints of 0.2 V and up, a DMM reading more than 20 % from
+the setpoint is far beyond any spec, so the DMM isn't on this output. That is a
+setup issue (the run is invalid) but the sweep continues so the plot shows it.
 """
 
 from __future__ import annotations
@@ -25,18 +37,22 @@ NAME = "psu-check"
 
 
 def _limit(spec: tuple[float, float] | None, v: float) -> float:
+    """Allowed error (V) for a (percent of value, offset in V) spec; NaN if there is no spec."""
     return float("nan") if spec is None else spec[0] / 100 * abs(v) + spec[1]
 
 
 @dataclass
 class PsuCheckResult:
-    model: str | None
-    channel: int
+    """One row per setpoint: set_v, dmm_v, readback_v, the two errors, their limits and ok flags (V)."""
+
+    model: str | None  # PSU model from its *IDN?, None if not recognised
+    channel: int  # PSU output channel tested
     rows: list[dict]
-    issues: list[str] = field(default_factory=list)
+    issues: list[str] = field(default_factory=list)  # setup problems: non-empty = not valid
 
     @property
     def passed(self) -> bool | None:
+        """True / False against the spec; None when there is no spec for this model."""
         if self.issues:
             return False
         if self.model not in ACCURACY:
@@ -79,6 +95,10 @@ class PsuCheckResult:
 
 
 def run(bench: Bench, pc: PsuCheckConfig) -> PsuCheckResult:
+    """Step the PSU through pc.points and compare with the DMM (see the module docstring).
+
+    pc: the [psu_check] section. Needs the DMM (InstrumentError without it).
+    """
     if bench.dmm is None:
         raise InstrumentError("psu-check needs the DMM: enable [dmm] in the config (and don't pass --no-dmm)")
     ch = bench.cfg.psu.channel
@@ -100,6 +120,8 @@ def run(bench: Bench, pc: PsuCheckConfig) -> PsuCheckResult:
         bench.sleep(pc.settle_time)
         readback = bench.psu.measure_voltage()
         dmm = float(np.mean([bench.dmm.read_dcv() for _ in range(pc.readings)]))
+        # near 0 V a 20 % window is only a few tens of mV, close to the PSU's offset spec: skip those.
+        # Only the first such point is reported.
         if v >= 0.2 and abs(dmm - v) > 0.2 * v and not off_target:
             # Way beyond any spec: the DMM isn't on this output. Keep going so the plot shows it.
             off_target.append(
@@ -118,6 +140,7 @@ def run(bench: Bench, pc: PsuCheckConfig) -> PsuCheckResult:
                 "readback_error_v": rb_err,
                 "program_limit_v": prog_lim,
                 "readback_limit_v": rb_lim,
+                # `not >` so a NaN limit (no spec) counts as ok
                 "program_ok": not abs(out_err) > prog_lim,
                 "readback_ok": not abs(rb_err) > rb_lim,
             }
@@ -127,6 +150,7 @@ def run(bench: Bench, pc: PsuCheckConfig) -> PsuCheckResult:
 
 
 def plot(res: PsuCheckResult, dut: str):
+    """Output error (top) and readback error (bottom) in mV against setpoint, with the spec limits."""
     del dut  # the DUT isn't involved in this test
     v = np.array([r["set_v"] for r in res.rows])
     panels = [

@@ -1,5 +1,11 @@
 """Agilent 54621A (54620-series) oscilloscope over RS-232, used as a cross-check scope.
 
+Optional. During the transient tests it records the same edge as the AD2, averaged
+over many repeats, so the AD2 result can be compared with an independent scope.
+It is not an Oscilloscope Protocol implementation: it has its own arm() / collect()
+API because one averaged acquisition spans many stimulus repeats. Unlike the HP
+DMM / supply it needs no SYST:REM on RS-232.
+
 Command syntax from the Agilent 54620-Series Programmer's Guide (pub. 54622-97038):
   RS-232      8 data bits, no parity, 1 stop bit (fixed); 9600 / 19200 / 38400 / 57600 baud;
               DTR or XON/XOFF handshake (Utility > I/O on the scope)
@@ -39,9 +45,11 @@ RS232_HINT = (
 
 @dataclass
 class ScopeTrace:
+    """One channel's waveform as the scope returned it."""
+
     t: np.ndarray  # s, 0 at the scope's trigger
     v: np.ndarray  # V
-    averages: int
+    averages: int  # acquisitions actually averaged (the preamble's count)
 
 
 class Agilent54621A:
@@ -61,6 +69,7 @@ class Agilent54621A:
         self.busy = False  # True if a :DIGitize never completed (commands are queued behind it)
 
     def _errors(self) -> list[str]:
+        """Drain :SYSTem:ERRor? ('<code>,"<message>"', code 0 = no error)."""
         errs = []
         for _ in range(10):
             e = self.t.query(":SYSTem:ERRor?")
@@ -73,6 +82,7 @@ class Agilent54621A:
         return errs
 
     def _send(self, *cmds: str) -> None:
+        """Send commands, then raise if the scope rejected any of them."""
         for c in cmds:
             self.t.write(c)
         errs = self._errors()
@@ -95,7 +105,13 @@ class Agilent54621A:
         averages: int,
         points: int = 2000,
     ) -> None:
-        """Set up and start :DIGitize; it completes after `averages` triggers on the ref channel."""
+        """Set up and start :DIGitize; it completes after `averages` triggers on the ref channel.
+
+        window (s) is the full time span; pre_trigger the fraction of it before the trigger.
+        Ranges (V full scale) and offsets (V, centre of screen) are per channel. The trigger is
+        an `edge` through trigger_level (V) on the ref channel. points: 100..2000 per channel.
+        Returns at once; the caller then runs the stimulus and calls collect().
+        """
         self._channels = (vout_channel, ref_channel)
         self._points = points
         self._send(":STOP", ":TIMebase:MODE MAIN")
@@ -118,8 +134,8 @@ class Agilent54621A:
             ":TRIGger:SWEep NORMal",  # only real triggers count toward the average
             f":ACQuire:TYPE {'AVERage' if averages > 1 else 'NORMal'}",
             f":ACQuire:COUNt {max(1, averages)}",
-            ":ACQuire:COMPlete 100",
-            ":WAVeform:FORMat WORD",
+            ":ACQuire:COMPlete 100",  # :DIGitize isn't done until every point has data
+            ":WAVeform:FORMat WORD",  # 16-bit codes: keeps the extra resolution averaging gives
             ":WAVeform:BYTeorder MSBFirst",
             ":WAVeform:UNSigned ON",
             f":WAVeform:POINts {points}",
@@ -169,14 +185,16 @@ class Agilent54621A:
         if extra:
             log.info("%s needed %d extra steps to complete its average", self.model, extra)
         out = {}
-        old = self.t.set_timeout(max(old or 0, 10.0))
+        old = self.t.set_timeout(
+            max(old or 0, 10.0)
+        )  # a 2000-point WORD block is 4 kB: ~0.7 s at 57600 baud, ~4 s at 9600
         try:
             for ch in self._channels:
                 self.t.write(f":WAVeform:SOURce CHANnel{ch}")
                 pre = [float(x) for x in self.t.query(":WAVeform:PREamble?").split(",")]
                 _fmt, _typ, n, count, xinc, xorg, xref, yinc, yorg, yref = pre
                 raw = self.t.read_block(":WAVeform:DATA?")
-                codes = np.frombuffer(raw, dtype=">u2").astype(float)
+                codes = np.frombuffer(raw, dtype=">u2").astype(float)  # MSB first, unsigned (set in arm())
                 v = (codes - yref) * yinc + yorg
                 t = (np.arange(len(codes)) - xref) * xinc + xorg
                 out[ch] = ScopeTrace(t, v, int(count))

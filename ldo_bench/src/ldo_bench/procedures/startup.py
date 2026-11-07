@@ -8,6 +8,18 @@ The scope triggers on the AD2's own DIO edge, so both channels are free: ch1 = V
 (TP3, the BGR output) or the voltage across R13 (input current) / R1 (output current). Each edge
 (enable, disable) is captured `averages` times and averaged; t = 0 is the DIO edge, so delays
 include the level shifter and the enable block.
+
+run() steps:
+1. Confirm the wiring; AD2 V+ on (V_33), enable low, load code set, PSU ramps VIN, wait off_time.
+2. For each edge: `_capture_edge` puts the enable in its starting state, waits (off_time before
+   an enable edge, on_time before a disable edge), arms a capture triggered by the DIO pin and
+   flips the enable. Repeated `averages` times and averaged with align_average.
+3. `analysis.step_metrics` on VOUT and on ch2 (currents = volts across the sense resistor /
+   sense_ohm): before / after levels, 10 % and 90 % times, settling time, overshoot, peak.
+4. Validity checks from the data: on the enable edge VOUT must start below 20 % of nominal (else
+   the enable path isn't controlling the LDO) and end near nominal (bench.vout_issue), and VREF
+   must end within 20 % of su.vref_nominal; on the disable edge VOUT must start near nominal.
+5. Enable low, load bank off.
 """
 
 from __future__ import annotations
@@ -34,13 +46,15 @@ CH2_NAME = {"vref": "VREF", "iin": "I_in", "iout": "I_out"}
 
 @dataclass
 class EdgeStartup:
+    """One enable or disable edge, averaged, with step metrics for both channels."""
+
     edge: str  # "rising" = enable, "falling" = disable
-    t: np.ndarray
-    vout: np.ndarray
+    t: np.ndarray  # s, 0 at the EN_CTRL_33 DIO edge
+    vout: np.ndarray  # V
     ch2: np.ndarray  # V for vref, A for currents
     vout_m: StepMetrics
     ch2_m: StepMetrics
-    issues: list[str] = field(default_factory=list)
+    issues: list[str] = field(default_factory=list)  # setup problems: non-empty = not a valid edge
 
     @property
     def title(self) -> str:
@@ -49,13 +63,15 @@ class EdgeStartup:
 
 @dataclass
 class StartupResult:
-    vin: float
-    ch2: str
-    averages: int
-    load_code: int
-    i_load: float
+    """The whole enable-startup run: one EdgeStartup per edge in startup.edges."""
+
+    vin: float  # V, PSU setpoint
+    ch2: str  # what scope ch2 measured: "vref", "iin" or "iout"
+    averages: int  # captures averaged per edge
+    load_code: int  # load bank code held during the run
+    i_load: float  # A, that code's current at the nominal VOUT
     edges: list[EdgeStartup]
-    vout_nominal: float
+    vout_nominal: float  # V
     setup_issues: list[str] = field(default_factory=list)
 
     @property
@@ -136,6 +152,7 @@ class StartupResult:
 
 
 def wiring(bench: Bench, su: StartupConfig) -> list[str]:
+    """Wiring lines shown before the run; the ch2 line depends on su.ch2."""
     a, e, lb = bench.cfg.ad2, bench.cfg.enable, bench.cfg.loadbank
     ch2 = {
         "vref": f"Scope {a.ref_channel}+ -> TP3 (VREF, the BGR output), {a.ref_channel}- -> GND; JP2 closed",
@@ -158,17 +175,24 @@ def wiring(bench: Bench, su: StartupConfig) -> list[str]:
 
 
 def _capture_edge(bench: Bench, su: StartupConfig, setups, edge: str) -> tuple[Capture, list[str]]:
+    """`su.averages` captures of one enable edge, averaged, plus any trigger issues.
+
+    The AD2 triggers on its own DIO output (dio_trigger), so the scope channels are free for VOUT
+    and ch2. If a capture never triggers, a forced capture is taken and the average of the ones
+    that did trigger (or the forced one) is returned with an issue.
+    """
     on = edge == "rising"
     pin = bench.cfg.enable.dio_pin
     caps, issues = [], []
     for k in range(su.averages):
         bench.set_enable(not on)  # start state
+        # time in the start state: fully off (caps discharged) before enabling, settled on before disabling
         bench.sleep(su.off_time if on else su.on_time)
         kw = {
             "sample_rate": su.n_samples / su.window,
             "n_samples": su.n_samples,
             "setups": setups,
-            "trigger_channel": 1,
+            "trigger_channel": 1,  # the DIO trigger below replaces the analog trigger
             "trigger_level": 0.0,
             "edge": edge,
             "pre_trigger": su.pre_trigger,
@@ -191,6 +215,10 @@ def _capture_edge(bench: Bench, su: StartupConfig, setups, edge: str) -> tuple[C
 
 
 def run(bench: Bench, su: StartupConfig) -> StartupResult:
+    """Capture each edge in su.edges (see the module docstring for the steps and checks).
+
+    su: the [startup] section. Setup problems are recorded per edge, never raised.
+    """
     a = bench.cfg.ad2
     nom = bench.cfg.dut.vout_nominal
     bench.confirm_wiring(
@@ -201,7 +229,7 @@ def run(bench: Bench, su: StartupConfig) -> StartupResult:
     )
     setups = {
         a.vout_channel: ChannelSetup(a.vout.range, a.vout.offset),
-        a.ref_channel: ChannelSetup(su.ch2_range, 0.0),
+        a.ref_channel: ChannelSetup(su.ch2_range, 0.0),  # range set per ch2 signal (VREF or a sense voltage)
     }
     bench.enable_logic(True)
     bench.set_enable(False)
@@ -216,11 +244,12 @@ def run(bench: Bench, su: StartupConfig) -> StartupResult:
         t = cap.time
         vout = cap.channel(a.vout_channel)
         raw2 = cap.channel(a.ref_channel)
-        ch2 = raw2 if su.ch2 == "vref" else raw2 / su.sense_ohm
+        ch2 = raw2 if su.ch2 == "vref" else raw2 / su.sense_ohm  # currents: Ohm's law on R13 / R1
         vm = step_metrics(t, vout, su.settle_fraction)
         cm = step_metrics(t, ch2, su.settle_fraction)
         # setup checks from the data (the run still saves what it measured)
         if edge == "rising":
+            # a disabled LDO should sit near 0 V; 20 % of nominal leaves room for leakage and noise
             if vm.before > 0.2 * nom:
                 issues.append(
                     f"VOUT was already {vm.before:.3f} V before the enable edge: the enable path isn't "
@@ -253,6 +282,11 @@ def run(bench: Bench, su: StartupConfig) -> StartupResult:
 
 
 def plot(res: StartupResult, dut: str):
+    """One column per edge: VOUT on top, ch2 below, against time from the EN_CTRL_33 edge.
+
+    Valid edges get the final levels and the 10 % / 90 % markers (VREF and VOUT only); invalid
+    edges show the expected VOUT and the issues in a red box.
+    """
     n = len(res.edges)
     fig, axes = plotting.figure(2, n, size=(5.4 * n, 5.8), squeeze=False, sharex="col")
     span = res.edges[0].t[-1] - res.edges[0].t[0] if res.edges else 1e-3

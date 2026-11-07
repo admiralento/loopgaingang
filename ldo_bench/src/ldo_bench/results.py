@@ -1,10 +1,19 @@
 """Run folders: raw data (CSV), metadata (JSON) and plots (PNG) for every run.
 
-results/load-reg/20261106-143012_JAFWAK_load-reg/   (one subfolder per test)
+Layout (the root is --out, default `results`):
+
+results/<test>/<stamp>_<dut>_<test>[_SIM][_INVALID]/
+    e.g. results/load-reg/20261106-143012_JAFWAK_load-reg/
     data.csv      one row per measurement point
-    summary.json  headline numbers
+    *.csv         extra tables some tests write
+    summary.json  headline numbers (valid = false for an _INVALID run)
     meta.json     config, instrument IDs, git commit, package versions
-    plot.png
+    plot.png      main plot; some tests add more plot*.png (e.g. plot_full.png)
+results/latest.png, results/<test>/latest.png, results/<test>/latest_full.png, results/latest_run.txt
+    copies of the newest run's plots (see RunDir.publish_latest)
+
+<stamp> is the local start time YYYYmmdd-HHMMSS; <dut> is dut.name made filename-safe.
+_SIM: made with --sim --save-sim. _INVALID: the test found a setup problem.
 """
 
 from __future__ import annotations
@@ -28,10 +37,13 @@ PACKAGES = ("ldo-bench", "numpy", "pyvisa", "pyvisa-py", "pydwf", "matplotlib")
 
 
 def _slug(s: str) -> str:
+    """`s` with anything but letters, digits, '.', '_' and '-' replaced by '-' ('dut' if empty)."""
     return re.sub(r"[^A-Za-z0-9._-]+", "-", s).strip("-") or "dut"
 
 
 def _git_info() -> dict[str, Any]:
+    """Commit of this package's checkout and whether it had uncommitted changes (None if no git)."""
+
     def git(*args: str) -> str | None:
         try:
             out = subprocess.run(
@@ -45,6 +57,7 @@ def _git_info() -> dict[str, Any]:
 
 
 def _versions() -> dict[str, str]:
+    """Python, OS and installed versions of PACKAGES (missing ones are left out)."""
     out = {"python": platform.python_version(), "platform": platform.platform()}
     for p in PACKAGES:
         with contextlib.suppress(metadata.PackageNotFoundError):
@@ -53,6 +66,13 @@ def _versions() -> dict[str, str]:
 
 
 class RunDir:
+    """One run's folder, created on construction (see the module docstring for the layout).
+
+    root: the results folder; test: the test name (subfolder and suffix); cfg: the validated
+    config (copied into meta.json); config_path: the TOML file it came from; simulated / invalid
+    add _SIM / _INVALID to the folder name.
+    """
+
     def __init__(
         self,
         root: Path,
@@ -73,12 +93,14 @@ class RunDir:
         suffix = ("_SIM" if simulated else "") + ("_INVALID" if invalid else "")
         # one folder per test: results/load-reg/..., results/line-tran/...
         self.path = Path(root) / test / f"{stamp}_{_slug(cfg.dut.name)}_{test}{suffix}"
-        self.path.mkdir(parents=True, exist_ok=False)
+        self.path.mkdir(parents=True, exist_ok=False)  # never overwrite an earlier run
 
     def file(self, name: str) -> Path:
+        """Path of `name` inside the run folder."""
         return self.path / name
 
     def write_csv(self, name: str, rows: list[dict[str, Any]]) -> Path:
+        """Write rows (dicts) as CSV; the first row's keys are the header. Empty rows -> empty file."""
         p = self.file(name)
         if not rows:
             p.write_text("")
@@ -90,11 +112,13 @@ class RunDir:
         return p
 
     def write_json(self, name: str, data: dict[str, Any]) -> Path:
+        """Write `data` as indented JSON; anything not JSON-serialisable is written as str()."""
         p = self.file(name)
         p.write_text(json.dumps(data, indent=2, default=str) + "\n")
         return p
 
     def write_meta(self, *, idns: dict[str, str], sim: bool, extra: dict[str, Any] | None = None) -> Path:
+        """Write meta.json: start / finish time, instrument IDs, full config, git commit, versions."""
         meta = {
             "test": self.test,
             "started": self.started.isoformat(timespec="seconds"),
@@ -110,6 +134,7 @@ class RunDir:
         return self.write_json("meta.json", meta)
 
     def save_fig(self, fig, name: str = "plot.png") -> Path:
+        """Save a matplotlib figure into the run folder (150 dpi)."""
         p = self.file(name)
         fig.savefig(p, dpi=150)
         return p

@@ -5,6 +5,24 @@ powers the buffer rail (VS_BUFF / VDD_BUF), which sits above the LDO's VIN
 limit, so before raising it we check that the PSU is *not* on VIN. The
 buffer's offset is calibrated out using VIN measured at the board, so the
 steps land on vin_low / vin_high. The scope triggers on VIN itself.
+
+Scope vout channel on VOUT, scope ref channel on VIN at the LDO input (trigger and
+VIN level). An optional fixed load from the load bank (load_code).
+
+run() steps:
+1. Confirm the wiring, set the load code.
+2. Interlock (`_interlock`): W1 off, buffer rail at INTERLOCK_RAIL (1 V); if VIN
+   then reads above INTERLOCK_FRACTION of that, the PSU is on VIN and the run
+   stops (InstrumentError) before the rail goes above dut.vin_max.
+3. Buffer rail to line_tran.psu_voltage, then `_calibrate` finds the W1 setpoints
+   that put VIN at vin_low and vin_high (measured by the AD2). A level that can't
+   be reached becomes a setup issue; VIN above dut.vin_max is a hard stop.
+4. VOUT DC check at vin_low (setup issue if not near nominal).
+5. For each edge: `averaged_step` steps W1 between the two setpoints, then
+   `settling_analysis` and `capture_issues` as in load-tran (expected ref swing =
+   vin_high - vin_low). The extra metric is the peak VOUT deviation per volt of
+   VIN step (V/V).
+6. W1 off, load bank off.
 """
 
 from __future__ import annotations
@@ -42,17 +60,19 @@ CAL_MAX_CORRECTION = 0.25  # V: W1 never goes further than this from the target 
 
 @dataclass
 class EdgeResult:
+    """One VIN step (up or down), averaged, with its settling metrics."""
+
     edge: str  # "rising" = VIN stepped up
     v_from: float  # measured VIN levels (V)
     v_to: float
     metrics: SettlingResult
-    t: np.ndarray
-    vout: np.ndarray
-    vout_smoothed: np.ndarray
-    ref: np.ndarray
-    trigger_level: float | None = None
-    issues: list[str] = field(default_factory=list)
-    vout_channel: int = 1
+    t: np.ndarray  # s, 0 at the step
+    vout: np.ndarray  # V, averaged VOUT
+    vout_smoothed: np.ndarray  # V, VOUT after glitch removal and the moving average
+    ref: np.ndarray  # V, VIN at the LDO input (scope ref channel)
+    trigger_level: float | None = None  # V, the AD2 trigger level on VIN
+    issues: list[str] = field(default_factory=list)  # setup problems: non-empty = not a valid edge
+    vout_channel: int = 1  # AD2 scope channel on VOUT (for the plot label)
     xcheck: XCheck | None = None  # the 54621A's view of the same edge, if enabled
 
     @property
@@ -69,14 +89,20 @@ class EdgeResult:
 
 @dataclass
 class LineTranResult:
-    rail: float
-    load_code: int
-    i_load: float
+    """The whole line-transient run: one EdgeResult per edge in line_tran.edges.
+
+    `issues` combines the setup issues (calibration, VOUT check) with each edge's own; any issue
+    makes the run invalid.
+    """
+
+    rail: float  # V, buffer rail (PSU setpoint)
+    load_code: int  # load bank code held during the run
+    i_load: float  # A, that code's current at the nominal VOUT
     w1_low: float  # wavegen setpoints after calibration
     w1_high: float
-    averages: int
+    averages: int  # captures averaged per edge
     edges: list[EdgeResult]
-    vout_nominal: float = 1.0
+    vout_nominal: float = 1.0  # V, dut.vout_nominal (drawn on invalid plots)
     setup_issues: list[str] = field(default_factory=list)  # found before any capture
     plot_window: float | None = None  # s after the step shown in plot.png (None = automatic)
 
@@ -162,6 +188,7 @@ class LineTranResult:
 
 
 def wiring(bench: Bench) -> list[str]:
+    """Wiring lines shown before the run (the load bank line only if a load code is set)."""
     a, lb = bench.cfg.ad2, bench.cfg.loadbank
     lines = [
         f"PSU OUT{bench.cfg.psu.channel} -> buffer rail VS_BUFF / VDD_BUF and GND. NOT on VIN: "
@@ -176,13 +203,20 @@ def wiring(bench: Bench) -> list[str]:
 
 
 def _measure_vin(bench: Bench) -> float:
+    """VIN at the board (V): the AD2 ref channel averaged over 50 ms."""
     _, vin = bench.measure_dc(0.05)
     return vin.mean
 
 
 def _interlock(bench: Bench, rail: float) -> None:
-    """Refuse to raise the rail if the PSU is wired to VIN instead of the buffer rail."""
+    """Refuse to raise the rail if the PSU is wired to VIN instead of the buffer rail.
+
+    With W1 off the buffer output (VIN) should sit near 0 V whatever the rail is. If VIN follows
+    the rail instead, the PSU leads are on VIN. The check uses a low rail voltage (INTERLOCK_RAIL),
+    which is safe for the LDO even if it is wired wrong. Also used by psrr.
+    """
     bench.wavegen_off()
+    # never above the real rail target, so a low psu_voltage is not exceeded by the check
     v_check = min(INTERLOCK_RAIL, rail)
     bench.buffer_rail(v_check)
     vin = _measure_vin(bench)
@@ -200,12 +234,17 @@ def _calibrate(bench: Bench, target: float) -> tuple[float, float, str | None]:
 
     The correction is capped (CAL_MAX_CORRECTION) so a buffer that isn't driving VIN can't make us
     push W1 up; going over dut.vin_max is a hard stop.
+
+    Simple fixed-point iteration: W1 += (target - measured VIN), up to CAL_ITERATIONS times, done
+    when VIN is within CAL_TOLERANCE. The buffer is unity gain, so a few passes remove its offset.
+    If it doesn't converge, the last setpoint is applied and the issue says so. Also used by psrr
+    for its DC level.
     """
-    w = target
+    w = target  # start from the target: unity gain buffer, only its offset to remove
     vin = float("nan")
     for _ in range(CAL_ITERATIONS):
         bench.vin_from_wavegen(w)
-        bench.sleep(0.02)
+        bench.sleep(0.02)  # let VIN settle at the new setpoint before measuring
         vin = _measure_vin(bench)
         if vin > bench.cfg.dut.vin_max:
             raise InstrumentError(f"VIN reached {vin:.3f} V, above dut.vin_max: stopping")
@@ -225,6 +264,11 @@ def _calibrate(bench: Bench, target: float) -> tuple[float, float, str | None]:
 
 
 def run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig) -> LineTranResult:
+    """Measure each VIN edge in lt.edges (see the module docstring for the steps).
+
+    lt: the [line_tran] section. an: the [analysis] settings for settling_analysis. The interlock
+    and dut.vin_max raise InstrumentError (the run stops); everything else is recorded as issues.
+    """
     a = bench.cfg.ad2
     bench.confirm_wiring("line transient", wiring(bench), ref_probe=("vin", 0), psu_to="rail")
     setups = {
@@ -232,7 +276,7 @@ def run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig) -> LineTranResult:
         a.ref_channel: ChannelSetup(a.ref.range, a.ref.offset),
     }
     bench.loadbank.set(lt.load_code)
-    _interlock(bench, lt.psu_voltage)
+    _interlock(bench, lt.psu_voltage)  # must pass before the rail goes above dut.vin_max
     bench.buffer_rail(lt.psu_voltage)
     w_lo, v_lo, cal_lo = _calibrate(bench, lt.vin_low)
     w_hi, v_hi, cal_hi = _calibrate(bench, lt.vin_high)
@@ -250,6 +294,8 @@ def run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig) -> LineTranResult:
 
     results = []
     for edge in lt.edges:
+        # rising: low -> high; falling: the same pair reversed. VIN moves the same way as the edge,
+        # so `edge` is also the scope trigger direction.
         (w_from, v_from), (w_to, v_to) = ((w_lo, v_lo), (w_hi, v_hi))[:: 1 if edge == "rising" else -1]
         sc = averaged_step(
             bench,
@@ -261,6 +307,7 @@ def run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig) -> LineTranResult:
             start=lambda w=w_from: bench.vin_from_wavegen(w),
             step=lambda w=w_to: bench.vin_from_wavegen(w),
             label=f"VIN step {edge}",
+            # VIN step at 1/8 of the screen (at least 0.4 V full scale), centred on the trigger level
             xscope=XScopeSetup(ref_range=max(8 * abs(lt.vin_high - lt.vin_low), 0.4), ref_offset=trig_level),
         )
         cap, trig_issues = sc.cap, sc.issues
@@ -324,6 +371,10 @@ def run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig) -> LineTranResult:
 
 
 def plot(res: LineTranResult, dut: str, full: bool = False):
+    """plot.png: one column per edge (VIN on top, VOUT below), zoomed on the step.
+
+    full=True shows the whole capture instead (plot_full.png).
+    """
     span = ""
     if full and res.edges:
         t = res.edges[0].t * 1e3

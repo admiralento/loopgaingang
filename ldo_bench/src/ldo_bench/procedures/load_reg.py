@@ -4,6 +4,21 @@ VOUT and VIN are measured at the board with the AD2 (DC-averaged), not from
 the supply's readback, so cable drop does not count against the LDO. Load
 current is estimated from the bank resistors and the measured VOUT; the PSU's
 current readback is recorded too (it adds the LDO's quiescent current).
+When a DMM is configured it measures VOUT instead of the AD2 (bench.measure_point);
+the AD2's reading is still saved as vout_ad2_v.
+
+run() steps:
+1. Confirm the wiring. Codes = load_reg.codes, or every code whose estimated
+   current is within dut.i_max (the load bank refuses any code above it).
+2. Load bank off, PSU ramps VIN to `vin`.
+3. For each code: set it, wait settle_time, one measure_point.
+4. Load bank off. `analysis.load_regulation` fits VOUT against the estimated
+   load current: slope (V/A = mV/mA; -slope is the DC output resistance), and
+   dVOUT from the lightest to the heaviest load (also as % of VOUT).
+
+Validity check: VOUT must be near nominal (bench.vout_issue) at every point, which
+also catches a probe that comes loose partway through. Any failure makes the run
+invalid and the plot shows only the measured data, with no fit.
 """
 
 from __future__ import annotations
@@ -25,12 +40,14 @@ NAME = "load-reg"
 
 @dataclass
 class LoadRegResult:
-    vin_set: float
+    """A load sweep at one VIN. `rows` is data.csv: one dict per load code (volts, amps)."""
+
+    vin_set: float  # V, PSU setpoint on VIN
     rows: list[dict]
-    reg: LoadRegulation
-    vout_source: str = "ad2"
-    vout_nominal: float = 1.0
-    issues: list[str] = field(default_factory=list)
+    reg: LoadRegulation  # fit and endpoints (see analysis.LoadRegulation)
+    vout_source: str = "ad2"  # "dmm" or "ad2"
+    vout_nominal: float = 1.0  # V
+    issues: list[str] = field(default_factory=list)  # setup problems: non-empty = not valid
 
     def summary(self) -> dict:
         return {
@@ -65,6 +82,7 @@ class LoadRegResult:
 
 
 def wiring(bench: Bench) -> list[str]:
+    """Wiring lines shown before the run."""
     a, lb = bench.cfg.ad2, bench.cfg.loadbank
     return [
         "PSU -> VIN (DC input, not through the buffer)",
@@ -75,6 +93,10 @@ def wiring(bench: Bench) -> list[str]:
 
 
 def run(bench: Bench, lr: LoadRegConfig) -> LoadRegResult:
+    """Step through the load codes and fit load regulation (see the module docstring).
+
+    lr: the [load_reg] section. Setup problems are recorded in `issues`, never raised.
+    """
     bank = bench.loadbank
     codes = lr.codes or bank.allowed_codes()  # [] = every code within dut.i_max
     bench.confirm_wiring("load regulation", wiring(bench), ref_probe=("vin", 0))
@@ -90,8 +112,8 @@ def run(bench: Bench, lr: LoadRegConfig) -> LoadRegResult:
         issue = bench.vout_issue(p.vout, source=p.source.upper())
         row = {
             "code": code,
-            "i_est_a": bank.current(code, p.vout),
-            "i_expected_a": bank.current(code, bench.cfg.dut.vout_nominal),
+            "i_est_a": bank.current(code, p.vout),  # used for the fit
+            "i_expected_a": bank.current(code, bench.cfg.dut.vout_nominal),  # what the code should draw
             "vout_ok": issue is None,
             "vout_v": p.vout,
             "vout_std_v": p.vout_std,
@@ -133,7 +155,10 @@ def run(bench: Bench, lr: LoadRegConfig) -> LoadRegResult:
 
 
 def _plot_invalid(res: LoadRegResult, dut: str):
-    """Measured VOUT in absolute volts against the expected load current, with the expected VOUT."""
+    """Measured VOUT in absolute volts against the expected load current, with the expected VOUT.
+
+    Uses the current at nominal VOUT for x, since the estimate from a wrong VOUT would be wrong too.
+    """
     i_ma = np.array([row["i_expected_a"] for row in res.rows]) * 1e3
     v = np.array([row["vout_v"] for row in res.rows])
     order = np.argsort(i_ma)
@@ -172,6 +197,10 @@ def _plot_invalid(res: LoadRegResult, dut: str):
 
 
 def plot(res: LoadRegResult, dut: str):
+    """VOUT change (mV, from VOUT at the lightest load) against load current, with the fit line.
+
+    Invalid runs: _plot_invalid.
+    """
     if res.issues:
         return _plot_invalid(res, dut)
     r = res.reg
@@ -181,7 +210,7 @@ def plot(res: LoadRegResult, dut: str):
 
     fig, ax = plotting.figure()
     xs = np.array([i_ma.min(), i_ma.max()])
-    fit_mv = (r.slope * xs * 1e-3 + r.intercept - r.v_at_i_min) * 1e3
+    fit_mv = (r.slope * xs * 1e-3 + r.intercept - r.v_at_i_min) * 1e3  # xs in mA, slope in V/A
     ax.plot(xs, fit_mv, color=plotting.INK_2, lw=1.2, ls=(0, (4, 3)), label="Linear fit", zorder=2)
     ax.plot(
         i_ma[order],

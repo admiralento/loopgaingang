@@ -1,4 +1,8 @@
-"""Message transports for SCPI instruments on GPIB.
+"""Message transports: how a driver's SCPI strings reach the instrument.
+
+Drivers (e36xx, hp34401a, agilent546xx) only call write / query / read_block on a
+Transport, so the same driver works whether the instrument is on GPIB or RS-232.
+open_transport() picks the class from the resource string.
 
 Two kinds of USB-GPIB adapter exist and we support both:
 
@@ -38,7 +42,8 @@ log = logging.getLogger(__name__)
 
 PROLOGIX_PREFIX = "prologix:"
 SERIAL_PREFIX = "serial:"
-# parity setting -> (data bits, pyserial parity)
+# parity setting -> (data bits, pyserial parity). HP instruments send 7 data bits when parity is
+# on (7E2 / 7O2) and 8 when it's off (8N2): the parity bit takes the place of the 8th data bit.
 SERIAL_FRAMES = {"none": (8, "N"), "even": (7, "E"), "odd": (7, "O")}
 
 
@@ -57,7 +62,11 @@ class Transport(Protocol):
 
 
 def parse_block(raw: bytes, cmd: str, name: str) -> bytes:
-    """Data of an IEEE 488.2 definite-length block: #<n><n-digit length><data>[NL]."""
+    """Data of an IEEE 488.2 definite-length block: #<n><n-digit length><data>[NL].
+
+    E.g. b"#42000" + 2000 data bytes: '4' says the length field has 4 digits. Binary data may
+    contain '\\n', so the length, not a terminator, says where the block ends.
+    """
     if len(raw) < 2 or raw[:1] != b"#" or not raw[1:2].isdigit():
         raise InstrumentError(f"{name}: '{cmd}' did not return a data block (got {raw[:16]!r})")
     nd = int(raw[1:2])
@@ -120,6 +129,7 @@ def open_transport(
 
 
 def visa_resource_manager(backend: str = ""):
+    """A PyVISA ResourceManager; backend "" = the installed VISA (NI / Keysight), "@py" = pyvisa-py."""
     import pyvisa
 
     try:
@@ -132,6 +142,11 @@ def visa_resource_manager(backend: str = ""):
 
 
 class VisaTransport:
+    """Anything PyVISA can open: GPIB cards, Keysight / NI USB-GPIB, the UsbGpib (USBTMC).
+
+    Messages are terminated with LF both ways, as SCPI instruments expect.
+    """
+
     def __init__(self, resource: str, *, backend: str = "", timeout: float = 5.0) -> None:
         import pyvisa
 
@@ -188,7 +203,11 @@ class VisaTransport:
 
 
 class PrologixTransport:
-    """Prologix-protocol USB-GPIB adapter in controller mode."""
+    """Prologix-protocol USB-GPIB adapter in controller mode.
+
+    Lines starting with '++' configure the adapter; anything else is sent to the instrument at
+    the current GPIB address. One adapter can reach many addresses (set_address()).
+    """
 
     def __init__(self, port: str, address: int, *, timeout: float = 5.0, serial_obj=None) -> None:
         self.name = f"{PROLOGIX_PREFIX}{port}:{address}"
@@ -205,12 +224,12 @@ class PrologixTransport:
         self._ser = serial_obj
         tmo_ms = max(500, min(3000, int(timeout * 1000)))
         for c in (
-            "++mode 1",
+            "++mode 1",  # controller (we are the GPIB controller-in-charge)
             f"++addr {address}",
-            "++auto 0",
-            "++eoi 1",
-            "++eos 2",
-            f"++read_tmo_ms {tmo_ms}",
+            "++auto 0",  # don't auto-read after each write: we ask with '++read eoi' when a reply is due
+            "++eoi 1",  # assert EOI with the last byte we send
+            "++eos 2",  # append LF to commands sent to the instrument
+            f"++read_tmo_ms {tmo_ms}",  # inter-character read timeout; adapter allows up to 3000 ms
         ):
             self._raw(c)
 
@@ -218,12 +237,13 @@ class PrologixTransport:
         self._ser.write((line + "\n").encode("ascii"))
 
     def set_address(self, address: int) -> None:
+        """Talk to another GPIB address on the same adapter (used when scanning)."""
         self.address = address
         self._raw(f"++addr {address}")
 
     def write(self, cmd: str) -> None:
         log.debug("%s <- %s", self.name, cmd)
-        # Escape characters the adapter would otherwise interpret.
+        # Escape characters the adapter would otherwise interpret (ESC, '+', CR) with ESC.
         esc = cmd.replace("\x1b", "\x1b\x1b").replace("+", "\x1b+").replace("\r", "\x1b\r")
         self._raw(esc)
 
@@ -245,6 +265,7 @@ class PrologixTransport:
         self._ser.reset_input_buffer()
         self.write(cmd)
         self._raw("++read eoi")
+        # Read exactly the header-announced byte count: binary data may contain LF.
         head = self._ser.read(2)
         nd = int(head[1:2]) if len(head) == 2 and head[1:2].isdigit() else 0
         length = self._ser.read(nd) if nd else b""
@@ -260,6 +281,7 @@ class PrologixTransport:
         return old if old is not None else seconds
 
     def adapter_version(self) -> str:
+        """The adapter's '++ver' reply; '' means whatever is on this port isn't a Prologix adapter."""
         self._ser.reset_input_buffer()
         self._raw("++ver")
         return self._ser.readline().decode("ascii", "replace").strip()
@@ -281,6 +303,11 @@ class SerialTransport:
     each command, wait briefly for the instrument's DSR (it drops it while busy;
     the 34401A loses characters otherwise). If DSR never shows up (adapter or
     cable doesn't wire it) we stop waiting for it. Needs a null-modem cable.
+
+    This is software pacing, not pyserial's dsrdtr flow control, so it degrades
+    gracefully when DSR isn't wired. The 54621A, whose DTR mode is a real
+    hardware handshake, uses flow="dsrdtr" instead. Replies are checked for
+    non-ASCII bytes, the usual symptom of a baud / parity mismatch.
     """
 
     CMD_GAP = 0.05  # s after each command: the 34401A drops back-to-back input
@@ -332,10 +359,11 @@ class SerialTransport:
         self._use_dsr = flow == "dsr-pacing"
 
     def _wait_dsr(self) -> None:
+        """Wait up to DSR_WAIT for the instrument to say it's ready; give up on DSR for good if it never does."""
         if not self._use_dsr:
             return
         t_end = time.monotonic() + self.DSR_WAIT
-        while not getattr(self._ser, "dsr", True):
+        while not getattr(self._ser, "dsr", True):  # test fakes may have no dsr attribute: treat as ready
             if time.monotonic() > t_end:
                 log.debug("%s: DSR never asserted; not using the handshake", self.name)
                 self._use_dsr = False
@@ -360,6 +388,7 @@ class SerialTransport:
         self._ser.reset_input_buffer()
         self.write(cmd)
         raw = self._ser.readline()
+        # Anything outside printable ASCII + CR/LF means the framing is wrong (e.g. 8N2 vs 7E2).
         if any(b > 0x7E or (b < 0x20 and b not in (0x0A, 0x0D)) for b in raw):
             raise InstrumentError(
                 f"{self.name}: garbled reply to '{cmd}' ({raw[:24]!r}): the instrument's baud rate or "

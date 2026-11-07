@@ -1,4 +1,8 @@
-"""Agilent / Keysight E36xxA DC power supplies (SCPI over GPIB).
+"""Agilent / Keysight E36xxA DC power supplies (SCPI over GPIB or RS-232).
+
+The PowerSupply driver. Over RS-232 the supply ignores commands until it is put in
+remote mode (SYST:REM), and is returned to local (SYST:LOC) on close so the front
+panel works again; on GPIB remote/local is handled by the bus.
 
 Supported models:
     E3638A   single output
@@ -43,11 +47,13 @@ def model_of(idn: str) -> str | None:
 
 
 class AgilentE36xx:
+    """PowerSupply for the E3638A / E3648A. `channel` (1-based) is the output we drive."""
+
     def __init__(self, transport: Transport, channel: int = 1) -> None:
         self.t = transport
         self.serial = getattr(transport, "kind", "") == "serial"
         if self.serial:  # RS-232 needs remote mode before it accepts commands
-            self.t.write("")
+            self.t.write("")  # bare LF: ends any partial command left in the input buffer
             self.t.write("SYST:REM")
         self.idn = self.t.query("*IDN?")
         model = model_of(self.idn)
@@ -60,9 +66,10 @@ class AgilentE36xx:
         if not 1 <= channel <= self.n_outputs:
             raise InstrumentError(f"{model} has no output {channel} (it has {self.n_outputs})")
         self.channel = channel
-        self.t.write("*CLS")
+        self.t.write("*CLS")  # empty the error queue so _check() only sees our own errors
 
     def _select(self, channel: int | None = None) -> None:
+        """INST:SEL the output that VOLT / CURR / MEAS apply to (dual-output models only)."""
         if self.n_outputs > 1:
             self.t.write(f"INST:SEL OUT{channel or self.channel}")
 
@@ -71,12 +78,13 @@ class AgilentE36xx:
         errs = []
         for _ in range(20):
             e = self.t.query("SYST:ERR?")
-            if e.startswith(("+0", "0")):
+            if e.startswith(("+0", "0")):  # '+0,"No error"'
                 break
             errs.append(e)
         return errs
 
     def _check(self, what: str) -> None:
+        """Raise InstrumentError if the supply queued any SCPI errors (e.g. a value out of range)."""
         errs = self._errors()
         if errs:
             raise InstrumentError(f"{self.model} error after {what}: {'; '.join(errs)}")
@@ -122,16 +130,17 @@ class AgilentE36xx:
         return float(self.t.query("VOLT?"))
 
     def output(self, on: bool) -> None:
-        self.t.write("OUTP ON" if on else "OUTP OFF")
-        if on:
+        self.t.write("OUTP ON" if on else "OUTP OFF")  # global: both outputs on the E3648A
+        if on:  # e.g. refused while an OVP trip is latched
             self._check("OUTP ON")
 
     def output_state(self) -> bool:
+        """True if the output is on (OUTP? replies 1 / 0). Not part of the PowerSupply Protocol."""
         return self.t.query("OUTP?").strip() in ("1", "ON")
 
     def measure_voltage(self) -> float:
         self._select()
-        return float(self.t.query("MEAS:VOLT?"))
+        return float(self.t.query("MEAS:VOLT?"))  # readback ADC, not the setpoint
 
     def measure_current(self) -> float:
         self._select()
