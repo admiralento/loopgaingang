@@ -18,7 +18,17 @@ from ldo_bench.analysis import SettlingResult, settling_analysis
 from ldo_bench.bench import Bench
 from ldo_bench.config import AnalysisConfig, LoadTranConfig
 from ldo_bench.instruments.base import ChannelSetup, InstrumentError
-from ldo_bench.procedures.transient import averaged_step, capture_issues, edge_report, plot_edges
+from ldo_bench.procedures.transient import (
+    XCheck,
+    XScopeSetup,
+    analyse_xcheck,
+    averaged_step,
+    capture_issues,
+    edge_report,
+    plot_edges,
+    xcheck_csv,
+    xcheck_row,
+)
 
 log = logging.getLogger(__name__)
 
@@ -40,6 +50,7 @@ class EdgeResult:
     trigger_level: float | None = None
     issues: list[str] = field(default_factory=list)
     vout_channel: int = 1
+    xcheck: XCheck | None = None  # the 54621A's view of the same edge, if enabled
 
     @property
     def title(self) -> str:
@@ -89,6 +100,7 @@ class LoadTranResult:
                     "sample_rate_hz": m.sample_rate,
                     "valid": not e.issues,
                     "issues": " | ".join(e.issues),
+                    **xcheck_row(e.xcheck),
                 }
             )
         return out
@@ -100,10 +112,14 @@ class LoadTranResult:
                 for t, v, f, r in zip(e.t, e.vout, e.vout_smoothed, e.ref, strict=True)
             ]
             for e in self.edges
+        } | {
+            f"waveform_xcheck_{e.edge}.csv": xcheck_csv(e.xcheck) for e in self.edges if e.xcheck is not None
         }
 
     def summary(self) -> dict:
+        xcheck = {e.edge: xcheck_row(e.xcheck) for e in self.edges if e.xcheck is not None}
         return {
+            "xcheck": xcheck,
             "valid": not self.issues,
             "issues": self.issues,
             "vin": self.vin,
@@ -167,7 +183,7 @@ def run(bench: Bench, lt: LoadTranConfig, an: AnalysisConfig) -> LoadTranResult:
         c_from, c_to = (lt.code_low, lt.code_high) if edge == "rising" else (lt.code_high, lt.code_low)
         pin_rises = rises_with_load if edge == "rising" else not rises_with_load
         trig_edge = "rising" if pin_rises else "falling"
-        cap, trig_issues = averaged_step(
+        sc = averaged_step(
             bench,
             lt,
             setups=setups,
@@ -177,7 +193,9 @@ def run(bench: Bench, lt: LoadTranConfig, an: AnalysisConfig) -> LoadTranResult:
             start=lambda c=c_from: bank.set(c),
             step=lambda c=c_to: bank.set(c),
             label=f"load step {edge}",
+            xscope=XScopeSetup(ref_range=4 * lt.dio_high_level, ref_offset=lt.dio_high_level / 2),
         )
+        cap, trig_issues = sc.cap, sc.issues
         vout, ref = cap.channel(a.vout_channel), cap.channel(a.ref_channel)
         m, smoothed = settling_analysis(
             vout,
@@ -214,6 +232,9 @@ def run(bench: Bench, lt: LoadTranConfig, an: AnalysisConfig) -> LoadTranResult:
                 lt.dio_high_level / 2,
                 issues,
                 a.vout_channel,
+                analyse_xcheck(
+                    bench, sc, an, trig_edge, expected_swing=lt.dio_high_level, ref_desc=f"DIO {pin}"
+                ),
             )
         )
         if issues:

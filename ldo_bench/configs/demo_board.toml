@@ -38,6 +38,16 @@ parity = "even"              # bench meter is set to EVEN: 7 BITS ("none" = NONE
 nplc = 10                    # integration time (power-line cycles): 10 = ~0.2 s/reading, low noise
 samples = 1                  # readings averaged per point
 
+[xscope]                     # Agilent 54621A on RS-232: cross-check of every transient edge (optional)
+enabled = true               # false, or --no-xscope, to use the AD2 only
+resource = ""                # "" = probe USB-serial ports. Or "serial:/dev/cu.usbserial-XXXX" / "serial:COM4"
+baud = 57600                 # Utility > I/O on the scope (9600 / 19200 / 38400 / 57600)
+flow = "dsrdtr"              # scope handshake DTR = "dsrdtr", XON/XOFF = "xonxoff"
+vout_channel = 1             # scope ch1 on VOUT, ch2 on the same trigger signal as AD2 scope 2
+ref_channel = 2
+vout_range = 0.16            # V full scale (20 mV/div) centred on vout_nominal
+points = 2000
+
 [loadbank]
 # Switched_R_Load_Bank: R1..R6, B0 = LSB. 125 ohm || 125 ohm on bit 2.
 # Current per bit at 1.0 V: 4.0, 8.0, 16.0, 31.6, 64.9 mA  (all on: ~125 mA)

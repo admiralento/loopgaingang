@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass, field
 
 import numpy as np
 
 from ldo_bench import plotting
+from ldo_bench.analysis import SettlingResult, settling_analysis
 from ldo_bench.bench import Bench
-from ldo_bench.config import TransientCaptureConfig
+from ldo_bench.config import AnalysisConfig, TransientCaptureConfig
 from ldo_bench.instruments.base import Capture, ChannelSetup, Edge, InstrumentError
 
 log = logging.getLogger(__name__)
@@ -57,6 +59,36 @@ def capture_issues(
     return issues
 
 
+@dataclass
+class XScopeSetup:
+    """How the cross-check scope's channels are set for one test (the rest comes from [xscope])."""
+
+    ref_range: float
+    ref_offset: float
+
+
+@dataclass
+class XCheck:
+    """One edge as seen by the cross-check scope (54621A), analysed like the AD2 capture."""
+
+    model: str
+    averages: int
+    t: np.ndarray  # s, 0 at the step it found (else at its trigger)
+    vout: np.ndarray
+    vout_smoothed: np.ndarray
+    ref: np.ndarray
+    metrics: SettlingResult | None
+    issues: list[str] = field(default_factory=list)
+
+
+@dataclass
+class StepCapture:
+    cap: Capture  # the AD2's averaged capture
+    issues: list[str]
+    xtraces: dict | None = None  # cross-check scope traces by channel, if it delivered
+    xissue: str | None = None
+
+
 def averaged_step(
     bench: Bench,
     tc: TransientCaptureConfig,
@@ -68,13 +100,55 @@ def averaged_step(
     start: Callable[[], None],
     step: Callable[[], None],
     label: str,
-) -> tuple[Capture, list[str]]:
+    xscope: XScopeSetup | None = None,
+) -> StepCapture:
     """`tc.averages` captures of the step start() -> step(), aligned and averaged, plus any issues.
 
     start() puts the DUT at the starting level (then we wait tc.rest_time), step() is called by
     the scope driver once the trigger is armed. If the scope never triggers, one untriggered
     capture is returned instead (edge_found=False) so the plot shows what is on the channels.
+
+    With a cross-check scope (bench.xscope and `xscope` given) its averaged acquisition is armed
+    first, sees the same steps, and is collected afterwards. Its problems never affect the AD2's.
     """
+    xs, xs_issue, xs_traces = bench.xscope if xscope is not None else None, None, None
+    if xs is not None and xs.busy:
+        xs, xs_issue = None, f"skipped: the {xs.model} is still busy from an earlier edge (press Run/Stop)"
+    if xs is not None:
+        xc = bench.cfg.xscope
+        try:
+            xs.arm(
+                window=tc.n_samples / tc.sample_rate,
+                pre_trigger=tc.pre_trigger,
+                vout_channel=xc.vout_channel,
+                vout_range=xc.vout_range,
+                vout_offset=bench.cfg.dut.vout_nominal,
+                ref_channel=xc.ref_channel,
+                ref_range=xscope.ref_range,
+                ref_offset=xscope.ref_offset,
+                trigger_level=trigger_level,
+                edge=trigger_edge,
+                averages=tc.averages,
+                points=xc.points,
+            )
+            bench.sleep(0.3)  # let :DIGitize start before the first step
+        except InstrumentError as e:
+            xs, xs_issue = None, f"could not arm: {e}"
+
+    def again() -> None:
+        start()
+        bench.sleep(tc.rest_time)
+        step()
+
+    def collect_x() -> None:
+        nonlocal xs_traces, xs_issue
+        if xs is None:
+            return
+        try:
+            xs_traces = xs.collect(again, 2 * tc.averages, bench.cfg.xscope.timeout)
+        except InstrumentError as e:
+            xs_issue = str(e)
+
     caps: list[Capture] = []
     for k in range(tc.averages):
         start()
@@ -103,9 +177,103 @@ def averaged_step(
             start()
             bench.sleep(tc.rest_time)
             forced = bench.scope.capture(**kw, force=True)
-            return (align_average(caps) if caps else forced), [issue]
+            collect_x()
+            return StepCapture(align_average(caps) if caps else forced, [issue], xs_traces, xs_issue)
     log.info("%s: averaged %d captures at %.3g MS/s", label, len(caps), caps[0].sample_rate / 1e6)
-    return align_average(caps), []
+    collect_x()
+    return StepCapture(align_average(caps), [], xs_traces, xs_issue)
+
+
+def analyse_xcheck(
+    bench: Bench,
+    sc: StepCapture,
+    an: AnalysisConfig,
+    edge: Edge,
+    *,
+    expected_swing: float,
+    ref_desc: str,
+) -> XCheck | None:
+    """Run the same settling analysis on the cross-check scope's traces, with their own checks."""
+    if bench.xscope is None:
+        if bench.xscope_issue:  # wanted but couldn't be opened: say so on every edge
+            empty = np.array([])
+            return XCheck("54621A", 0, empty, empty, empty, empty, None, [bench.xscope_issue])
+        return None
+    model = getattr(bench.xscope, "model", "xscope")
+    if sc.xtraces is None:
+        empty = np.array([])
+        return XCheck(model, 0, empty, empty, empty, empty, None, [sc.xissue or "no data"])
+    xc = bench.cfg.xscope
+    tv, tr = sc.xtraces[xc.vout_channel], sc.xtraces[xc.ref_channel]
+    fs = 1.0 / float(tv.t[1] - tv.t[0])
+    m, smoothed = settling_analysis(
+        tv.v,
+        tr.v,
+        fs,
+        edge,
+        settle_fraction=an.settle_fraction,
+        smooth_time=an.smooth_time,
+        peak_window=an.peak_window,
+        blank_time=an.blank_time,
+        reference=an.settle_reference,
+    )
+    issues = []
+    if m.step_index < 0:
+        issues.append(f"no step found on its ch{xc.ref_channel}: is it on {ref_desc}?")
+    swing = float(np.percentile(tr.v, 98) - np.percentile(tr.v, 2))
+    if abs(swing - expected_swing) > SWING_TOLERANCE * expected_swing:
+        issues.append(
+            f"its ch{xc.ref_channel} swings {swing:.3f} V, {ref_desc} should swing {expected_swing:.3f} V"
+        )
+    pre = tv.v[tv.t < 0]
+    vi = bench.vout_issue(
+        float(pre.mean()) if len(pre) else float(tv.v.mean()), source=f"{model} ch{xc.vout_channel}"
+    )
+    if vi:
+        issues.append(vi)
+    t = tv.t - (tv.t[m.step_index] if m.step_index >= 0 else 0.0)
+    return XCheck(model, tv.averages, t, tv.v, smoothed, tr.v, m, issues)
+
+
+def xcheck_row(x: XCheck | None) -> dict:
+    """Cross-check fields for data.csv / summary.json (empty if no cross-check scope)."""
+    if x is None:
+        return {}
+    m = x.metrics
+    ok = not x.issues and m is not None
+    return {
+        "xcheck_model": x.model,
+        "xcheck_valid": ok,
+        "xcheck_issues": " | ".join(x.issues),
+        "xcheck_averages": x.averages,
+        "xcheck_deviation_v": m.deviation if ok else float("nan"),
+        "xcheck_settling_time_s": m.settling_time if ok else float("nan"),
+        "xcheck_noise_v": m.noise if ok else float("nan"),
+    }
+
+
+def xcheck_csv(x: XCheck) -> list[dict]:
+    return [
+        {"t_s": float(t), "vout_v": float(v), "vout_smoothed_v": float(f), "ref_v": float(r)}
+        for t, v, f, r in zip(x.t, x.vout, x.vout_smoothed, x.ref, strict=True)
+    ]
+
+
+def xcheck_report(e) -> list[str]:
+    """Cross-check scope lines for one edge (never affects the AD2 result's validity)."""
+    x = getattr(e, "xcheck", None)
+    if x is None:
+        return []
+    if x.issues or x.metrics is None:
+        return [f"    {x.model:9s} no cross-check:"] + [f"      - {i}" for i in x.issues]
+    m = x.metrics
+    ts = "did not settle" if np.isnan(m.settling_time) else f"{m.settling_time * 1e6:.2f} us"
+    line = f"    {x.model:9s} peak {m.deviation * 1e3:+.2f} mV, settling {ts}  ({x.averages} averages)"
+    ad2 = e.metrics
+    if not getattr(e, "issues", []) and np.isfinite(ad2.deviation):
+        d = (m.deviation - ad2.deviation) * 1e3
+        line += f";  differs from the AD2 by {d:+.2f} mV"
+    return [line]
 
 
 def edge_report(e, extra: list[str] | None = None) -> list[str]:
@@ -115,7 +283,7 @@ def edge_report(e, extra: list[str] | None = None) -> list[str]:
     if issues:
         lines.append("    NOT A VALID MEASUREMENT (data saved and plotted as measured):")
         lines += [f"      - {i}" for i in issues]
-        return lines
+        return lines + xcheck_report(e)
     m = e.metrics
     ts = "did not settle in the capture" if np.isnan(m.settling_time) else f"{m.settling_time * 1e6:.2f} us"
     lines += [
@@ -133,7 +301,7 @@ def edge_report(e, extra: list[str] | None = None) -> list[str]:
             f"±{m.band * 1e3:.2f} mV band, so it can never settle back to it. "
             'Set analysis.settle_reference = "post" to measure settling to the final level.'
         )
-    return lines
+    return lines + xcheck_report(e)
 
 
 def plot_edges(
@@ -188,6 +356,12 @@ def plot_edges(
                 fontsize=7.5,
                 color=plotting.INK_2,
             )
+        x = getattr(e, "xcheck", None)
+        xok = x is not None and len(x.t) > 0
+        if xok:
+            xs_scale = 1e3 if unit == "ms" else 1e6
+            xv = (x.t * xs_scale >= us[view][0]) & (x.t * xs_scale <= us[view][-1])
+            ax_ref.plot(x.t[xv] * xs_scale, x.ref[xv], color=plotting.SERIES[2], lw=1.0, alpha=0.9, zorder=2)
         ax_ref.set_ylabel(ref_label, fontsize=8)
         ax_ref.set_title(e.title, fontsize=10, pad=6)
         ax_ref.tick_params(labelbottom=False)
@@ -195,6 +369,17 @@ def plot_edges(
         # Bottom: VOUT, measured, absolute volts.
         ax.axvline(0, color=plotting.AXIS, lw=0.8, zorder=1)
         v, vs = e.vout[view], e.vout_smoothed[view]
+        if xok:
+            xlabel = f"{x.model} ({x.averages} avg)" + (": see report" if x.issues else "")
+            ax.plot(
+                x.t[xv] * xs_scale,
+                x.vout[xv],
+                color=plotting.SERIES[2],
+                lw=1.2,
+                alpha=0.9,
+                zorder=2,
+                label=xlabel,
+            )
         if valid:
             ax.axhspan(m.lower, m.upper, color=plotting.GRID, alpha=0.8, lw=0, zorder=0)
             ax.plot(us[view], v, color=plotting.SERIES[0], lw=0.8, alpha=0.35, zorder=2, label="Averaged")

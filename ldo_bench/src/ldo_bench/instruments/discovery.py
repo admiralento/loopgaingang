@@ -19,6 +19,9 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 
+from ldo_bench.instruments.agilent546xx import MODELS as SCOPE_MODELS
+from ldo_bench.instruments.agilent546xx import RS232_HINT as SCOPE_HINT
+from ldo_bench.instruments.agilent546xx import Agilent54621A
 from ldo_bench.instruments.base import InstrumentError, Oscilloscope
 from ldo_bench.instruments.e36xx import GPIB_HINT, SUPPORTED, AgilentE36xx, model_of
 from ldo_bench.instruments.hp34401a import HP34401A, RS232_HINT
@@ -226,6 +229,64 @@ def open_dmm(resource: str = "", *, baud: int = 9600, parity: str = "none") -> H
     return HP34401A(open_transport(f.resource, baud=baud, parity=f.parity or parity))
 
 
+def _is_xscope(f: Found) -> bool:
+    return any(m in f.idn.upper() for m in SCOPE_MODELS)
+
+
+def _xscope_candidates(baud: int, flow: str, skip: frozenset[str] = frozenset()) -> list[Found]:
+    """54620-series scopes on USB-serial ports (8N1)."""
+    found = []
+    for port in _serial_ports():
+        if port in skip:
+            continue
+        log.info("  trying %s at %d baud 8N1, %s handshake", port, baud, flow)
+        try:
+            t = SerialTransport(port, baud=baud, parity="none", stopbits=1, flow=flow, timeout=2.0)
+        except InstrumentError:
+            continue
+        try:
+            t.write("")
+            found.append(Found(f"{SERIAL_PREFIX}{port}", t.query("*IDN?")))
+        except InstrumentError as e:
+            log.debug("%s: no 54620-series scope: %s", port, e)
+        finally:
+            t.close()
+    return [f for f in found if _is_xscope(f)]
+
+
+def open_xscope(
+    resource: str = "", *, baud: int = 57600, flow: str = "dsrdtr", skip: frozenset[str] = frozenset()
+) -> Agilent54621A:
+    """`skip`: serial ports already in use by other instruments (never probe the DMM's port)."""
+    if resource:
+        if not resource.lower().startswith(SERIAL_PREFIX):
+            raise InstrumentError(
+                "xscope.resource must be a serial port: 'serial:/dev/cu...' or 'serial:COM4'"
+            )
+        port = resource[len(SERIAL_PREFIX) :]
+        with _step(f"Opening the cross-check scope at {resource}"):
+            try:
+                return Agilent54621A(SerialTransport(port, baud=baud, stopbits=1, flow=flow, timeout=5.0))
+            except InstrumentError as e:
+                raise InstrumentError(f"{e}\n{SCOPE_HINT}") from e
+    with _step("Looking for the 54621A cross-check scope on USB-serial ports (~2 s per port)"):
+        scopes = _xscope_candidates(baud, flow, skip)
+    if not scopes:
+        raise InstrumentError(
+            f"no 54620-series scope found on USB-serial ports at {baud} baud.\n{SCOPE_HINT}\n"
+            "Run without it with --no-xscope, or set xscope.enabled = false."
+        )
+    if len(scopes) > 1:
+        raise InstrumentError(
+            "more than one scope found; set xscope.resource: " + ", ".join(f.resource for f in scopes)
+        )
+    f = scopes[0]
+    log.info("Using cross-check scope %s (%s)", f.resource, f.idn)
+    log.info('  tip: set xscope.resource = "%s" in the config to skip this search', f.resource)
+    port = f.resource[len(SERIAL_PREFIX) :]
+    return Agilent54621A(SerialTransport(port, baud=baud, stopbits=1, flow=flow, timeout=5.0))
+
+
 def open_ad2(serial: str = "") -> Oscilloscope:
     from ldo_bench.instruments.ad2 import open_ad2_device
 
@@ -269,6 +330,14 @@ def discover(gpib_address: int = 5, baud: int = 9600) -> list[str]:
     if not any(_is_dmm(f) for f in instruments):
         lines.append(f"No {DMM_MODEL} DMM found (optional).")
         lines.append(RS232_HINT)
+    with _step("Checking USB-serial ports for a 54620-series scope (57600 baud, DTR)"):
+        scope_skip = skip | {f.resource.removeprefix(PROLOGIX_PREFIX).rsplit(":", 1)[0] for f in prologix}
+        scopes = _xscope_candidates(57600, "dsrdtr", frozenset(scope_skip))
+    for f in scopes:
+        lines.append(f"{f.resource:<40} {f.idn}  <- cross-check scope")
+    if not scopes:
+        lines.append("No 54621A cross-check scope found on serial ports (optional).")
+        lines.append(SCOPE_HINT)
     with _step("Checking for Analog Discovery 2s"):
         ad2 = _ad2_lines()
     return lines + ad2

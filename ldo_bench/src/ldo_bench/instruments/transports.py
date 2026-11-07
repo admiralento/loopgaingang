@@ -202,12 +202,20 @@ class SerialTransport:
         *,
         baud: int = 9600,
         parity: str = "none",
+        stopbits: int = 2,
+        flow: str = "dsr-pacing",
         timeout: float = 5.0,
         serial_obj=None,
     ) -> None:
+        """flow: "dsr-pacing" (wait for DSR before each command; the 34401A), "dsrdtr" (pyserial
+        hardware DTR/DSR flow control; the 54621A's DTR mode), "xonxoff", or "none"."""
         self.name = f"{SERIAL_PREFIX}{port}"
         if parity not in SERIAL_FRAMES:
             raise InstrumentError(f"unknown parity '{parity}', expected one of {list(SERIAL_FRAMES)}")
+        if flow not in ("dsr-pacing", "dsrdtr", "xonxoff", "none"):
+            raise InstrumentError(f"unknown flow control '{flow}'")
+        if stopbits not in (1, 2):
+            raise InstrumentError(f"stopbits must be 1 or 2, not {stopbits}")
         self.parity = parity
         if serial_obj is None:
             import serial
@@ -219,15 +227,17 @@ class SerialTransport:
                     baud,
                     bytesize=bytesize,
                     parity=par,
-                    stopbits=serial.STOPBITS_TWO,
+                    stopbits=serial.STOPBITS_ONE if stopbits == 1 else serial.STOPBITS_TWO,
                     timeout=timeout,
                     write_timeout=timeout,
+                    dsrdtr=flow == "dsrdtr",
+                    xonxoff=flow == "xonxoff",
                 )
             except serial.SerialException as e:
                 raise InstrumentError(f"could not open serial port {port}: {e}") from e
             serial_obj.dtr = True
         self._ser = serial_obj
-        self._use_dsr = True
+        self._use_dsr = flow == "dsr-pacing"
 
     def _wait_dsr(self) -> None:
         if not self._use_dsr:
@@ -243,9 +253,15 @@ class SerialTransport:
     def write(self, cmd: str) -> None:
         log.debug("%s <- %s", self.name, cmd)
         self._wait_dsr()
-        self._ser.write((cmd + "\n").encode("ascii"))
-        if hasattr(self._ser, "flush"):
-            self._ser.flush()  # wait until it's actually on the wire
+        try:
+            self._ser.write((cmd + "\n").encode("ascii"))
+            if hasattr(self._ser, "flush"):
+                self._ser.flush()  # wait until it's actually on the wire
+        except OSError as e:  # pyserial's SerialException / SerialTimeoutException are OSErrors
+            raise InstrumentError(
+                f"{self.name}: could not send '{cmd}' ({e}): with hardware flow control this means the "
+                "instrument isn't asserting its handshake line"
+            ) from e
         time.sleep(self.CMD_GAP)
 
     def query(self, cmd: str) -> str:
@@ -265,6 +281,36 @@ class SerialTransport:
             )
         log.debug("%s <- %s -> %s", self.name, cmd, reply)
         return reply
+
+    def read_line(self) -> str:
+        """Read one reply line (after a write()); '' on timeout."""
+        raw = self._ser.readline()
+        return raw.decode("ascii", "replace").strip()
+
+    def set_timeout(self, seconds: float) -> float:
+        """Change the read timeout (for long operations); returns the previous one."""
+        old = self._ser.timeout
+        self._ser.timeout = seconds
+        return old
+
+    def read_block(self, cmd: str) -> bytes:
+        """Query returning an IEEE 488.2 definite-length block: #<n><n digits of length><data><NL>."""
+        self._ser.reset_input_buffer()
+        self.write(cmd)
+        head = self._ser.read(2)
+        if len(head) != 2 or head[:1] != b"#" or not head[1:2].isdigit():
+            raise InstrumentError(f"{self.name}: '{cmd}' did not return a data block (got {head!r})")
+        ndigits = int(head[1:2])
+        length_txt = self._ser.read(ndigits)
+        if len(length_txt) != ndigits or not length_txt.isdigit():
+            raise InstrumentError(f"{self.name}: bad block length {length_txt!r} after '{cmd}'")
+        n = int(length_txt)
+        data = self._ser.read(n)
+        if len(data) != n:
+            raise InstrumentError(f"{self.name}: '{cmd}' block truncated: {len(data)} of {n} bytes")
+        self._ser.readline()  # trailing NL
+        log.debug("%s <- %s -> %d-byte block", self.name, cmd, n)
+        return data
 
     def close(self) -> None:
         self._ser.close()

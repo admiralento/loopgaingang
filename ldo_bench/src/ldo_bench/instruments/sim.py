@@ -214,7 +214,8 @@ class SimAnalogDiscovery:
             vout[i_trig] += m.glitch * (1 if (di < 0 or dvin > 0) else -1)
         ref = np.where(after, ref1, ref0) + m.noise(n_samples) * 0.25
         ch1, ch2 = (vout, ref) if self.vout_channel == 1 else (ref, vout)
-        return Capture(sample_rate, ch1, ch2, i_trig, edge_found=not force)
+        self.last_capture = Capture(sample_rate, ch1, ch2, i_trig, edge_found=not force)
+        return self.last_capture
 
     # --- DigitalOut ---------------------------------------------------------
     def write_pins(self, levels: dict[int, bool]) -> None:
@@ -253,6 +254,43 @@ class SimDmm:
         m = self.m
         v = m.psu_actual() if m.dmm_probe == "psu" else m.vout_dc()
         return v + float(m.rng.normal(0.0, 20e-6))
+
+    def close(self) -> None:
+        pass
+
+
+class SimXScope:
+    """54621A stand-in: a 2000-point resample of the sim AD2's last capture, on its own time axis."""
+
+    def __init__(self, ad2: SimAnalogDiscovery) -> None:
+        self.ad2 = ad2
+        self.idn = "SIM,54621A,0,sim"
+        self.model = "54621A"
+        self._arm: dict | None = None
+        self.busy = False
+
+    def arm(self, **kw) -> None:
+        self._arm = kw
+
+    def collect(self, step_again=None, max_extra: int = 0, timeout: float = 60.0) -> dict:
+        from ldo_bench.instruments.agilent546xx import ScopeTrace
+
+        a, cap = self._arm, getattr(self.ad2, "last_capture", None)
+        if a is None or cap is None:
+            raise InstrumentError("sim xscope: nothing armed / captured")
+        w, n = a["window"], a["points"]
+        t = -a["pre_trigger"] * w + np.arange(n) * (w / n)
+        t_src = cap.time
+        vout_src = cap.channel(self.ad2.vout_channel)
+        ref_src = cap.ch2 if self.ad2.vout_channel == 1 else cap.ch1
+        lsb = a["vout_range"] / 256 / 16  # 8-bit, averaged: finer effective resolution
+        v = np.round(np.interp(t, t_src, vout_src) / lsb) * lsb
+        r = np.interp(t, t_src, ref_src)
+        self._arm = None
+        return {
+            a["vout_channel"]: ScopeTrace(t, v, a["averages"]),
+            a["ref_channel"]: ScopeTrace(t, r, a["averages"]),
+        }
 
     def close(self) -> None:
         pass

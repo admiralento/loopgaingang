@@ -36,6 +36,9 @@ WindowOpt = Annotated[
         "Default: n_samples / sample_rate from the config (0.82 ms)",
     ),
 ]
+NoXScopeOpt = Annotated[
+    bool, typer.Option("--no-xscope", help="Don't use the [xscope] cross-check scope for this run")
+]
 YesOpt = Annotated[bool, typer.Option("--yes", "-y", help="Don't ask to confirm wiring")]
 VerboseOpt = Annotated[bool, typer.Option("--verbose", "-v", help="Debug logging")]
 
@@ -78,7 +81,15 @@ def _load(path: Path) -> BenchConfig:
 
 
 @contextmanager
-def _bench(cfg: BenchConfig, sim: bool, psu: str | None, ad: str | None, yes: bool, use_dmm: bool = True):
+def _bench(
+    cfg: BenchConfig,
+    sim: bool,
+    psu: str | None,
+    ad: str | None,
+    yes: bool,
+    use_dmm: bool = True,
+    use_xscope: bool = False,
+):
     """Open the bench and turn instrument errors and Ctrl-C into clean exits."""
     try:
         with open_bench(
@@ -89,6 +100,7 @@ def _bench(cfg: BenchConfig, sim: bool, psu: str | None, ad: str | None, yes: bo
             assume_yes=yes,
             confirm=typer.confirm,
             use_dmm=use_dmm,
+            use_xscope=use_xscope,
         ) as bench:
             yield bench
     except InstrumentError as e:
@@ -263,6 +275,7 @@ def load_tran(
     save_sim: SaveSimOpt = False,
     psu: PsuOpt = None,
     ad_serial: AdOpt = None,
+    no_xscope: NoXScopeOpt = False,
     yes: YesOpt = False,
     verbose: VerboseOpt = False,
 ) -> None:
@@ -293,7 +306,7 @@ def load_tran(
     if update:
         cfg = _load_with(cfg, load_tran=lt.model_copy(update=update))
         lt = cfg.load_tran
-    with _bench(cfg, sim, psu, ad_serial, yes, use_dmm=False) as bench:
+    with _bench(cfg, sim, psu, ad_serial, yes, use_dmm=False, use_xscope=not no_xscope) as bench:
         res = proc.run(bench, lt, cfg.analysis)
         path = _save(bench, cfg, config, out, proc, res, save_sim)
     _echo_report(bench, res)
@@ -313,6 +326,7 @@ def line_tran(
     save_sim: SaveSimOpt = False,
     psu: PsuOpt = None,
     ad_serial: AdOpt = None,
+    no_xscope: NoXScopeOpt = False,
     yes: YesOpt = False,
     verbose: VerboseOpt = False,
 ) -> None:
@@ -344,7 +358,7 @@ def line_tran(
     if update:
         cfg = _load_with(cfg, line_tran=lt.model_copy(update=update))
         lt = cfg.line_tran
-    with _bench(cfg, sim, psu, ad_serial, yes, use_dmm=False) as bench:
+    with _bench(cfg, sim, psu, ad_serial, yes, use_dmm=False, use_xscope=not no_xscope) as bench:
         res = proc.run(bench, lt, cfg.analysis)
         path = _save(bench, cfg, config, out, proc, res, save_sim)
     _echo_report(bench, res)

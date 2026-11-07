@@ -116,6 +116,34 @@ class DmmConfig(_Model):
     samples: int = Field(1, ge=1, description="Readings averaged per point")
 
 
+class XScopeConfig(_Model):
+    """Agilent 54621A on RS-232, capturing each transient edge alongside the AD2 as a cross-check."""
+
+    enabled: bool = True
+    resource: str = Field(
+        "", description="'' = probe USB-serial ports; or 'serial:/dev/cu.usbserial-XXXX' / 'serial:COM4'"
+    )
+    baud: Literal[9600, 19200, 38400, 57600] = Field(
+        57600, description="Must match Utility > I/O on the scope"
+    )
+    flow: Literal["dsrdtr", "xonxoff", "none"] = Field(
+        "dsrdtr", description="DTR = 'dsrdtr', XON/XOFF = 'xonxoff'"
+    )
+    vout_channel: Literal[1, 2] = 1
+    ref_channel: Literal[1, 2] = 2
+    vout_range: float = Field(
+        0.16, gt=0, description="Ch full-scale range (8 div) on VOUT, centred on vout_nominal (V)"
+    )
+    points: Literal[100, 250, 500, 1000, 2000] = 2000
+    timeout: float = Field(60.0, gt=0, description="Max wait for the averaged acquisition to complete (s)")
+
+    @model_validator(mode="after")
+    def _distinct(self) -> XScopeConfig:
+        if self.vout_channel == self.ref_channel:
+            raise ValueError("xscope.vout_channel and xscope.ref_channel must differ")
+        return self
+
+
 class LoadBankConfig(_Model):
     dio_pins: list[int] = Field(description="AD2 DIO pin for each bank bit, LSB first")
     resistors: list[float] = Field(description="Load resistor for each bit, LSB first (ohm)")
@@ -263,6 +291,7 @@ class BenchConfig(_Model):
     psu: PsuConfig
     ad2: Ad2Config = Ad2Config()
     dmm: DmmConfig | None = None
+    xscope: XScopeConfig | None = None
     loadbank: LoadBankConfig
     analysis: AnalysisConfig = AnalysisConfig()
     psu_check: PsuCheckConfig = PsuCheckConfig()

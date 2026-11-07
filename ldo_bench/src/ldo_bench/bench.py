@@ -45,6 +45,7 @@ class Bench:
         ad2,  # implements Oscilloscope, DigitalOut and Wavegen
         *,
         dmm: Voltmeter | None = None,
+        xscope=None,
         sim_model=None,
         assume_yes: bool = False,
         confirm: ConfirmFn | None = None,
@@ -52,6 +53,8 @@ class Bench:
         self.cfg = cfg
         self.psu = psu
         self.dmm = dmm
+        self.xscope = xscope  # optional 54621A cross-check scope for transients
+        self.xscope_issue: str | None = None  # why it isn't available, if it was wanted
         self.scope = ad2
         self.dio = ad2
         self.awg = ad2
@@ -81,6 +84,8 @@ class Bench:
         out = {"psu": self.psu.idn, "ad2": self.scope.idn}
         if self.dmm is not None:
             out["dmm"] = self.dmm.idn
+        if self.xscope is not None:
+            out["xscope"] = self.xscope.idn
         return out
 
     def vout_wiring(self) -> str:
@@ -227,6 +232,7 @@ class Bench:
             ("PSU 0 V", lambda: self.psu.set_voltage(0.0)),
             ("close PSU", self.psu.close),
             ("close DMM", lambda: self.dmm.close() if self.dmm is not None else None),
+            ("close cross-check scope", lambda: self.xscope.close() if self.xscope is not None else None),
             ("close AD2", self.scope.close),
         ]
         for name, fn in steps:
@@ -246,25 +252,30 @@ def open_bench(
     assume_yes: bool = False,
     confirm: ConfirmFn | None = None,
     use_dmm: bool = True,
+    use_xscope: bool = False,
 ) -> Bench:
+    """use_xscope: also open the [xscope] cross-check scope (only the transient tests use it)."""
     want_dmm = use_dmm and cfg.dmm is not None and cfg.dmm.enabled
+    want_xscope = use_xscope and cfg.xscope is not None and cfg.xscope.enabled
     if sim:
         from ldo_bench.instruments.sim import LdoModel, SimAnalogDiscovery, SimPowerSupply
 
         lb = cfg.loadbank
         model = LdoModel(cfg.dut.vout_nominal, lb.resistors, lb.dio_pins, lb.active_high)
-        from ldo_bench.instruments.sim import SimDmm
+        from ldo_bench.instruments.sim import SimDmm, SimXScope
 
+        sim_ad2 = SimAnalogDiscovery(model, cfg.ad2.vout_channel)
         return Bench(
             cfg,
             SimPowerSupply(model),
-            SimAnalogDiscovery(model, cfg.ad2.vout_channel),
+            sim_ad2,
             dmm=SimDmm(model) if want_dmm else None,
+            xscope=SimXScope(sim_ad2) if want_xscope else None,
             sim_model=model,
             assume_yes=True,
         )
 
-    from ldo_bench.instruments.discovery import open_ad2, open_dmm, open_psu
+    from ldo_bench.instruments.discovery import open_ad2, open_dmm, open_psu, open_xscope
 
     t0 = time.monotonic()
     log.info("Opening instruments (Ctrl-C to abort) ...")
@@ -281,6 +292,21 @@ def open_bench(
             opened.append(dmm)
             log.info("Configuring the DMM ...")
             dmm.configure_dcv(range=cfg.dmm.range, nplc=cfg.dmm.nplc)
+        xscope = None
+        xscope_issue = None
+        if want_xscope:
+            xs = cfg.xscope
+            used = frozenset(
+                inst.t.name.removeprefix("serial:")
+                for inst in opened
+                if hasattr(getattr(inst, "t", None), "name")
+            )
+            try:
+                xscope = open_xscope(xs.resource, baud=xs.baud, flow=xs.flow, skip=used)
+                opened.append(xscope)
+            except InstrumentError as e:  # optional: the AD2 measurement goes ahead without it
+                xscope_issue = f"cross-check scope not available: {e}"
+                log.warning("%s (continuing with the AD2 only; --no-xscope hides this)", xscope_issue)
     except BaseException:
         for inst in reversed(opened):
             try:
@@ -289,4 +315,6 @@ def open_bench(
                 log.debug("close after failed open: %s", e)
         raise
     log.info("Instruments ready (%.1f s)", time.monotonic() - t0)
-    return Bench(cfg, psu, ad2, dmm=dmm, assume_yes=assume_yes, confirm=confirm)
+    bench = Bench(cfg, psu, ad2, dmm=dmm, xscope=xscope, assume_yes=assume_yes, confirm=confirm)
+    bench.xscope_issue = xscope_issue
+    return bench

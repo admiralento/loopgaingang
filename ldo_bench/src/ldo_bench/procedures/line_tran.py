@@ -18,7 +18,17 @@ from ldo_bench.analysis import SettlingResult, settling_analysis
 from ldo_bench.bench import Bench
 from ldo_bench.config import AnalysisConfig, LineTranConfig
 from ldo_bench.instruments.base import ChannelSetup, InstrumentError
-from ldo_bench.procedures.transient import averaged_step, capture_issues, edge_report, plot_edges
+from ldo_bench.procedures.transient import (
+    XCheck,
+    XScopeSetup,
+    analyse_xcheck,
+    averaged_step,
+    capture_issues,
+    edge_report,
+    plot_edges,
+    xcheck_csv,
+    xcheck_row,
+)
 
 log = logging.getLogger(__name__)
 
@@ -43,6 +53,7 @@ class EdgeResult:
     trigger_level: float | None = None
     issues: list[str] = field(default_factory=list)
     vout_channel: int = 1
+    xcheck: XCheck | None = None  # the 54621A's view of the same edge, if enabled
 
     @property
     def title(self) -> str:
@@ -99,6 +110,7 @@ class LineTranResult:
                     "i_load_a": self.i_load,
                     "valid": not e.issues,
                     "issues": " | ".join(e.issues),
+                    **xcheck_row(e.xcheck),
                 }
             )
         return out
@@ -110,10 +122,14 @@ class LineTranResult:
                 for t, v, f, r in zip(e.t, e.vout, e.vout_smoothed, e.ref, strict=True)
             ]
             for e in self.edges
+        } | {
+            f"waveform_xcheck_{e.edge}.csv": xcheck_csv(e.xcheck) for e in self.edges if e.xcheck is not None
         }
 
     def summary(self) -> dict:
+        xcheck = {e.edge: xcheck_row(e.xcheck) for e in self.edges if e.xcheck is not None}
         return {
+            "xcheck": xcheck,
             "valid": not self.issues,
             "issues": self.issues,
             "buffer_rail_v": self.rail,
@@ -234,7 +250,7 @@ def run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig) -> LineTranResult:
     results = []
     for edge in lt.edges:
         (w_from, v_from), (w_to, v_to) = ((w_lo, v_lo), (w_hi, v_hi))[:: 1 if edge == "rising" else -1]
-        cap, trig_issues = averaged_step(
+        sc = averaged_step(
             bench,
             lt,
             setups=setups,
@@ -244,7 +260,9 @@ def run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig) -> LineTranResult:
             start=lambda w=w_from: bench.vin_from_wavegen(w),
             step=lambda w=w_to: bench.vin_from_wavegen(w),
             label=f"VIN step {edge}",
+            xscope=XScopeSetup(ref_range=max(8 * abs(lt.vin_high - lt.vin_low), 0.4), ref_offset=trig_level),
         )
+        cap, trig_issues = sc.cap, sc.issues
         vout, vin = cap.channel(a.vout_channel), cap.channel(a.ref_channel)
         m, smoothed = settling_analysis(
             vout,
@@ -266,7 +284,22 @@ def run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig) -> LineTranResult:
         i0 = m.step_index if m.step_index >= 0 else cap.trigger_index
         t = (np.arange(len(vout)) - i0) / cap.sample_rate
         results.append(
-            EdgeResult(edge, v_from, v_to, m, t, vout, smoothed, vin, trig_level, issues, a.vout_channel)
+            EdgeResult(
+                edge,
+                v_from,
+                v_to,
+                m,
+                t,
+                vout,
+                smoothed,
+                vin,
+                trig_level,
+                issues,
+                a.vout_channel,
+                analyse_xcheck(
+                    bench, sc, an, edge, expected_swing=abs(lt.vin_high - lt.vin_low), ref_desc="VIN"
+                ),
+            )
         )
         if issues:
             log.warning("VIN step %s: %d setup issue(s), see the plot", edge, len(issues))

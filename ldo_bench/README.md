@@ -161,6 +161,27 @@ VIN is driven by the AD2 wavegen through the board's BUF634 buffer:
 - **Calibration:** the buffer's offset is calibrated out from VIN measured at the board (scope ch2), so the steps land on `vin_low` / `vin_high` within 5 mV. If the buffer can't reach a level, the test says to check headroom, JP4 and the W1 wiring.
 - **Measurement:** the scope triggers on VIN itself. Each edge is averaged and analysed like load transient. The report also gives the peak VOUT deviation per volt of VIN step (mV/V).
 
+### 54621A cross-check scope (optional)
+
+An Agilent 54621A on RS-232 can capture every transient edge alongside the AD2, as an independent check. Configure it under `[xscope]` in the board config, and skip it for a run with `--no-xscope`.
+
+**Scope setup:**
+- **Interface:** on the scope, **Utility > I/O**, set the RS-232 baud rate to `xscope.baud` (57600 is fastest) and the handshake to **DTR** (`flow = "dsrdtr"`) or XON/XOFF.
+- **Cable:** the port is fixed at 8N1; use a null-modem cable to a USB-serial adapter.
+- **Ch1:** on VOUT, at the same point as AD2 scope 1.
+- **Ch2:** on the same trigger signal as AD2 scope 2: the DIO pin for load transient, VIN for line transient.
+
+**How a capture works:**
+- **Arming:** for each edge the scope is armed first. Its timebase matches the AD2 window, ch1 is at `vout_range` centred on the nominal VOUT, it edge-triggers on ch2, and it averages as many triggers as the AD2 takes captures.
+- **Collection:** the AD2 steps the load as usual, and every step also triggers the scope. If the scope missed some triggers, the step is repeated until its average completes. Both channels are then read back as 16-bit WORD data.
+- **Results:** its trace is overlaid on the VOUT plot (the "54621A" line). The report gives its peak and settling time and the difference from the AD2, and the run folder gets `waveform_xcheck_*.csv`.
+
+**When the scope has a problem:**
+- **It never affects the AD2 result's validity**, whether the scope is missing, on the wrong signal, or never completes its average. The problem is listed under the cross-check only.
+- **If it never completes**, it's left waiting for triggers. Press **Run/Stop** on the scope to free it.
+
+The driver follows the Agilent 54620-Series Programmer's Guide (pub. 54622-97038), but it hasn't been tested on a real scope yet.
+
 ### Load current limit
 
 `dut.i_max` caps the load any test may switch in. It's estimated at `vout_nominal`, and both the config check and the load bank enforce it. JAFWAK is limited to 20 mA (codes 0–4). `loadbank-check` lifts the limit, because no DUT is connected in that test.
