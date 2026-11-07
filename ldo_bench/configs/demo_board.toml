@@ -16,6 +16,11 @@ vin_max = 5.5                # TPS7A7001 recommended max is 6.5 V
 [psu]
 resource = ""
 gpib_address = 5
+# RS-232 (used only if the supply is on a serial port; must match its I/O config)
+baud = 9600
+parity = "none"              # "none" = 8 data bits, "even" / "odd" = 7 data bits
+stopbits = 2
+flow = "dsr-pacing"          # HP DTR/DSR handshake
 channel = 1                  # E3648A output (OUT1 / OUT2); the other one is held at 0 V
 current_limit = 0.3
 v_max = 5.5
@@ -32,16 +37,16 @@ ref  = { range = 50.0, offset = 0.0 }
 
 [dmm]                        # Agilent 34401A measuring VOUT in the DC tests (load/line reg)
 enabled = true               # false, or --no-dmm, to use the AD2 for VOUT instead
-resource = ""                # "" = auto-discover. Or "serial:/dev/cu.usbserial-XXXX" / "serial:COM3"
-baud = 9600                  # must match the meter's RS-232 setting
+resource = ""                # "" = search GPIB/USB/RS-232. Or GPIB0::22::INSTR, prologix:COM5:22, serial:COM3
+baud = 9600                  # RS-232 only: must match the meter's setting
 parity = "even"              # bench meter is set to EVEN: 7 BITS ("none" = NONE: 8 BITS)
 nplc = 10                    # integration time (power-line cycles): 10 = ~0.2 s/reading, low noise
 samples = 1                  # readings averaged per point
 
 [xscope]                     # Agilent 54621A on RS-232: cross-check of every transient edge (optional)
 enabled = true               # false, or --no-xscope, to use the AD2 only
-resource = ""                # "" = probe USB-serial ports. Or "serial:/dev/cu.usbserial-XXXX" / "serial:COM4"
-baud = 57600                 # Utility > I/O on the scope (9600 / 19200 / 38400 / 57600)
+resource = ""                # "" = search GPIB/USB/RS-232. Or GPIB0::7::INSTR, prologix:COM5:7, serial:COM4
+baud = 57600                 # RS-232 only: Utility > I/O on the scope (9600 / 19200 / 38400 / 57600)
 flow = "dsrdtr"              # scope handshake DTR = "dsrdtr", XON/XOFF = "xonxoff"
 vout_channel = 1             # scope ch1 on VOUT, ch2 on the same trigger signal as AD2 scope 2
 ref_channel = 2

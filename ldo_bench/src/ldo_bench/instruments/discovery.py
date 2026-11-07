@@ -1,13 +1,13 @@
-"""Find and open instruments by model, not by address.
+"""Find and open instruments by model, on any interface.
 
-The PSU is found by asking every candidate `*IDN?` and keeping supported Agilent
-E36xxA supplies (E3638A, E3648A):
-first over VISA (GPIB / USB resources), then on serial ports that answer like
-a Prologix-style USB-GPIB adapter. If there is more than one match, the user
-picks one with --psu or psu.resource in the config.
-
-The DMM (34401A) is found the same way: on USB serial ports (its own RS-232
-port through a USB-serial adapter) and over VISA if it is on GPIB.
+Every GPIB/RS-232 instrument (E36xxA supply, 34401A DMM, 54621A scope) can be on:
+  - VISA: GPIB cards, Keysight 82357B / NI GPIB-USB, the XyphroLabs UsbGpib (USB0::...::INSTR)
+  - a Prologix-style USB-GPIB adapter (prologix:<port>:<gpib address>)
+  - its own RS-232 port through a USB-serial adapter (serial:<port>)
+Set the instrument's `resource` to any of those forms, or leave it '' and it is searched for:
+VISA first, then RS-232 ports (with that instrument's serial settings, and the other parities
+for the HP-style ones), then Prologix adapters (every GPIB address). One Finder per run caches
+each scan, and a port or adapter address claimed by one instrument is never probed for another.
 """
 
 from __future__ import annotations
@@ -15,9 +15,9 @@ from __future__ import annotations
 import logging
 import time
 import warnings
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 
 from ldo_bench.instruments.agilent546xx import MODELS as SCOPE_MODELS
 from ldo_bench.instruments.agilent546xx import RS232_HINT as SCOPE_HINT
@@ -31,6 +31,7 @@ from ldo_bench.instruments.transports import (
     SERIAL_FRAMES,
     SERIAL_PREFIX,
     PrologixTransport,
+    SerialSettings,
     SerialTransport,
     open_transport,
     visa_resource_manager,
@@ -45,7 +46,20 @@ SCAN_TIMEOUT = 0.5  # s per probe while scanning
 class Found:
     resource: str
     idn: str
-    parity: str | None = None  # serial instruments: the parity that worked
+    serial: SerialSettings | None = None  # RS-232 instruments: the settings that worked
+
+    @property
+    def parity(self) -> str | None:  # kept for messages / older callers
+        return self.serial.parity if self.serial else None
+
+    @property
+    def port(self) -> str | None:
+        """The local port this uses (serial or Prologix adapter), to avoid probing it again."""
+        if self.resource.startswith(SERIAL_PREFIX):
+            return self.resource[len(SERIAL_PREFIX) :]
+        if self.resource.startswith(PROLOGIX_PREFIX):
+            return self.resource[len(PROLOGIX_PREFIX) :].rsplit(":", 1)[0]
+        return None
 
 
 @contextmanager
@@ -57,13 +71,41 @@ def _step(what: str) -> Iterator[None]:
     log.info("  done (%.1f s)", time.monotonic() - t0)
 
 
-# --- probing -----------------------------------------------------------------
+# --- what each instrument looks like -----------------------------------------------------------
+def _is_psu(f: Found) -> bool:
+    return model_of(f.idn) is not None
+
+
+def _is_dmm(f: Found) -> bool:
+    return DMM_MODEL in f.idn.upper()
+
+
+def _is_xscope(f: Found) -> bool:
+    return any(m in f.idn.upper() for m in SCOPE_MODELS)
+
+
+def _hp_serial_variants(s: SerialSettings) -> list[SerialSettings]:
+    """HP-style RS-232 (E36xx, 34401A): the configured parity first, then the others."""
+    return [s, *(replace(s, parity=p) for p in SERIAL_FRAMES if p != s.parity)]
+
+
+# --- low-level probes ----------------------------------------------------------------------------
+def _list(rm, query: str) -> tuple[str, ...]:
+    try:
+        with warnings.catch_warnings():  # pyvisa-py warns about optional network-scan packages
+            warnings.simplefilter("ignore", UserWarning)
+            return rm.list_resources(query)
+    except Exception as e:  # e.g. pyvisa-py without GPIB support
+        log.debug("list_resources(%r) failed: %s", query, e)
+        return ()
+
+
 def _visa_candidates() -> list[Found]:
     found: list[Found] = []
     for backend in ("", "@py"):
         try:
             rm = visa_resource_manager(backend)
-            # Only GPIB / USB: avoids slow network scans; serial ports are probed as Prologix below.
+            # Only GPIB / USB: avoids slow network scans; serial ports are probed separately.
             resources = [r for q in ("GPIB?*::INSTR", "USB?*::INSTR") for r in _list(rm, q)]
         except Exception as e:  # missing VISA / backend: just skip it
             log.debug("VISA backend %r unavailable: %s", backend or "default", e)
@@ -84,16 +126,6 @@ def _visa_candidates() -> list[Found]:
     return found
 
 
-def _list(rm, query: str) -> tuple[str, ...]:
-    try:
-        with warnings.catch_warnings():  # pyvisa-py warns about optional network-scan packages
-            warnings.simplefilter("ignore", UserWarning)
-            return rm.list_resources(query)
-    except Exception as e:  # e.g. pyvisa-py without GPIB support
-        log.debug("list_resources(%r) failed: %s", query, e)
-        return ()
-
-
 def _serial_ports() -> list[str]:
     try:
         from serial.tools import list_ports
@@ -104,42 +136,36 @@ def _serial_ports() -> list[str]:
         if p.vid is None:
             continue  # not USB (Bluetooth, debug console, motherboard COM1, ...)
         if "digilent" in f"{p.manufacturer} {p.description}".lower():
-            continue  # the Analog Discovery's own FTDI port: never send it ++ commands
+            continue  # the Analog Discovery's own FTDI port: never probe it
         ports.append(p.device)
     return ports
 
 
-def _serial_instrument_candidates(baud: int = 9600, parity: str = "none") -> list[Found]:
-    """Instruments on their own RS-232 port (e.g. the 34401A) behind USB-serial adapters.
-
-    Tries the configured parity first, then the others, since it's a front-panel
-    setting that is easy to get out of sync with the config.
-    """
-    found: list[Found] = []
-    order = [parity, *(p for p in SERIAL_FRAMES if p != parity)]
-    for port in _serial_ports():
-        for par in order:
-            log.info("  trying %s at %d baud, parity %s", port, baud, par)
-            try:
-                t = SerialTransport(port, baud=baud, parity=par, timeout=2.0)
-            except InstrumentError:
-                break
-            try:
-                t.write("")  # end any junk a previous probe left in the instrument's buffer
-                t.write("SYST:REM")
-                idn = t.query("*IDN?")
-                t.write("*CLS")  # clear parity errors from earlier mismatched probes
-                t.write("SYST:LOC")
-                found.append(Found(f"{SERIAL_PREFIX}{port}", idn, par))
-                break
-            except InstrumentError as e:
-                log.debug("%s: no RS-232 instrument at %d baud, parity %s: %s", port, baud, par, e)
-            finally:
-                t.close()
-    return found
+def _probe_serial(port: str, s: SerialSettings, remote: bool) -> str | None:
+    """*IDN? of whatever answers on `port` with settings `s`, or None."""
+    log.info("  trying %s at %d baud, %s, %d stop, %s", port, s.baud, s.parity, s.stopbits, s.flow)
+    try:
+        t = SerialTransport(port, baud=s.baud, parity=s.parity, stopbits=s.stopbits, flow=s.flow, timeout=2.0)
+    except InstrumentError:
+        return None
+    try:
+        t.write("")  # end any junk an earlier probe left in the instrument's buffer
+        if remote:
+            t.write("SYST:REM")  # HP RS-232 instruments ignore commands until remote
+        idn = t.query("*IDN?")
+        t.write("*CLS")  # clear errors from earlier mismatched probes
+        if remote:
+            t.write("SYST:LOC")
+        return idn
+    except InstrumentError as e:
+        log.debug("%s: nothing at %s: %s", port, s, e)
+        return None
+    finally:
+        t.close()
 
 
 def _prologix_candidates(preferred_address: int, skip: frozenset[str] = frozenset()) -> list[Found]:
+    """Every instrument on every Prologix-style adapter (all GPIB addresses, preferred first)."""
     found: list[Found] = []
     for port in _serial_ports():
         if port in skip:
@@ -152,139 +178,184 @@ def _prologix_candidates(preferred_address: int, skip: frozenset[str] = frozense
             ver = t.adapter_version()
             if not ver:
                 continue  # not a Prologix-style adapter
-            log.info("  %s is a GPIB adapter (%s); scanning GPIB addresses", port, ver)
-            order = [preferred_address, *(a for a in range(1, 31) if a != preferred_address)]
-            for addr in order:
+            log.info("  %s is a GPIB adapter (%s); scanning GPIB addresses 1-30", port, ver)
+            for addr in [preferred_address, *(a for a in range(1, 31) if a != preferred_address)]:
                 t.set_address(addr)
                 try:
-                    idn = t.query("*IDN?")
+                    found.append(Found(f"{PROLOGIX_PREFIX}{port}:{addr}", t.query("*IDN?")))
                 except InstrumentError:
                     continue
-                found.append(Found(f"{PROLOGIX_PREFIX}{port}:{addr}", idn))
-                if model_of(idn):
-                    break  # found the supply on this adapter; skip the slow full scan
         finally:
             t.close()
     return found
 
 
-def _is_psu(f: Found) -> bool:
-    return model_of(f.idn) is not None
+# --- the search ------------------------------------------------------------------------------
+@dataclass
+class Finder:
+    """One search per run, shared by all instruments. Scans happen only when needed, once."""
+
+    gpib_address: int = 5
+    claimed: set[str] = field(default_factory=set)  # resources and local ports in use
+    _visa: list[Found] | None = None
+    _prologix: list[Found] | None = None
+    _serial: dict[tuple[str, SerialSettings], str | None] = field(default_factory=dict)
+
+    def claim(self, f: Found | str) -> None:
+        if isinstance(f, str):
+            f = Found(f, "")
+        self.claimed.add(f.resource)
+        if f.port:
+            self.claimed.add(f.port)
+
+    def visa(self) -> list[Found]:
+        if self._visa is None:
+            with _step("Checking VISA (GPIB / USB) instruments"):
+                self._visa = _visa_candidates()
+        return [f for f in self._visa if f.resource not in self.claimed]
+
+    def serial(self, variants: list[SerialSettings], remote: bool) -> list[Found]:
+        out = []
+        for port in _serial_ports():
+            if port in self.claimed or self._is_prologix_port(port):
+                continue
+            for s in variants:
+                key = (port, s)
+                if key not in self._serial:
+                    self._serial[key] = _probe_serial(port, s, remote)
+                if self._serial[key]:
+                    out.append(Found(f"{SERIAL_PREFIX}{port}", self._serial[key], s))
+                    break
+        return out
+
+    def prologix(self) -> list[Found]:
+        if self._prologix is None:
+            with _step("Checking for Prologix-style GPIB adapters (all GPIB addresses)"):
+                skip = frozenset(p for p in self.claimed if not p.startswith(("GPIB", "USB")))
+                self._prologix = _prologix_candidates(self.gpib_address, skip)
+        return [f for f in self._prologix if f.resource not in self.claimed]
+
+    def _is_prologix_port(self, port: str) -> bool:
+        return self._prologix is not None and any(f.port == port for f in self._prologix)
+
+    def find(
+        self,
+        what: str,
+        match: Callable[[Found], bool],
+        variants: list[SerialSettings],
+        *,
+        remote: bool,
+        hint: str,
+        config_key: str,
+    ) -> Found:
+        """The single instrument matching `match`, searching VISA, RS-232, then Prologix."""
+        hits = [f for f in self.visa() if match(f)]
+        if not hits:
+            with _step(f"Looking for the {what} on RS-232 ports"):
+                hits = [f for f in self.serial(variants, remote) if match(f)]
+        if not hits:
+            hits = [f for f in self.prologix() if match(f)]
+        if not hits:
+            raise InstrumentError(
+                f"no {what} found on VISA (GPIB / USB), RS-232 ports or Prologix adapters.\n{hint}\n"
+                "Run `ldo-bench discover -v` for details."
+            )
+        if len(hits) > 1:
+            listing = "\n  ".join(f"{f.resource}  ({f.idn})" for f in hits)
+            raise InstrumentError(f"more than one {what} found; set {config_key}:\n  {listing}")
+        f = hits[0]
+        self.claim(f)
+        log.info("Using %s %s (%s)", what, f.resource, f.idn)
+        log.info('  tip: set %s = "%s" in the config to skip this search', config_key, f.resource)
+        return f
 
 
-# --- public API ----------------------------------------------------------------
-def open_psu(resource: str = "", *, gpib_address: int = 5, channel: int = 1) -> AgilentE36xx:
-    if resource:
-        with _step(f"Opening the power supply at {resource}"):
-            try:
-                return AgilentE36xx(open_transport(resource), channel)
-            except InstrumentError as e:
-                raise InstrumentError(f"{e}\n{GPIB_HINT}") from e
-    with _step("Looking for the power supply over VISA (GPIB / USB; can take ~10 s)"):
-        psus = [f for f in _visa_candidates() if _is_psu(f)]
-    if not psus:
-        with _step("No supply on VISA; checking USB-serial ports for a Prologix-style GPIB adapter"):
-            psus = [f for f in _prologix_candidates(gpib_address) if _is_psu(f)]
-    if not psus:
-        raise InstrumentError(
-            f"no supported power supply ({', '.join(SUPPORTED)}) found.\n{GPIB_HINT}\n"
-            "Also check the GPIB cable and the USB connection. Run `ldo-bench discover -v` for details."
-        )
-    if len(psus) > 1:
-        listing = "\n  ".join(f"{f.resource}  ({f.idn})" for f in psus)
-        raise InstrumentError(f"more than one power supply found; pick one with --psu:\n  {listing}")
-    log.info("Using PSU %s (%s)", psus[0].resource, psus[0].idn)
-    log.info('  tip: set psu.resource = "%s" in the config to skip this search', psus[0].resource)
-    return AgilentE36xx(open_transport(psus[0].resource), channel)
-
-
-def _is_dmm(f: Found) -> bool:
-    return DMM_MODEL in f.idn.upper()
-
-
-def open_dmm(resource: str = "", *, baud: int = 9600, parity: str = "none") -> HP34401A:
-    if resource:
-        with _step(f"Opening the DMM at {resource}"):
-            return HP34401A(open_transport(resource, baud=baud, parity=parity))
-    with _step("Looking for the 34401A DMM on USB-serial ports (~2 s per port and parity tried)"):
-        dmms = [f for f in _serial_instrument_candidates(baud, parity) if _is_dmm(f)]
-    if not dmms:
-        with _step("No DMM on serial ports; looking over VISA"):
-            dmms = [f for f in _visa_candidates() if _is_dmm(f)]
-    if not dmms:
-        raise InstrumentError(
-            f"no {DMM_MODEL} found on USB-serial ports or VISA.\n{RS232_HINT}\n"
-            "Run without the DMM with --no-dmm, or set dmm.enabled = false."
-        )
-    if len(dmms) > 1:
-        listing = "\n  ".join(f"{f.resource}  ({f.idn})" for f in dmms)
-        raise InstrumentError(f"more than one {DMM_MODEL} found; set dmm.resource:\n  {listing}")
-    f = dmms[0]
-    log.info("Using DMM %s (%s)", f.resource, f.idn)
-    log.info('  tip: set dmm.resource = "%s" in the config to skip this search', f.resource)
-    if f.parity and f.parity != parity:
-        log.warning(
-            "The DMM is set to parity '%s', not '%s': set dmm.parity = \"%s\"", f.parity, parity, f.parity
-        )
-    return HP34401A(open_transport(f.resource, baud=baud, parity=f.parity or parity))
-
-
-def _is_xscope(f: Found) -> bool:
-    return any(m in f.idn.upper() for m in SCOPE_MODELS)
-
-
-def _xscope_candidates(baud: int, flow: str, skip: frozenset[str] = frozenset()) -> list[Found]:
-    """54620-series scopes on USB-serial ports (8N1)."""
-    found = []
-    for port in _serial_ports():
-        if port in skip:
-            continue
-        log.info("  trying %s at %d baud 8N1, %s handshake", port, baud, flow)
+def _open_at(resource: str, serial: SerialSettings, what: str, hint: str, make):
+    with _step(f"Opening the {what} at {resource}"):
         try:
-            t = SerialTransport(port, baud=baud, parity="none", stopbits=1, flow=flow, timeout=2.0)
-        except InstrumentError:
-            continue
-        try:
-            t.write("")
-            found.append(Found(f"{SERIAL_PREFIX}{port}", t.query("*IDN?")))
+            return make(open_transport(resource, serial=serial, timeout=5.0))
         except InstrumentError as e:
-            log.debug("%s: no 54620-series scope: %s", port, e)
-        finally:
-            t.close()
-    return [f for f in found if _is_xscope(f)]
+            raise InstrumentError(f"{e}\n{hint}") from e
+
+
+# --- public API ------------------------------------------------------------------------------
+def open_psu(
+    resource: str = "",
+    *,
+    gpib_address: int = 5,
+    channel: int = 1,
+    serial: SerialSettings | None = None,
+    finder: Finder | None = None,
+) -> AgilentE36xx:
+    serial = serial or SerialSettings(9600, "none", 2, "dsr-pacing")
+    finder = finder or Finder(gpib_address)
+    make = lambda t: AgilentE36xx(t, channel)  # noqa: E731
+    if resource:
+        finder.claim(resource)
+        return _open_at(resource, serial, "power supply", GPIB_HINT, make)
+    f = finder.find(
+        "power supply",
+        _is_psu,
+        _hp_serial_variants(serial),
+        remote=True,
+        hint=f"Supported: {', '.join(SUPPORTED)}. {GPIB_HINT}",
+        config_key="psu.resource",
+    )
+    if f.serial and f.serial.parity != serial.parity:
+        log.warning(
+            'The supply is set to parity "%s": set psu.parity = "%s"', f.serial.parity, f.serial.parity
+        )
+    return make(open_transport(f.resource, serial=f.serial or serial))
+
+
+def open_dmm(
+    resource: str = "",
+    *,
+    baud: int = 9600,
+    parity: str = "none",
+    serial: SerialSettings | None = None,
+    finder: Finder | None = None,
+) -> HP34401A:
+    serial = serial or SerialSettings(baud, parity, 2, "dsr-pacing")
+    finder = finder or Finder()
+    hint = f"{RS232_HINT}\nRun without the DMM with --no-dmm, or set dmm.enabled = false."
+    if resource:
+        finder.claim(resource)
+        return _open_at(resource, serial, "DMM", hint, HP34401A)
+    f = finder.find(
+        f"{DMM_MODEL} DMM",
+        _is_dmm,
+        _hp_serial_variants(serial),
+        remote=True,
+        hint=hint,
+        config_key="dmm.resource",
+    )
+    if f.serial and f.serial.parity != serial.parity:
+        log.warning('The DMM is set to parity "%s": set dmm.parity = "%s"', f.serial.parity, f.serial.parity)
+    return HP34401A(open_transport(f.resource, serial=f.serial or serial))
 
 
 def open_xscope(
-    resource: str = "", *, baud: int = 57600, flow: str = "dsrdtr", skip: frozenset[str] = frozenset()
+    resource: str = "",
+    *,
+    baud: int = 57600,
+    flow: str = "dsrdtr",
+    serial: SerialSettings | None = None,
+    finder: Finder | None = None,
+    skip: frozenset[str] = frozenset(),
 ) -> Agilent54621A:
-    """`skip`: serial ports already in use by other instruments (never probe the DMM's port)."""
+    serial = serial or SerialSettings(baud, "none", 1, flow)
+    finder = finder or Finder()
+    for p in skip:
+        finder.claimed.add(p)
+    hint = f"{SCOPE_HINT}\nRun without it with --no-xscope, or set xscope.enabled = false."
     if resource:
-        if not resource.lower().startswith(SERIAL_PREFIX):
-            raise InstrumentError(
-                "xscope.resource must be a serial port: 'serial:/dev/cu...' or 'serial:COM4'"
-            )
-        port = resource[len(SERIAL_PREFIX) :]
-        with _step(f"Opening the cross-check scope at {resource}"):
-            try:
-                return Agilent54621A(SerialTransport(port, baud=baud, stopbits=1, flow=flow, timeout=5.0))
-            except InstrumentError as e:
-                raise InstrumentError(f"{e}\n{SCOPE_HINT}") from e
-    with _step("Looking for the 54621A cross-check scope on USB-serial ports (~2 s per port)"):
-        scopes = _xscope_candidates(baud, flow, skip)
-    if not scopes:
-        raise InstrumentError(
-            f"no 54620-series scope found on USB-serial ports at {baud} baud.\n{SCOPE_HINT}\n"
-            "Run without it with --no-xscope, or set xscope.enabled = false."
-        )
-    if len(scopes) > 1:
-        raise InstrumentError(
-            "more than one scope found; set xscope.resource: " + ", ".join(f.resource for f in scopes)
-        )
-    f = scopes[0]
-    log.info("Using cross-check scope %s (%s)", f.resource, f.idn)
-    log.info('  tip: set xscope.resource = "%s" in the config to skip this search', f.resource)
-    port = f.resource[len(SERIAL_PREFIX) :]
-    return Agilent54621A(SerialTransport(port, baud=baud, stopbits=1, flow=flow, timeout=5.0))
+        finder.claim(resource)
+        return _open_at(resource, serial, "cross-check scope", hint, Agilent54621A)
+    f = finder.find(
+        "54620-series scope", _is_xscope, [serial], remote=False, hint=hint, config_key="xscope.resource"
+    )
+    return Agilent54621A(open_transport(f.resource, serial=f.serial or serial))
 
 
 def open_ad2(serial: str = "") -> Oscilloscope:
@@ -309,35 +380,46 @@ def _ad2_lines() -> list[str]:
     ]
 
 
-def discover(gpib_address: int = 5, baud: int = 9600) -> list[str]:
-    lines = []
-    with _step("Checking USB-serial ports for RS-232 instruments (DMM)"):
-        serial_found = _serial_instrument_candidates(baud)
-    skip = frozenset(f.resource.removeprefix(SERIAL_PREFIX) for f in serial_found)
-    with _step("Checking VISA (GPIB / USB) instruments"):
-        visa = _visa_candidates()
-    with _step("Checking for Prologix-style GPIB adapters"):
-        prologix = _prologix_candidates(gpib_address, skip)
-    instruments = visa + prologix + serial_found
-    for f in instruments:
-        tag = "  <- PSU" if _is_psu(f) else "  <- DMM" if _is_dmm(f) else ""
-        if f.parity:
-            tag += f" (parity {f.parity})"
-        lines.append(f"{f.resource:<40} {f.idn}{tag}")
-    if not any(_is_psu(f) for f in instruments):
-        lines.append(f"No supported power supply found ({', '.join(SUPPORTED)}).")
-        lines.append(GPIB_HINT)
-    if not any(_is_dmm(f) for f in instruments):
-        lines.append(f"No {DMM_MODEL} DMM found (optional).")
-        lines.append(RS232_HINT)
-    with _step("Checking USB-serial ports for a 54620-series scope (57600 baud, DTR)"):
-        scope_skip = skip | {f.resource.removeprefix(PROLOGIX_PREFIX).rsplit(":", 1)[0] for f in prologix}
-        scopes = _xscope_candidates(57600, "dsrdtr", frozenset(scope_skip))
+def discover(gpib_address: int = 5, cfg=None) -> list[str]:
+    """Everything reachable on every interface. `cfg` (a BenchConfig) supplies the RS-232 settings."""
+    hp_psu = cfg.psu.serial_settings() if cfg else SerialSettings(9600, "none", 2, "dsr-pacing")
+    hp_dmm = cfg.dmm.serial_settings() if cfg and cfg.dmm else SerialSettings(9600, "none", 2, "dsr-pacing")
+    scope = cfg.xscope.serial_settings() if cfg and cfg.xscope else SerialSettings(57600, "none", 1, "dsrdtr")
+    finder = Finder(cfg.psu.gpib_address if cfg else gpib_address)
+    found: list[Found] = list(finder.visa())
+    with _step("Checking RS-232 ports (HP-style 8N2 / 7E2 / 7O2 for the supply and DMM)"):
+        variants = list(dict.fromkeys(_hp_serial_variants(hp_psu) + _hp_serial_variants(hp_dmm)))
+        hp = finder.serial(variants, remote=True)
+    for f in hp:
+        finder.claim(f)
+    with _step(f"Checking RS-232 ports for a 54620-series scope ({scope.baud} baud 8N1, {scope.flow})"):
+        scopes = finder.serial([scope], remote=False)
     for f in scopes:
-        lines.append(f"{f.resource:<40} {f.idn}  <- cross-check scope")
-    if not scopes:
-        lines.append("No 54621A cross-check scope found on serial ports (optional).")
-        lines.append(SCOPE_HINT)
+        finder.claim(f)
+    found += hp + scopes + finder.prologix()
+
+    lines = []
+    for f in found:
+        tag = (
+            "  <- PSU"
+            if _is_psu(f)
+            else "  <- DMM"
+            if _is_dmm(f)
+            else "  <- cross-check scope"
+            if _is_xscope(f)
+            else ""
+        )
+        if f.serial:
+            tag += f" ({f.serial.baud} baud, parity {f.serial.parity}, {f.serial.stopbits} stop)"
+        lines.append(f"{f.resource:<40} {f.idn}{tag}")
+    for what, test, hint in (
+        (f"supported power supply ({', '.join(SUPPORTED)})", _is_psu, GPIB_HINT),
+        (f"{DMM_MODEL} DMM (optional)", _is_dmm, RS232_HINT),
+        ("54621A cross-check scope (optional)", _is_xscope, SCOPE_HINT),
+    ):
+        if not any(test(f) for f in found):
+            lines.append(f"No {what} found on GPIB, USB, RS-232 or Prologix.")
+            lines.append(f"  {hint}")
     with _step("Checking for Analog Discovery 2s"):
-        ad2 = _ad2_lines()
-    return lines + ad2
+        lines += _ad2_lines()
+    return lines

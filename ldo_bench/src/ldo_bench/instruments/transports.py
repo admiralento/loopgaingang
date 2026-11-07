@@ -29,6 +29,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import time
+from dataclasses import dataclass
 from typing import Protocol
 
 from ldo_bench.instruments.base import InstrumentError
@@ -42,11 +43,29 @@ SERIAL_FRAMES = {"none": (8, "N"), "even": (7, "E"), "odd": (7, "O")}
 
 
 class Transport(Protocol):
+    """What every driver may use; implemented by VISA, Prologix and serial alike."""
+
     name: str
+    kind: str  # "visa" | "prologix" | "serial"
 
     def write(self, cmd: str) -> None: ...
     def query(self, cmd: str) -> str: ...
+    def read_line(self) -> str: ...  # one reply after write(); "" on timeout
+    def read_block(self, cmd: str) -> bytes: ...  # query returning an IEEE 488.2 #-block
+    def set_timeout(self, seconds: float) -> float: ...  # returns the previous timeout
     def close(self) -> None: ...
+
+
+def parse_block(raw: bytes, cmd: str, name: str) -> bytes:
+    """Data of an IEEE 488.2 definite-length block: #<n><n-digit length><data>[NL]."""
+    if len(raw) < 2 or raw[:1] != b"#" or not raw[1:2].isdigit():
+        raise InstrumentError(f"{name}: '{cmd}' did not return a data block (got {raw[:16]!r})")
+    nd = int(raw[1:2])
+    n = int(raw[2 : 2 + nd])
+    data = raw[2 + nd : 2 + nd + n]
+    if len(data) != n:
+        raise InstrumentError(f"{name}: '{cmd}' block truncated: {len(data)} of {n} bytes")
+    return data
 
 
 def parse_prologix(resource: str) -> tuple[str, int]:
@@ -58,11 +77,38 @@ def parse_prologix(resource: str) -> tuple[str, int]:
     return port, int(addr)
 
 
+@dataclass(frozen=True)
+class SerialSettings:
+    """How to talk to an instrument when it's on RS-232 (ignored for GPIB / USB / Prologix)."""
+
+    baud: int = 9600
+    parity: str = "none"  # none = 8 data bits; even / odd = 7 data bits
+    stopbits: int = 2
+    flow: str = "dsr-pacing"  # dsr-pacing (HP 34401A / E36xx style), dsrdtr, xonxoff, none
+
+
 def open_transport(
-    resource: str, *, timeout: float = 5.0, baud: int = 9600, parity: str = "none"
+    resource: str,
+    *,
+    timeout: float = 5.0,
+    baud: int = 9600,
+    parity: str = "none",
+    serial: SerialSettings | None = None,
 ) -> Transport:
+    """Any resource form: VISA ('GPIB0::5::INSTR', 'USB0::...'), 'prologix:<port>:<addr>', 'serial:<port>'.
+
+    `serial` (or the older baud/parity) only matters for 'serial:' resources.
+    """
     if resource.lower().startswith(SERIAL_PREFIX):
-        return SerialTransport(resource[len(SERIAL_PREFIX) :], baud=baud, parity=parity, timeout=timeout)
+        s = serial or SerialSettings(baud=baud, parity=parity)
+        return SerialTransport(
+            resource[len(SERIAL_PREFIX) :],
+            baud=s.baud,
+            parity=s.parity,
+            stopbits=s.stopbits,
+            flow=s.flow,
+            timeout=timeout,
+        )
     if resource.lower().startswith(PROLOGIX_PREFIX):
         port, addr = parse_prologix(resource)
         return PrologixTransport(port, addr, timeout=timeout)
@@ -99,6 +145,7 @@ class VisaTransport:
         self._inst.read_termination = "\n"
         self._inst.write_termination = "\n"
         self._error = pyvisa.Error
+        self.kind = "visa"
 
     def write(self, cmd: str) -> None:
         log.debug("%s <- %s", self.name, cmd)
@@ -115,6 +162,26 @@ class VisaTransport:
         log.debug("%s <- %s -> %s", self.name, cmd, reply)
         return reply
 
+    def read_line(self) -> str:
+        try:
+            return self._inst.read().strip()
+        except self._error:
+            return ""  # timeout: nothing to read yet
+
+    def read_block(self, cmd: str) -> bytes:
+        # pyvisa reads the exact byte count from the header, so data bytes equal to '\n' are safe
+        try:
+            data = self._inst.query_binary_values(cmd, datatype="B", container=bytes)
+        except (self._error, ValueError) as e:
+            raise InstrumentError(f"{self.name}: '{cmd}' block read failed: {e}") from e
+        log.debug("%s <- %s -> %d-byte block", self.name, cmd, len(data))
+        return data
+
+    def set_timeout(self, seconds: float) -> float:
+        old = self._inst.timeout / 1000
+        self._inst.timeout = int(seconds * 1000)
+        return old
+
     def close(self) -> None:
         with contextlib.suppress(self._error):
             self._inst.close()
@@ -125,6 +192,7 @@ class PrologixTransport:
 
     def __init__(self, port: str, address: int, *, timeout: float = 5.0, serial_obj=None) -> None:
         self.name = f"{PROLOGIX_PREFIX}{port}:{address}"
+        self.kind = "prologix"
         self.address = address
         if serial_obj is None:
             import serial
@@ -169,6 +237,28 @@ class PrologixTransport:
         log.debug("%s <- %s -> %s", self.name, cmd, reply)
         return reply
 
+    def read_line(self) -> str:
+        self._raw("++read eoi")
+        return self._ser.readline().decode("ascii", "replace").strip()
+
+    def read_block(self, cmd: str) -> bytes:
+        self._ser.reset_input_buffer()
+        self.write(cmd)
+        self._raw("++read eoi")
+        head = self._ser.read(2)
+        nd = int(head[1:2]) if len(head) == 2 and head[1:2].isdigit() else 0
+        length = self._ser.read(nd) if nd else b""
+        n = int(length) if length.isdigit() else 0
+        data = parse_block(head + length + self._ser.read(n), cmd, self.name)
+        self._ser.readline()  # trailing NL
+        return data
+
+    def set_timeout(self, seconds: float) -> float:
+        old = self._ser.timeout
+        self._ser.timeout = seconds
+        self._raw(f"++read_tmo_ms {max(1, min(3000, int(seconds * 1000)))}")  # adapter's own limit
+        return old if old is not None else seconds
+
     def adapter_version(self) -> str:
         self._ser.reset_input_buffer()
         self._raw("++ver")
@@ -210,6 +300,8 @@ class SerialTransport:
         """flow: "dsr-pacing" (wait for DSR before each command; the 34401A), "dsrdtr" (pyserial
         hardware DTR/DSR flow control; the 54621A's DTR mode), "xonxoff", or "none"."""
         self.name = f"{SERIAL_PREFIX}{port}"
+        self.kind = "serial"
+        self.port = port
         if parity not in SERIAL_FRAMES:
             raise InstrumentError(f"unknown parity '{parity}', expected one of {list(SERIAL_FRAMES)}")
         if flow not in ("dsr-pacing", "dsrdtr", "xonxoff", "none"):

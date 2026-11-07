@@ -275,12 +275,18 @@ def open_bench(
             assume_yes=True,
         )
 
-    from ldo_bench.instruments.discovery import open_ad2, open_dmm, open_psu, open_xscope
+    from ldo_bench.instruments.discovery import Finder, open_ad2, open_dmm, open_psu, open_xscope
 
     t0 = time.monotonic()
     log.info("Opening instruments (Ctrl-C to abort) ...")
+    # One search shared by every instrument: each scan runs once, and nothing claimed is re-probed.
+    finder = Finder(cfg.psu.gpib_address)
     psu = open_psu(
-        psu_resource or cfg.psu.resource, gpib_address=cfg.psu.gpib_address, channel=cfg.psu.channel
+        psu_resource or cfg.psu.resource,
+        gpib_address=cfg.psu.gpib_address,
+        channel=cfg.psu.channel,
+        serial=cfg.psu.serial_settings(),
+        finder=finder,
     )
     opened: list = [psu]
     try:
@@ -288,7 +294,7 @@ def open_bench(
         opened.append(ad2)
         dmm = None
         if want_dmm:
-            dmm = open_dmm(cfg.dmm.resource, baud=cfg.dmm.baud, parity=cfg.dmm.parity)
+            dmm = open_dmm(cfg.dmm.resource, serial=cfg.dmm.serial_settings(), finder=finder)
             opened.append(dmm)
             log.info("Configuring the DMM ...")
             dmm.configure_dcv(range=cfg.dmm.range, nplc=cfg.dmm.nplc)
@@ -296,13 +302,8 @@ def open_bench(
         xscope_issue = None
         if want_xscope:
             xs = cfg.xscope
-            used = frozenset(
-                inst.t.name.removeprefix("serial:")
-                for inst in opened
-                if hasattr(getattr(inst, "t", None), "name")
-            )
             try:
-                xscope = open_xscope(xs.resource, baud=xs.baud, flow=xs.flow, skip=used)
+                xscope = open_xscope(xs.resource, serial=xs.serial_settings(), finder=finder)
                 opened.append(xscope)
             except InstrumentError as e:  # optional: the AD2 measurement goes ahead without it
                 xscope_issue = f"cross-check scope not available: {e}"

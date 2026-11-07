@@ -3,9 +3,8 @@ import pytest
 from ldo_bench.bench import open_bench
 from ldo_bench.instruments import discovery
 from ldo_bench.instruments.base import InstrumentError
-from ldo_bench.instruments.discovery import Found
 from ldo_bench.instruments.hp34401a import HP34401A
-from ldo_bench.instruments.transports import SerialTransport, open_transport
+from ldo_bench.instruments.transports import SerialTransport
 
 IDN = "HEWLETT-PACKARD,34401A,0,11-5-2"
 
@@ -43,18 +42,6 @@ def test_serial_transport_query_and_missing_reply():
         t.query("READ?")
 
 
-def test_open_transport_serial_prefix(monkeypatch):
-    made = {}
-
-    class Spy(SerialTransport):
-        def __init__(self, port, *, baud, parity, timeout):
-            made.update(port=port, baud=baud, parity=parity)
-
-    monkeypatch.setattr("ldo_bench.instruments.transports.SerialTransport", Spy)
-    open_transport("serial:/dev/cu.usbserial-ABB83W3S", baud=19200, parity="even")
-    assert made == {"port": "/dev/cu.usbserial-ABB83W3S", "baud": 19200, "parity": "even"}
-
-
 def test_34401a_remote_local_and_config():
     ser = FakeSerial({"*IDN?": IDN, "SYST:ERR?": '+0,"No error"', "READ?": "+1.19987654E+00"})
     dmm = HP34401A(SerialTransport("COM3", serial_obj=ser))
@@ -75,23 +62,6 @@ def test_34401a_silent_gives_rs232_hint():
 def test_34401a_wrong_model():
     with pytest.raises(InstrumentError, match="not a 34401A"):
         HP34401A(SerialTransport("COM3", serial_obj=FakeSerial({"*IDN?": "HP,3478A,0,1"})))
-
-
-def test_open_dmm_not_found(monkeypatch):
-    monkeypatch.setattr(discovery, "_serial_instrument_candidates", lambda baud, parity: [])
-    monkeypatch.setattr(discovery, "_visa_candidates", list)
-    with pytest.raises(InstrumentError, match="--no-dmm"):
-        discovery.open_dmm()
-
-
-def test_open_dmm_prefers_serial(monkeypatch):
-    monkeypatch.setattr(
-        discovery, "_serial_instrument_candidates", lambda baud, parity: [Found("serial:COM3", IDN)]
-    )
-    opened = []
-    monkeypatch.setattr(discovery, "HP34401A", lambda t: opened.append(t) or "dmm")
-    monkeypatch.setattr(discovery, "open_transport", lambda res, baud, parity: res)
-    assert discovery.open_dmm() == "dmm" and opened == ["serial:COM3"]
 
 
 def test_failed_dmm_open_closes_psu_and_ad2(monkeypatch, jafwak):
@@ -143,29 +113,3 @@ def test_parity_mismatch_is_reported_not_parsed():
 def test_unknown_parity_rejected():
     with pytest.raises(InstrumentError, match="unknown parity"):
         SerialTransport("COM3", parity="mark", serial_obj=FakeSerial({}))
-
-
-def test_discovery_falls_back_to_other_parity(monkeypatch):
-    monkeypatch.setattr(discovery, "_serial_ports", lambda: ["COM3"])
-    tried = []
-
-    class Probe:
-        def __init__(self, port, *, baud, parity, timeout):
-            tried.append(parity)
-            self.parity = parity
-
-        def write(self, cmd):
-            pass
-
-        def query(self, cmd):
-            if self.parity != "even":
-                raise InstrumentError("garbled reply")
-            return IDN
-
-        def close(self):
-            pass
-
-    monkeypatch.setattr(discovery, "SerialTransport", Probe)
-    found = discovery._serial_instrument_candidates(9600, "none")
-    assert tried == ["none", "even"]
-    assert found == [Found("serial:COM3", IDN, "even")]

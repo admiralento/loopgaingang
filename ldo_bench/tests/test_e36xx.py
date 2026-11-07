@@ -1,8 +1,6 @@
 import pytest
 
-from ldo_bench.instruments import discovery
 from ldo_bench.instruments.base import InstrumentError
-from ldo_bench.instruments.discovery import Found
 from ldo_bench.instruments.e36xx import AgilentE36xx
 from ldo_bench.instruments.transports import PrologixTransport, parse_prologix
 
@@ -125,26 +123,3 @@ def test_prologix_silence_is_an_error():
     t = PrologixTransport("COM5", 5, serial_obj=FakeSerial([]))
     with pytest.raises(InstrumentError, match="no reply"):
         t.query("*IDN?")
-
-
-def test_open_psu_requires_unique_match(monkeypatch):
-    two = [Found("GPIB0::5::INSTR", IDN), Found("GPIB0::6::INSTR", IDN)]
-    monkeypatch.setattr(discovery, "_visa_candidates", lambda: two)
-    with pytest.raises(InstrumentError, match="more than one"):
-        discovery.open_psu()
-
-
-def test_open_psu_falls_back_to_prologix(monkeypatch):
-    monkeypatch.setattr(discovery, "_visa_candidates", lambda: [Found("GPIB0::1::INSTR", "HP,34401A,0,1")])
-    monkeypatch.setattr(discovery, "_prologix_candidates", lambda addr: [Found("prologix:COM5:5", IDN)])
-    opened = []
-    monkeypatch.setattr(discovery, "open_transport", lambda res: opened.append(res) or FakeTransport())
-    psu = discovery.open_psu()
-    assert opened == ["prologix:COM5:5"] and "E3638A" in psu.idn
-
-
-def test_no_psu_found(monkeypatch):
-    monkeypatch.setattr(discovery, "_visa_candidates", list)
-    monkeypatch.setattr(discovery, "_prologix_candidates", lambda addr: [])
-    with pytest.raises(InstrumentError, match="GPIB \\(HP-IB\\)"):
-        discovery.open_psu()

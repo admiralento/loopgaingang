@@ -31,9 +31,9 @@ log = logging.getLogger(__name__)
 MODELS = ("54621A", "54622A", "54624A", "54641A", "54642A")  # same 54620/54640 command set
 
 RS232_HINT = (
-    "On the 54621A: Utility > I/O, set the RS-232 baud rate to match xscope.baud (57600 is fastest) "
-    'and the handshake to DTR (xscope.flow = "dsrdtr") or XON/XOFF ("xonxoff"). The port is '
-    "8 data bits, no parity, 1 stop bit; use a null-modem cable."
+    "On the 54621A (Utility > I/O): on GPIB, note its GPIB address. On RS-232, set the baud rate to "
+    'match xscope.baud (57600 is fastest) and the handshake to DTR (xscope.flow = "dsrdtr") or '
+    'XON/XOFF ("xonxoff"); the port is 8 data bits, no parity, 1 stop bit, on a null-modem cable.'
 )
 
 

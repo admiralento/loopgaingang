@@ -126,16 +126,24 @@ def check_config(config: ConfigOpt) -> None:
 
 
 @app.command()
-def discover(sim: SimOpt = False, verbose: VerboseOpt = False) -> None:
-    """List the power supplies and Analog Discovery 2s that are connected."""
+def discover(
+    config: Annotated[
+        Path | None,
+        typer.Option("--config", "-c", exists=True, dir_okay=False, help="Use this config's RS-232 settings"),
+    ] = None,
+    sim: SimOpt = False,
+    verbose: VerboseOpt = False,
+) -> None:
+    """List every instrument reachable over GPIB (VISA / UsbGpib / Prologix), USB and RS-232."""
     _logging(verbose)
     if sim:
         typer.echo("SIM,E3648A,0,sim  (sim)\nSIM Analog Discovery 2 (SN:SIM000)  (sim)")
         return
     from ldo_bench.instruments.discovery import discover as _discover
 
+    cfg = _load(config) if config else None
     try:
-        found = _discover()
+        found = _discover(cfg=cfg)
     except InstrumentError as e:
         typer.secho(str(e), fg="red", err=True)
         raise typer.Exit(1) from e

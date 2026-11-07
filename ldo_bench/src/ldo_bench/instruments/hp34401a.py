@@ -10,23 +10,24 @@ import logging
 import time
 
 from ldo_bench.instruments.base import InstrumentError
-from ldo_bench.instruments.transports import SerialTransport, Transport
+from ldo_bench.instruments.transports import Transport
 
 log = logging.getLogger(__name__)
 
 MODEL = "34401A"
 
 RS232_HINT = (
-    "On the 34401A front panel (Shift > I/O MENU): set INTERFACE to RS-232, and BAUD RATE / PARITY "
-    "to match dmm.baud and dmm.parity (NONE: 8 BITS = 'none', EVEN: 7 BITS = 'even'). The cable "
-    "must be a full-handshake null-modem cable (e.g. Agilent 34398A)."
+    "On the 34401A front panel (Shift > I/O MENU), set INTERFACE to match the cable. On GPIB: HP-IB / "
+    "488 and note its address. On RS-232: RS-232, with BAUD RATE / PARITY matching dmm.baud and "
+    "dmm.parity (NONE: 8 BITS = 'none', EVEN: 7 BITS = 'even'), and a full-handshake null-modem "
+    "cable (e.g. Agilent 34398A)."
 )
 
 
 class HP34401A:
     def __init__(self, transport: Transport) -> None:
         self.t = transport
-        self.serial = isinstance(transport, SerialTransport)
+        self.serial = getattr(transport, "kind", "") == "serial"
         if self.serial:
             self.t.write("")  # terminate any partial command left in the meter's buffer
             self.t.write("SYST:REM")

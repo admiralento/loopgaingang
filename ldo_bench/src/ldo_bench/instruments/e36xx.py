@@ -29,9 +29,10 @@ ACCURACY = {
 
 # Shown whenever we can't find or talk to the supply.
 GPIB_HINT = (
-    "Make sure the supply is switched on and its remote interface is set to GPIB (HP-IB), "
-    "not RS-232, in the front-panel I/O config menu. The UsbGpib adapter only appears on USB "
-    "when the supply is on and in GPIB mode (adapter LED solid, not blinking)."
+    "Make sure the supply is switched on and its remote interface (front-panel I/O config) matches "
+    "how it's connected: GPIB (HP-IB) for a GPIB adapter, RS-232 for a serial cable (then psu.baud / "
+    "psu.parity must match too). The UsbGpib adapter only appears on USB when the supply is on and in "
+    "GPIB mode (adapter LED solid, not blinking)."
 )
 
 
@@ -44,6 +45,10 @@ def model_of(idn: str) -> str | None:
 class AgilentE36xx:
     def __init__(self, transport: Transport, channel: int = 1) -> None:
         self.t = transport
+        self.serial = getattr(transport, "kind", "") == "serial"
+        if self.serial:  # RS-232 needs remote mode before it accepts commands
+            self.t.write("")
+            self.t.write("SYST:REM")
         self.idn = self.t.query("*IDN?")
         model = model_of(self.idn)
         if model is None:
@@ -133,4 +138,8 @@ class AgilentE36xx:
         return float(self.t.query("MEAS:CURR?"))
 
     def close(self) -> None:
-        self.t.close()
+        try:
+            if self.serial:
+                self.t.write("SYST:LOC")  # hand the front panel back
+        finally:
+            self.t.close()

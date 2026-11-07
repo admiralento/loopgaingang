@@ -161,13 +161,36 @@ VIN is driven by the AD2 wavegen through the board's BUF634 buffer:
 - **Calibration:** the buffer's offset is calibrated out from VIN measured at the board (scope ch2), so the steps land on `vin_low` / `vin_high` within 5 mV. If the buffer can't reach a level, the test says to check headroom, JP4 and the W1 wiring.
 - **Measurement:** the scope triggers on VIN itself. Each edge is averaged and analysed like load transient. The report also gives the peak VOUT deviation per volt of VIN step (mV/V).
 
+### Interfaces: GPIB or RS-232, for every instrument
+
+The supply, DMM and 54621A scope each work over any of these connections:
+
+| Connection | `resource` | Notes |
+|---|---|---|
+| VISA GPIB (GPIB card, Keysight 82357B, NI GPIB-USB) | `GPIB0::5::INSTR` | needs NI-VISA / Keysight IO Libraries |
+| XyphroLabs UsbGpib | `USB0::0x03EB::0x2065::…::INSTR` | one instrument per adapter; works with pyvisa-py on macOS |
+| Prologix-style USB-GPIB | `prologix:COM5:5` | several instruments on one GPIB bus |
+| The instrument's own RS-232 port | `serial:COM3`, `serial:/dev/cu.usbserial-…` | USB-serial adapter + null-modem cable |
+
+**Searching:** leave `resource = ""` to have the instrument searched for in this order:
+1. VISA
+2. RS-232 ports, using that instrument's `baud` / `parity` / `stopbits` / `flow`. The supply and DMM are also tried at the other parity settings.
+3. Prologix adapters, at every GPIB address.
+
+Each scan runs once per run, and a port that one instrument has claimed is never probed for another. `ldo-bench discover -c <config>` lists everything on every interface, using that config's RS-232 settings.
+
+**RS-232 specifics:**
+- The serial settings are ignored on GPIB.
+- On RS-232, the supply and DMM are put in remote mode while the run lasts (`SYST:REM`) and handed back to the front panel afterwards (`SYST:LOC`).
+- The supply's RS-232 path (HP style: 2 stop bits, DTR/DSR) hasn't been tested on the bench yet; the bench unit has only been run over GPIB so far.
+
 ### 54621A cross-check scope (optional)
 
-An Agilent 54621A on RS-232 can capture every transient edge alongside the AD2, as an independent check. Configure it under `[xscope]` in the board config, and skip it for a run with `--no-xscope`.
+An Agilent 54621A (on GPIB or RS-232) can capture every transient edge alongside the AD2, as an independent check. Configure it under `[xscope]` in the board config, and skip it for a run with `--no-xscope`.
 
 **Scope setup:**
-- **Interface:** on the scope, **Utility > I/O**, set the RS-232 baud rate to `xscope.baud` (57600 is fastest) and the handshake to **DTR** (`flow = "dsrdtr"`) or XON/XOFF.
-- **Cable:** the port is fixed at 8N1; use a null-modem cable to a USB-serial adapter.
+- **Interface:** on the scope, **Utility > I/O**. On GPIB, note the address. On RS-232, set the baud rate to `xscope.baud` (57600 is fastest) and the handshake to **DTR** (`flow = "dsrdtr"`) or XON/XOFF.
+- **Cable:** on RS-232 the port is fixed at 8N1; use a null-modem cable to a USB-serial adapter.
 - **Ch1:** on VOUT, at the same point as AD2 scope 1.
 - **Ch2:** on the same trigger signal as AD2 scope 2: the DIO pin for load transient, VIN for line transient.
 

@@ -18,6 +18,9 @@ AD2_DIO_PINS = 16
 AD2_WAVEGEN_MAX_V = 5.0
 
 
+FlowName = Literal["dsr-pacing", "dsrdtr", "xonxoff", "none"]
+
+
 class _Model(BaseModel):
     # Typos in the TOML file should fail loudly, not be silently ignored.
     model_config = ConfigDict(extra="forbid")
@@ -49,12 +52,17 @@ class PsuConfig(_Model):
     resource: str = Field(
         "",
         description=(
-            "Empty = auto-discover an E3638A / E3648A. Otherwise a VISA resource such as "
-            "'GPIB0::5::INSTR', or a Prologix-style adapter as 'prologix:COM5:5' "
-            "(serial port, GPIB address)."
+            "'' = auto-discover over VISA (GPIB / USB), RS-232 ports and Prologix adapters. Or any of: "
+            "'GPIB0::5::INSTR', 'USB0::...::INSTR' (UsbGpib), 'prologix:COM5:5', 'serial:COM3' / "
+            "'serial:/dev/cu.usbserial-XXXX'"
         ),
     )
     gpib_address: int = Field(5, ge=0, le=30, description="Tried first when scanning a Prologix adapter")
+    # RS-232 only (E36xxA: I/O config on the front panel); ignored on GPIB / USB
+    baud: int = Field(9600, description="RS-232 baud rate (must match the supply)")
+    parity: Literal["none", "even", "odd"] = Field("none", description="none = 8 data bits; even/odd = 7")
+    stopbits: Literal[1, 2] = 2
+    flow: FlowName = Field("dsr-pacing", description="HP DTR/DSR handshake: wait for DSR before each command")
     channel: int = Field(1, ge=1, le=2, description="Output to use on a dual-output supply (E3648A)")
     voltage_range: Literal["LOW", "HIGH"] | None = Field(None, description="Output range (LOW/HIGH)")
     current_limit: float = Field(gt=0, description="Applied before the output is enabled (A)")
@@ -74,6 +82,12 @@ class PsuConfig(_Model):
         if self.ovp is not None and self.ovp <= self.v_max:
             raise ValueError(f"psu.ovp ({self.ovp} V) must be above psu.v_max ({self.v_max} V)")
         return self
+
+    def serial_settings(self):
+        """RS-232 settings to use if this instrument is on a serial port."""
+        from ldo_bench.instruments.transports import SerialSettings
+
+        return SerialSettings(self.baud, self.parity, self.stopbits, self.flow)
 
 
 class ScopeChannelConfig(_Model):
@@ -103,17 +117,27 @@ class DmmConfig(_Model):
     resource: str = Field(
         "",
         description=(
-            "'' = auto-discover (USB serial ports, then VISA). Or 'serial:/dev/cu.usbserial-XXXX', "
-            "'serial:COM3', or a VISA resource if it is on GPIB."
+            "'' = auto-discover over VISA (GPIB / USB), RS-232 ports and Prologix adapters. Or any of: "
+            "'GPIB0::5::INSTR', 'USB0::...::INSTR' (UsbGpib), 'prologix:COM5:5', 'serial:COM3' / "
+            "'serial:/dev/cu.usbserial-XXXX'"
         ),
     )
+    # RS-232 only (34401A: Shift > I/O MENU); ignored on GPIB
     baud: int = Field(9600, description="Must match the 34401A's RS-232 baud rate setting")
     parity: Literal["none", "even", "odd"] = Field(
         "none", description="34401A PARITY setting: NONE: 8 BITS = 'none', EVEN: 7 BITS = 'even'"
     )
+    stopbits: Literal[1, 2] = 2
+    flow: FlowName = "dsr-pacing"
     nplc: Literal[0.02, 0.2, 1, 10, 100] = Field(10, description="Integration time in power-line cycles")
     range: float | None = Field(None, gt=0, description="Fixed DCV range (V); None = auto range")
     samples: int = Field(1, ge=1, description="Readings averaged per point")
+
+    def serial_settings(self):
+        """RS-232 settings to use if this instrument is on a serial port."""
+        from ldo_bench.instruments.transports import SerialSettings
+
+        return SerialSettings(self.baud, self.parity, self.stopbits, self.flow)
 
 
 class XScopeConfig(_Model):
@@ -121,14 +145,20 @@ class XScopeConfig(_Model):
 
     enabled: bool = True
     resource: str = Field(
-        "", description="'' = probe USB-serial ports; or 'serial:/dev/cu.usbserial-XXXX' / 'serial:COM4'"
+        "",
+        description=(
+            "'' = auto-discover over VISA (GPIB / USB), RS-232 ports and Prologix adapters. Or any of: "
+            "'GPIB0::5::INSTR', 'USB0::...::INSTR' (UsbGpib), 'prologix:COM5:5', 'serial:COM3' / "
+            "'serial:/dev/cu.usbserial-XXXX'"
+        ),
     )
+    # RS-232 only (Utility > I/O on the scope; the port itself is fixed at 8N1); ignored on GPIB
     baud: Literal[9600, 19200, 38400, 57600] = Field(
         57600, description="Must match Utility > I/O on the scope"
     )
-    flow: Literal["dsrdtr", "xonxoff", "none"] = Field(
-        "dsrdtr", description="DTR = 'dsrdtr', XON/XOFF = 'xonxoff'"
-    )
+    parity: Literal["none"] = "none"
+    stopbits: Literal[1] = 1
+    flow: FlowName = Field("dsrdtr", description="DTR = 'dsrdtr', XON/XOFF = 'xonxoff'")
     vout_channel: Literal[1, 2] = 1
     ref_channel: Literal[1, 2] = 2
     vout_range: float = Field(
@@ -142,6 +172,12 @@ class XScopeConfig(_Model):
         if self.vout_channel == self.ref_channel:
             raise ValueError("xscope.vout_channel and xscope.ref_channel must differ")
         return self
+
+    def serial_settings(self):
+        """RS-232 settings to use if this instrument is on a serial port."""
+        from ldo_bench.instruments.transports import SerialSettings
+
+        return SerialSettings(self.baud, self.parity, self.stopbits, self.flow)
 
 
 class LoadBankConfig(_Model):
