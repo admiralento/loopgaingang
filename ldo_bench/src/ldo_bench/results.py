@@ -12,8 +12,10 @@ from __future__ import annotations
 import contextlib
 import csv
 import json
+import os
 import platform
 import re
+import shutil
 import subprocess
 from datetime import datetime
 from importlib import metadata
@@ -62,6 +64,7 @@ class RunDir:
         invalid: bool = False,
     ) -> None:
         self.started = datetime.now()
+        self.root = Path(root)
         self.test = test
         self.cfg = cfg
         self.config_path = config_path
@@ -110,3 +113,34 @@ class RunDir:
         p = self.file(name)
         fig.savefig(p, dpi=150)
         return p
+
+    def publish_latest(self) -> list[Path]:
+        """Copy this run's plots to fixed names, so an image left open in an editor shows the newest run.
+
+        results/latest.png                    plot.png of the most recent run of any test
+        results/<test>/latest.png             plot.png of the most recent run of this test
+        results/<test>/latest_full.png        plot_full.png, for tests that make one
+        results/latest_run.txt                which run folder those came from
+
+        Copies, not symlinks (Windows needs admin rights for symlinks); each is written to a
+        temporary name and then swapped in, so a viewer never reads a half-written image.
+        """
+        targets = {
+            "plot.png": [self.root / "latest.png", self.path.parent / "latest.png"],
+            "plot_full.png": [self.path.parent / "latest_full.png"],
+        }
+        written = []
+        for src_name, dests in targets.items():
+            src = self.file(src_name)
+            if not src.exists():
+                continue
+            for dest in dests:
+                tmp = dest.with_name(f".{dest.name}.tmp")
+                shutil.copyfile(src, tmp)
+                os.replace(tmp, dest)
+                written.append(dest)
+        note = self.root / "latest_run.txt"
+        tmp = note.with_name(".latest_run.txt.tmp")
+        tmp.write_text(f"{self.path}\n")
+        os.replace(tmp, note)
+        return written

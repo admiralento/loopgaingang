@@ -217,6 +217,7 @@ def _save(
             plotting.mark_simulated(fig)
         run.save_fig(fig, name)
         plotting.close(fig)
+    run.publish_latest()  # results/latest.png etc.: keep one open in the editor, it updates
     return run.path
 
 

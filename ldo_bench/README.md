@@ -96,6 +96,11 @@ Safety limits still stop a run immediately: the line-transient interlock, `dut.i
 
 `--sim` runs print the report marked SIMULATED and save nothing. With `--save-sim`, the folder ends in `_SIM` and the plot carries a SIMULATED banner.
 
+**Latest plots:** after every saved run, its plots are also copied to fixed names. Keep one open in VS Code and it updates when the next run finishes:
+- `results/latest.png`: the most recent run of any test
+- `results/<test>/latest.png` and `latest_full.png`: the most recent run of that test
+- `results/latest_run.txt`: names the run folder they came from
+
 Each run writes a folder under `results/<test>/`, e.g. `results/load-tran/20261106-143714_TPS7A7001-demo-board_load-tran/`:
 - `data.csv`: every point
 - `summary.json`: the headline numbers
