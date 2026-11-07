@@ -9,7 +9,7 @@ readback is, which is why the regulation tests measure at the board instead.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -33,9 +33,12 @@ class PsuCheckResult:
     model: str | None
     channel: int
     rows: list[dict]
+    issues: list[str] = field(default_factory=list)
 
     @property
     def passed(self) -> bool | None:
+        if self.issues:
+            return False
         if self.model not in ACCURACY:
             return None
         return all(r["program_ok"] and r["readback_ok"] for r in self.rows)
@@ -47,6 +50,8 @@ class PsuCheckResult:
             "model": self.model,
             "channel": self.channel,
             "points": len(self.rows),
+            "valid": not self.issues,
+            "issues": self.issues,
             "passed": self.passed,
             "max_abs_output_error_v": float(np.max(np.abs(out))),
             "max_abs_readback_error_v": float(np.max(np.abs(rb))),
@@ -56,6 +61,7 @@ class PsuCheckResult:
     def report(self) -> str:
         lines = [
             f"PSU check: {self.model or 'unknown model'} OUT{self.channel} against the DMM",
+            *(["  NOT A VALID MEASUREMENT:", *(f"    - {i}" for i in self.issues)] if self.issues else []),
             f"  {'set V':>6} {'DMM V':>10} {'readback V':>11} {'output err':>11} {'readback err':>13}",
         ]
         for r in self.rows:
@@ -88,17 +94,19 @@ def run(bench: Bench, pc: PsuCheckConfig) -> PsuCheckResult:
     model = model_of(bench.psu.idn)
     spec = ACCURACY.get(model or "", {})
     rows = []
+    off_target: list[str] = []
     for k, v in enumerate(pc.points):
         bench.psu_output(v)
         bench.sleep(pc.settle_time)
         readback = bench.psu.measure_voltage()
         dmm = float(np.mean([bench.dmm.read_dcv() for _ in range(pc.readings)]))
-        if v >= 0.2 and abs(dmm - v) > 0.2 * v:
-            # Way beyond any spec: the DMM isn't on this output. Stop rather than log fake failures.
-            raise InstrumentError(
+        if v >= 0.2 and abs(dmm - v) > 0.2 * v and not off_target:
+            # Way beyond any spec: the DMM isn't on this output. Keep going so the plot shows it.
+            off_target.append(
                 f"DMM reads {dmm:.4f} V with OUT{ch} set to {v:.3f} V (PSU readback {readback:.4f} V): "
-                f"the DMM isn't connected across OUT{ch}. Check the wiring and try again."
+                f"the DMM isn't connected across OUT{ch}"
             )
+            log.warning("psu-check: %s", off_target[0])
         out_err, rb_err = dmm - v, readback - dmm
         prog_lim, rb_lim = _limit(spec.get("programming"), v), _limit(spec.get("readback"), dmm)
         rows.append(
@@ -115,7 +123,7 @@ def run(bench: Bench, pc: PsuCheckConfig) -> PsuCheckResult:
             }
         )
         log.info("[%d/%d] set %.3f V  DMM %.6f V  readback %.5f V", k + 1, len(pc.points), v, dmm, readback)
-    return PsuCheckResult(model, ch, rows)
+    return PsuCheckResult(model, ch, rows, off_target)
 
 
 def plot(res: PsuCheckResult, dut: str):
@@ -139,12 +147,15 @@ def plot(res: PsuCheckResult, dut: str):
         ax.set_title(title, fontsize=9.5, pad=6)
     axes[-1].set_xlabel("Setpoint (V)")
     verdict = {True: "within spec", False: "OUT OF SPEC", None: "no spec for this model"}[res.passed]
+    if res.issues:
+        verdict = "SETUP PROBLEM, not a valid measurement"
+        plotting.issue_box(axes[0], res.issues)
     fig.suptitle(
         f"PSU check: {res.model or 'PSU'} OUT{res.channel} vs DMM  ·  {verdict}",
         x=0.01,
         ha="left",
         fontsize=11,
         fontweight="bold",
-        color=plotting.INK,
+        color=plotting.CRITICAL if res.issues else plotting.INK,
     )
     return fig

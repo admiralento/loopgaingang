@@ -23,12 +23,13 @@ def test_needs_dmm(jafwak):
         psu_check.run(b, jafwak.psu_check)
 
 
-def test_disconnected_dmm_stops_early(jafwak, monkeypatch):
+def test_disconnected_dmm_recorded(jafwak, monkeypatch):
     with open_bench(jafwak, sim=True) as b:
         monkeypatch.setattr(b.dmm, "read_dcv", lambda: 0.0005)  # open leads
-        with pytest.raises(InstrumentError, match="isn't connected"):
-            psu_check.run(b, jafwak.psu_check)
-    assert not b.sim_model.psu_on  # bench shut the supply off
+        res = psu_check.run(b, jafwak.psu_check)
+    assert len(res.rows) == len(jafwak.psu_check.points)  # ran every point
+    assert res.passed is False and any("isn't connected" in i for i in res.issues)
+    assert not b.sim_model.psu_on
 
 
 def test_points_above_psu_limit_rejected(jafwak):

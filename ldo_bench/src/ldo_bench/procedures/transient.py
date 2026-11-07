@@ -27,33 +27,34 @@ def align_average(captures: list[Capture]) -> Capture:
 
     ch1 = np.mean([cut(c.ch1, c) for c in captures], axis=0)
     ch2 = np.mean([cut(c.ch2, c) for c in captures], axis=0)
-    return Capture(captures[0].sample_rate, ch1, ch2, pre)
+    return Capture(captures[0].sample_rate, ch1, ch2, pre, edge_found=all(c.edge_found for c in captures))
 
 
-SWING_TOLERANCE = 0.3  # the trigger channel's step must be within 30 % of what we commanded
+SWING_TOLERANCE = 0.3  # the trigger channel's step should be within 30 % of what we commanded
 
 
-def validate_capture(
-    bench: Bench, metrics, ref: np.ndarray, *, expected_swing: float, test: str, ref_desc: str
-) -> None:
-    """Refuse to report a transient unless the capture shows the real stimulus and the real VOUT.
-
-    Raises InstrumentError (so nothing is saved or plotted) when:
-      - no step was found on the trigger channel,
-      - the trigger channel's swing isn't the stimulus we commanded (probe on the wrong signal),
-      - VOUT before the step isn't near the DUT's output voltage (scope not on VOUT).
-    """
-    ch = bench.cfg.ad2.ref_channel
+def capture_issues(
+    bench: Bench, metrics, cap: Capture, ref: np.ndarray, *, expected_swing: float, ref_desc: str
+) -> list[str]:
+    """Setup problems visible in a transient capture. Empty list = it shows the real stimulus and VOUT."""
+    ch, vch = bench.cfg.ad2.ref_channel, bench.cfg.ad2.vout_channel
+    issues = []
+    if not cap.edge_found:
+        issues.append(f"the scope triggered but scope {ch}'s data shows no clean edge: is it on {ref_desc}?")
     if metrics.step_index < 0:
-        raise InstrumentError(f"{test}: no step found on scope {ch}; check that it is on {ref_desc}.")
+        issues.append(f"no step found on scope {ch}: is it on {ref_desc}?")
     lo, hi = np.percentile(ref, 2), np.percentile(ref, 98)
     swing = hi - lo
     if abs(swing - expected_swing) > SWING_TOLERANCE * expected_swing:
-        raise InstrumentError(
-            f"{test}: scope {ch} swings {swing:.3f} V but {ref_desc} should swing {expected_swing:.3f} V. "
-            "It is probably on the wrong signal; nothing was saved."
+        issues.append(
+            f"scope {ch} swings {swing:.3f} V but {ref_desc} should swing {expected_swing:.3f} V: "
+            "probably on the wrong signal"
         )
-    bench.check_vout(metrics.nominal, test=test, source=f"scope {bench.cfg.ad2.vout_channel} (captured)")
+    before = cap.channel(vch)[: max(10, cap.trigger_index - 10)].mean()
+    issue = bench.vout_issue(float(before), source=f"scope {vch}")
+    if issue:
+        issues.append(issue)
+    return issues
 
 
 def averaged_step(
@@ -67,61 +68,104 @@ def averaged_step(
     start: Callable[[], None],
     step: Callable[[], None],
     label: str,
-) -> Capture:
-    """`tc.averages` captures of the step start() -> step(), aligned and averaged.
+) -> tuple[Capture, list[str]]:
+    """`tc.averages` captures of the step start() -> step(), aligned and averaged, plus any issues.
 
-    start() puts the DUT at the starting level (then we wait tc.rest_time),
-    step() is called by the scope driver once the trigger is armed.
+    start() puts the DUT at the starting level (then we wait tc.rest_time), step() is called by
+    the scope driver once the trigger is armed. If the scope never triggers, one untriggered
+    capture is returned instead (edge_found=False) so the plot shows what is on the channels.
     """
-    caps = []
+    caps: list[Capture] = []
     for k in range(tc.averages):
         start()
         bench.sleep(tc.rest_time)
+        kw = {
+            "sample_rate": tc.sample_rate,
+            "n_samples": tc.n_samples,
+            "setups": setups,
+            "trigger_channel": trigger_channel,
+            "trigger_level": trigger_level,
+            "edge": trigger_edge,
+            "pre_trigger": tc.pre_trigger,
+            "stimulus": step,
+            "timeout": tc.timeout,
+        }
         try:
-            cap = bench.scope.capture(
-                sample_rate=tc.sample_rate,
-                n_samples=tc.n_samples,
-                setups=setups,
-                trigger_channel=trigger_channel,
-                trigger_level=trigger_level,
-                edge=trigger_edge,
-                pre_trigger=tc.pre_trigger,
-                stimulus=step,
-                timeout=tc.timeout,
-            )
+            caps.append(bench.scope.capture(**kw))
         except InstrumentError as e:
-            raise InstrumentError(
-                f"{label}: capture {k + 1} got no trigger ({e}). Check that scope channel "
-                f"{trigger_channel} is wired to the stimulus."
-            ) from e
-        caps.append(cap)
+            log.warning(
+                "%s: capture %d got no trigger (%s); recording an untriggered capture", label, k + 1, e
+            )
+            issue = (
+                f"the scope never triggered ({trigger_edge} through {trigger_level:.3f} V on scope "
+                f"{trigger_channel}, capture {k + 1}): plotted an untriggered capture of the channels"
+            )
+            start()
+            bench.sleep(tc.rest_time)
+            forced = bench.scope.capture(**kw, force=True)
+            return (align_average(caps) if caps else forced), [issue]
     log.info("%s: averaged %d captures at %.3g MS/s", label, len(caps), caps[0].sample_rate / 1e6)
-    return align_average(caps)
+    return align_average(caps), []
 
 
-def plot_edges(edges, suptitle: str, ref_label: str = "Scope 2 (V)"):
+def edge_report(e, extra: list[str] | None = None) -> list[str]:
+    """Report lines for one edge. Invalid edges list their setup issues and no metrics."""
+    lines = [f"  {e.title}"]
+    issues = list(getattr(e, "issues", []))
+    if issues:
+        lines.append("    NOT A VALID MEASUREMENT (data saved and plotted as measured):")
+        lines += [f"      - {i}" for i in issues]
+        return lines
+    m = e.metrics
+    ts = "did not settle in the capture" if np.isnan(m.settling_time) else f"{m.settling_time * 1e6:.2f} us"
+    lines += [
+        f"    nominal   {m.nominal:.5f} V",
+        f"    peak      {m.deviation * 1e3:+.2f} mV  (band ±{m.band * 1e3:.2f} mV)",
+        *(extra or []),
+        f"    settling  {ts}  (to the {'pre-step' if m.reference == 'pre' else 'final'} level)",
+        f"    noise     {m.noise * 1e3:.3f} mV rms"
+        + ("" if m.trustworthy else "  ! above band/3: settling time limited by noise"),
+    ]
+    shift = m.final - m.nominal
+    if m.reference == "pre" and np.isfinite(shift) and abs(shift) > m.band:
+        lines.append(
+            f"    ! VOUT ends {shift * 1e3:+.2f} mV from the pre-step level, outside the "
+            f"±{m.band * 1e3:.2f} mV band, so it can never settle back to it. "
+            'Set analysis.settle_reference = "post" to measure settling to the final level.'
+        )
+    return lines
+
+
+def plot_edges(edges, suptitle: str, ref_label: str = "Scope 2 (V)", vout_nominal: float | None = None):
     """One column per edge: the scope 2 (trigger) trace on a small panel on top, sharing the time
-    axis with VOUT below (averaged + smoothed, settling band, peak and settling time).
+    axis with VOUT below, both in absolute volts.
 
-    Separate panels rather than one plot with two y-axes: volts and millivolts on one plot
-    make either trace easy to misread. Each edge needs .title, .metrics, .t, .vout,
-    .vout_smoothed, .ref and .trigger_level (None to skip the trigger line).
+    Valid edges also get the analysis (smoothed trace, settling band, peak, settling time).
+    Edges with setup issues show only the measured data, the expected VOUT as a dashed line and
+    the issues in a red box, so a wrong setup is obvious and nothing looks like a result.
+    Separate panels rather than two y-axes on one plot (V and mV scales are easy to misread).
+    Each edge needs .title, .metrics, .t, .vout, .vout_smoothed, .ref, .trigger_level, .issues.
     """
+    from matplotlib.ticker import FormatStrFormatter
+
     n = len(edges)
     fig, axes = plotting.figure(
-        2, n, size=(5.2 * n, 5.6), squeeze=False, sharex="col", height_ratios=[1, 3.2]
+        2, n, size=(5.4 * n, 5.8), squeeze=False, sharex="col", height_ratios=[1, 3.2]
     )
+    any_invalid = False
     for col, e in enumerate(edges):
         ax_ref, ax = axes[0][col], axes[1][col]
-        m = e.metrics
+        m, issues = e.metrics, list(getattr(e, "issues", []))
+        valid = not issues
+        any_invalid |= not valid
         us = e.t * 1e6
-        dev = (e.vout - m.nominal) * 1e3
-        dev_s = (e.vout_smoothed - m.nominal) * 1e3
-        # Show from a little before the step to well past settling.
-        t_end = (m.settling_time * 1e6 * 2.5 + 10) if np.isfinite(m.settling_time) else us[-1]
-        view = (us >= -0.15 * t_end) & (us <= t_end)
+        if valid and np.isfinite(m.settling_time):
+            t_end = m.settling_time * 1e6 * 2.5 + 10
+            view = (us >= -0.15 * t_end) & (us <= t_end)
+        else:
+            view = np.ones_like(us, dtype=bool)  # whole capture: nothing hidden
 
-        # Top: scope 2, the trigger / stimulus channel.
+        # Top: scope 2, the trigger / stimulus channel (measured, absolute).
         ax_ref.axvline(0, color=plotting.AXIS, lw=0.8, zorder=1)
         ax_ref.plot(us[view], e.ref[view], color=plotting.SERIES[1], lw=1.4, zorder=3)
         if getattr(e, "trigger_level", None) is not None:
@@ -140,29 +184,28 @@ def plot_edges(edges, suptitle: str, ref_label: str = "Scope 2 (V)"):
         ax_ref.set_title(e.title, fontsize=10, pad=6)
         ax_ref.tick_params(labelbottom=False)
 
-        # Bottom: VOUT response.
-        if np.isfinite(m.band):
-            lvl = (m.settle_level - m.nominal) * 1e3
-            ax.axhspan(lvl - m.band * 1e3, lvl + m.band * 1e3, color=plotting.GRID, alpha=0.8, lw=0, zorder=0)
+        # Bottom: VOUT, measured, absolute volts.
         ax.axvline(0, color=plotting.AXIS, lw=0.8, zorder=1)
-        ax.plot(us[view], dev[view], color=plotting.SERIES[0], lw=0.8, alpha=0.35, zorder=2, label="Averaged")
-        ax.plot(us[view], dev_s[view], color=plotting.SERIES[0], lw=1.8, zorder=3, label="Smoothed (1 µs)")
-        if np.isfinite(m.settling_time):
-            ax.axvline(m.settling_time * 1e6, color=plotting.INK_2, lw=1, ls=(0, (3, 2)), zorder=2)
-            ax.annotate(
-                f"settled {m.settling_time * 1e6:.1f} µs",
-                (m.settling_time * 1e6, 1.0),
-                xycoords=("data", "axes fraction"),
-                xytext=(4, -12),
-                textcoords="offset points",
-                fontsize=8,
-                color=plotting.INK_2,
-            )
-        i_pk = int(np.argmin(np.abs(e.vout_smoothed - m.peak))) if np.isfinite(m.peak) else None
-        if i_pk is not None:
+        v, vs = e.vout[view], e.vout_smoothed[view]
+        if valid:
+            ax.axhspan(m.lower, m.upper, color=plotting.GRID, alpha=0.8, lw=0, zorder=0)
+            ax.plot(us[view], v, color=plotting.SERIES[0], lw=0.8, alpha=0.35, zorder=2, label="Averaged")
+            ax.plot(us[view], vs, color=plotting.SERIES[0], lw=1.8, zorder=3, label="Smoothed (1 µs)")
+            if np.isfinite(m.settling_time):
+                ax.axvline(m.settling_time * 1e6, color=plotting.INK_2, lw=1, ls=(0, (3, 2)), zorder=2)
+                ax.annotate(
+                    f"settled {m.settling_time * 1e6:.1f} µs",
+                    (m.settling_time * 1e6, 1.0),
+                    xycoords=("data", "axes fraction"),
+                    xytext=(4, -12),
+                    textcoords="offset points",
+                    fontsize=8,
+                    color=plotting.INK_2,
+                )
+            i_pk = int(np.argmin(np.abs(e.vout_smoothed - m.peak)))
             ax.plot(
                 us[i_pk],
-                dev_s[i_pk],
+                e.vout_smoothed[i_pk],
                 "o",
                 ms=6,
                 color=plotting.SERIES[0],
@@ -172,23 +215,46 @@ def plot_edges(edges, suptitle: str, ref_label: str = "Scope 2 (V)"):
             )
             ax.annotate(
                 f"{m.deviation * 1e3:+.1f} mV",
-                (us[i_pk], dev_s[i_pk]),
+                (us[i_pk], e.vout_smoothed[i_pk]),
                 xytext=(8, 0),
                 textcoords="offset points",
                 fontsize=8,
                 color=plotting.INK,
                 va="center",
             )
-        # Scale to the smoothed response and band; the 1-sample switching glitch in the raw
-        # trace would otherwise set the axis and squash the response.
-        span = [dev_s[view].min(), dev_s[view].max()]
-        if np.isfinite(m.band):
-            span += [lvl - m.band * 1e3, lvl + m.band * 1e3]
-        lo, hi = min(span), max(span)
-        pad = 0.15 * (hi - lo or 1.0)
+            # Scale to the response and band; the 1-sample switching glitch would squash it.
+            lo, hi = min(vs.min(), m.lower), max(vs.max(), m.upper)
+            ax.legend(loc="lower right" if m.deviation > 0 else "upper right")
+        else:
+            ax.plot(us[view], v, color=plotting.SERIES[0], lw=1.0, zorder=3, label="Measured (averaged)")
+            lo, hi = float(np.percentile(v, 0.5)), float(np.percentile(v, 99.5))
+            if vout_nominal is not None:
+                ax.axhline(
+                    vout_nominal,
+                    color=plotting.CRITICAL,
+                    lw=1.2,
+                    ls=(0, (5, 3)),
+                    zorder=2,
+                    label=f"Expected VOUT {vout_nominal:.3f} V",
+                )
+                lo, hi = min(lo, vout_nominal), max(hi, vout_nominal)
+            ax.legend(loc="center right")
+            plotting.issue_box(ax, issues)
+        pad = 0.15 * (hi - lo or 1e-3)
         ax.set_ylim(lo - pad, hi + pad)
-        ax.set_xlabel("Time from step (µs)")
-        ax.set_ylabel(f"VOUT minus {m.nominal:.4f} V (mV)" if np.isfinite(m.nominal) else "VOUT (mV)")
-        ax.legend(loc="lower right" if m.deviation > 0 else "upper right")
-    fig.suptitle(suptitle, x=0.01, ha="left", fontsize=11, fontweight="bold", color=plotting.INK)
+        ax.yaxis.set_major_formatter(FormatStrFormatter("%.4f"))
+        ax.set_xlabel("Time from step (µs)" if e.metrics.step_index >= 0 else "Time from scope trigger (µs)")
+        ax.set_ylabel(f"VOUT, scope {getattr(e, 'vout_channel', 1)} (V)")
+    if any_invalid:  # two lines so it fits; invalid edges draw no band, so drop its legend note
+        suptitle = "SETUP PROBLEM, not a valid measurement\n" + suptitle.replace(
+            "  ·  shaded = settling band", ""
+        )
+    fig.suptitle(
+        suptitle,
+        x=0.01,
+        ha="left",
+        fontsize=11,
+        fontweight="bold",
+        color=plotting.CRITICAL if any_invalid else plotting.INK,
+    )
     return fig

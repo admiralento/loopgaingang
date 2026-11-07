@@ -53,11 +53,17 @@ def test_interlock_never_raises_rail_above_check_level(jafwak):
 
 
 def test_buffer_without_headroom_is_reported(jafwak):
+    seen = []
+
     def weak_buffer(b):
         b.sim_model.buffer_dropout = 2.5  # 4.0 V rail can only reach 1.5 V
+        orig = b.awg.set_dc
+        b.awg.set_dc = lambda ch, v: (seen.append(v), orig(ch, v))
 
-    with pytest.raises(InstrumentError, match="headroom"):
-        run(jafwak, setup=weak_buffer)
+    res, _ = run(jafwak, setup=weak_buffer)  # runs to the end, records the problem
+    assert any("headroom" in i for i in res.issues)
+    # the calibration never chased the dead buffer upward
+    assert max(seen) <= jafwak.line_tran.vin_high + line_tran.CAL_MAX_CORRECTION + 1e-9
 
 
 def test_load_limit_applies(jafwak):

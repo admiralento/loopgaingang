@@ -1,6 +1,6 @@
 """Run folders: raw data (CSV), metadata (JSON) and plots (PNG) for every run.
 
-results/20261106-143012_JAFWAK_load-reg/
+results/load-reg/20261106-143012_JAFWAK_load-reg/   (one subfolder per test)
     data.csv      one row per measurement point
     summary.json  headline numbers
     meta.json     config, instrument IDs, git commit, package versions
@@ -59,14 +59,17 @@ class RunDir:
         *,
         config_path: Path | None = None,
         simulated: bool = False,
+        invalid: bool = False,
     ) -> None:
         self.started = datetime.now()
         self.test = test
         self.cfg = cfg
         self.config_path = config_path
         stamp = self.started.strftime("%Y%m%d-%H%M%S")
-        suffix = "_SIM" if simulated else ""  # never mistake a simulated run for a measurement
-        self.path = Path(root) / f"{stamp}_{_slug(cfg.dut.name)}_{test}{suffix}"
+        # never mistake a simulated run, or one with setup problems, for a valid measurement
+        suffix = ("_SIM" if simulated else "") + ("_INVALID" if invalid else "")
+        # one folder per test: results/load-reg/..., results/line-tran/...
+        self.path = Path(root) / test / f"{stamp}_{_slug(cfg.dut.name)}_{test}{suffix}"
         self.path.mkdir(parents=True, exist_ok=False)
 
     def file(self, name: str) -> Path:

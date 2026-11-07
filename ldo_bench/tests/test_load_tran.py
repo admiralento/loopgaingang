@@ -63,22 +63,21 @@ def test_report_hints_post_when_dc_shift_exceeds_band(cfg):
     assert 'settle_reference = "post"' in res.report()
 
 
-def test_stops_when_scope_not_on_vout(cfg, monkeypatch):
-    """Regression: with scope 1 unconnected the run analysed trigger crosstalk as a load transient."""
+def test_floating_scope_recorded_not_hidden(cfg, monkeypatch):
+    """Regression: scope 1 unconnected. The run finishes, keeps the real data and flags it."""
     from ldo_bench.instruments.base import DcReading
 
     lt = cfg.load_tran.model_copy(update={"averages": 2})
     with open_bench(cfg, sim=True) as b:
         floating = {1: DcReading(-0.0004, 2e-4, 8192), 2: DcReading(0.0, 1e-4, 8192)}
         monkeypatch.setattr(b.scope, "measure_dc", lambda *a, **k: floating)
-        captured = []
-        monkeypatch.setattr(b.scope, "capture", lambda **k: captured.append(1))
-        with pytest.raises(InstrumentError, match="isn't VOUT"):
-            load_tran.run(b, lt, cfg.analysis)
-    assert not captured  # stopped before any transient capture
+        res = load_tran.run(b, lt, cfg.analysis)
+    assert res.issues and any("VOUT reads -0.0004 V" in i for i in res.issues)
+    assert "NOT A VALID MEASUREMENT" in res.report() and res.summary()["valid"] is False
+    load_tran.plot(res, "x")  # plots the measured data with the issue box
 
 
-def test_stops_when_no_step_in_capture(cfg, monkeypatch):
+def test_no_step_in_capture_recorded(cfg, monkeypatch):
     lt = cfg.load_tran.model_copy(update={"averages": 2})
     with open_bench(cfg, sim=True) as b:
         real = b.scope.capture
@@ -89,5 +88,23 @@ def test_stops_when_no_step_in_capture(cfg, monkeypatch):
             return c
 
         monkeypatch.setattr(b.scope, "capture", flat_ref)
-        with pytest.raises(InstrumentError, match="no step found"):
-            load_tran.run(b, lt, cfg.analysis)
+        res = load_tran.run(b, lt, cfg.analysis)
+    assert all(e.issues for e in res.edges)
+    assert any("no step found" in i for i in res.issues)
+    assert len(res.edges[0].vout) > 1000  # the measured trace is kept
+
+
+def test_never_triggers_keeps_untriggered_data(cfg, monkeypatch):
+    lt = cfg.load_tran.model_copy(update={"averages": 3})
+    with open_bench(cfg, sim=True) as b:
+        real = b.scope.capture
+
+        def no_trigger(**k):
+            if not k.get("force"):
+                raise InstrumentError("trigger timeout")
+            return real(**k)
+
+        monkeypatch.setattr(b.scope, "capture", no_trigger)
+        res = load_tran.run(b, lt, cfg.analysis)
+    assert any("never triggered" in i for i in res.issues)
+    assert len(res.edges[0].vout) == lt.n_samples  # real (untriggered) capture, nothing invented

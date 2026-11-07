@@ -10,7 +10,7 @@ analysis is the Python port of load_tran_script.js.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -18,7 +18,7 @@ from ldo_bench.analysis import SettlingResult, settling_analysis
 from ldo_bench.bench import Bench
 from ldo_bench.config import AnalysisConfig, LoadTranConfig
 from ldo_bench.instruments.base import ChannelSetup, InstrumentError
-from ldo_bench.procedures.transient import averaged_step, plot_edges, validate_capture
+from ldo_bench.procedures.transient import averaged_step, capture_issues, edge_report, plot_edges
 
 log = logging.getLogger(__name__)
 
@@ -38,11 +38,15 @@ class EdgeResult:
     vout_smoothed: np.ndarray
     ref: np.ndarray
     trigger_level: float | None = None
+    issues: list[str] = field(default_factory=list)
+    vout_channel: int = 1
 
     @property
     def title(self) -> str:
         word = "Load step up" if self.edge == "rising" else "Load step down"
-        return f"{word}: {self.i_from * 1e3:.0f} → {self.i_to * 1e3:.0f} mA"
+        # currents are the bank's at the nominal VOUT: what this step should be
+        mA = f"{self.i_from * 1e3:.0f} → {self.i_to * 1e3:.0f} mA"
+        return f"{word}: codes {self.code_from} → {self.code_to} ({mA})"
 
 
 @dataclass
@@ -51,6 +55,15 @@ class LoadTranResult:
     trigger_pin: int
     averages: int
     edges: list[EdgeResult]
+    vout_nominal: float = 1.0
+    setup_issues: list[str] = field(default_factory=list)  # found before any capture
+
+    @property
+    def issues(self) -> list[str]:
+        out = list(self.setup_issues)
+        for e in self.edges:
+            out += [f"{e.edge}: {i}" for i in e.issues if i not in self.setup_issues]
+        return out
 
     @property
     def rows(self) -> list[dict]:
@@ -74,6 +87,8 @@ class LoadTranResult:
                     "final_v": m.final,
                     "trustworthy": m.trustworthy,
                     "sample_rate_hz": m.sample_rate,
+                    "valid": not e.issues,
+                    "issues": " | ".join(e.issues),
                 }
             )
         return out
@@ -89,6 +104,8 @@ class LoadTranResult:
 
     def summary(self) -> dict:
         return {
+            "valid": not self.issues,
+            "issues": self.issues,
             "vin": self.vin,
             "trigger_pin": self.trigger_pin,
             "averages": self.averages,
@@ -100,27 +117,7 @@ class LoadTranResult:
     def report(self) -> str:
         lines = [f"Load transient at VIN = {self.vin:.3f} V ({self.averages} averages per edge):"]
         for e in self.edges:
-            m = e.metrics
-            ts = (
-                "did not settle in the capture"
-                if np.isnan(m.settling_time)
-                else f"{m.settling_time * 1e6:.2f} us"
-            )
-            lines += [
-                f"  {e.title}",
-                f"    nominal   {m.nominal:.5f} V",
-                f"    peak      {m.deviation * 1e3:+.2f} mV  (band ±{m.band * 1e3:.2f} mV)",
-                f"    settling  {ts}  (to the {'pre-step' if m.reference == 'pre' else 'final'} level)",
-                f"    noise     {m.noise * 1e3:.3f} mV rms"
-                + ("" if m.trustworthy else "  ! above band/3: settling time limited by noise"),
-            ]
-            shift = m.final - m.nominal
-            if m.reference == "pre" and np.isfinite(shift) and abs(shift) > m.band:
-                lines.append(
-                    f"    ! VOUT ends {shift * 1e3:+.2f} mV from the pre-step level (DC load regulation), "
-                    f"outside the ±{m.band * 1e3:.2f} mV band, so it can never settle back to it. "
-                    'Set analysis.settle_reference = "post" to measure settling to the final level.'
-                )
+            lines += edge_report(e)
         return "\n".join(lines)
 
 
@@ -160,15 +157,17 @@ def run(bench: Bench, lt: LoadTranConfig, an: AnalysisConfig) -> LoadTranResult:
     bank.set(lt.code_low)
     bench.vin_from_psu(lt.vin)
     vout_est, _ = bench.measure_dc(0.05)
-    bench.check_vout(vout_est.mean, test="load transient", source=f"scope {a.vout_channel}")
-    v_nom = vout_est.mean
+    setup_issues = [i for i in [bench.vout_issue(vout_est.mean, source=f"scope {a.vout_channel}")] if i]
+    for i in setup_issues:
+        log.warning("load transient: %s (running anyway; the data will show it)", i)
+    v_nom = bench.cfg.dut.vout_nominal  # step currents are labelled at the nominal VOUT
 
     results = []
     for edge in lt.edges:
         c_from, c_to = (lt.code_low, lt.code_high) if edge == "rising" else (lt.code_high, lt.code_low)
         pin_rises = rises_with_load if edge == "rising" else not rises_with_load
         trig_edge = "rising" if pin_rises else "falling"
-        cap = averaged_step(
+        cap, trig_issues = averaged_step(
             bench,
             lt,
             setups=setups,
@@ -191,15 +190,14 @@ def run(bench: Bench, lt: LoadTranConfig, an: AnalysisConfig) -> LoadTranResult:
             blank_time=an.blank_time,
             reference=an.settle_reference,
         )
-        validate_capture(
-            bench,
-            m,
-            ref,
-            expected_swing=lt.dio_high_level,
-            test=f"load transient ({edge})",
-            ref_desc=f"DIO {pin}",
+        issues = (
+            setup_issues
+            + trig_issues
+            + capture_issues(bench, m, cap, ref, expected_swing=lt.dio_high_level, ref_desc=f"DIO {pin}")
         )
-        i0 = m.step_index
+        issues = list(dict.fromkeys(issues))  # same problem reported once
+        # time axis: from the step found in the data, else from where the scope was set to trigger
+        i0 = m.step_index if m.step_index >= 0 else cap.trigger_index
         t = (np.arange(len(vout)) - i0) / cap.sample_rate
         results.append(
             EdgeResult(
@@ -214,16 +212,22 @@ def run(bench: Bench, lt: LoadTranConfig, an: AnalysisConfig) -> LoadTranResult:
                 smoothed,
                 ref,
                 lt.dio_high_level / 2,
+                issues,
+                a.vout_channel,
             )
         )
-        log.info("%s: peak %+.2f mV, settling %.2f us", edge, m.deviation * 1e3, m.settling_time * 1e6)
+        if issues:
+            log.warning("load step %s: %d setup issue(s), see the plot", edge, len(issues))
+        else:
+            log.info("%s: peak %+.2f mV, settling %.2f us", edge, m.deviation * 1e3, m.settling_time * 1e6)
     bank.off()
-    return LoadTranResult(lt.vin, pin, lt.averages, results)
+    return LoadTranResult(lt.vin, pin, lt.averages, results, bench.cfg.dut.vout_nominal, setup_issues)
 
 
 def plot(res: LoadTranResult, dut: str):
     return plot_edges(
         res.edges,
+        vout_nominal=res.vout_nominal,
         ref_label=f"DIO {res.trigger_pin}, scope 2 (V)",
         suptitle=f"Load transient: {dut}  ·  VIN {res.vin:.2f} V  ·  {res.averages} averages  ·  "
         "shaded = settling band",

@@ -43,7 +43,10 @@ class Capture:
     sample_rate: float
     ch1: np.ndarray
     ch2: np.ndarray
-    trigger_index: int  # sample index where the hardware trigger was placed
+    trigger_index: int  # sample index of the trigger edge (found in the data, or the configured position)
+    edge_found: bool = (
+        True  # False: no edge in the data, so trigger_index is where the scope was set to trigger
+    )
 
     def channel(self, ch: int) -> np.ndarray:
         if ch == 1:
@@ -91,8 +94,13 @@ class Oscilloscope(Protocol):
         pre_trigger: float,
         stimulus: Callable[[], None],
         timeout: float,
+        force: bool = False,
     ) -> Capture:
-        """Arm a single triggered capture, call `stimulus()` once armed, return the data."""
+        """Arm a single triggered capture, call `stimulus()` once armed, return the data.
+
+        force=True: don't wait for a trigger (start acquiring at once), for showing what is on the
+        channels when the trigger never comes. Such captures have edge_found=False.
+        """
         ...
 
     def close(self) -> None: ...

@@ -58,4 +58,5 @@ def test_run_folder(bench, tmp_path):
     meta = json.loads((run.path / "meta.json").read_text())
     assert meta["sim"] is True and meta["config"]["dut"]["name"] == bench.cfg.dut.name
     assert (run.path / "plot.png").stat().st_size > 10_000
-    assert (run.path / "data.csv").read_text().splitlines()[0].startswith("code,i_est_a,vout_v")
+    header = (run.path / "data.csv").read_text().splitlines()[0].split(",")
+    assert {"code", "i_est_a", "i_expected_a", "vout_v", "vout_ok"} <= set(header)

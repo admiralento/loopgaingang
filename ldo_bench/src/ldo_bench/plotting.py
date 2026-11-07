@@ -19,6 +19,7 @@ INK_2 = "#52514e"
 MUTED = "#898781"
 GRID = "#e1e0d9"
 AXIS = "#c3c2b7"
+CRITICAL = "#d03b3b"  # status red: setup problems only, never a data series
 SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100"]  # fixed order, never cycled
 
 STYLE = {
@@ -78,7 +79,35 @@ def mark_simulated(fig) -> None:
         rotation=20,
         fontsize=30,
         fontweight="bold",
-        color="#d03b3b",
+        color=CRITICAL,
         alpha=0.25,
         zorder=100,
     )
+
+
+def issue_box(ax, issues: list[str], *, width: int = 58) -> None:
+    """Red-bordered list of setup problems in the top-left of an axes."""
+    import textwrap
+
+    lines = ["SETUP PROBLEM, not a valid measurement:"]
+    for msg in issues:
+        wrapped = textwrap.wrap(msg, width)
+        lines += [f"- {wrapped[0]}", *(f"  {w}" for w in wrapped[1:])]
+    ax.text(
+        0.02,
+        0.98,
+        "\n".join(lines),
+        transform=ax.transAxes,
+        va="top",
+        ha="left",
+        fontsize=7.5,
+        color=CRITICAL,
+        family="monospace",
+        zorder=10,
+        bbox={"boxstyle": "round,pad=0.4", "fc": SURFACE, "ec": CRITICAL, "lw": 1.2, "alpha": 0.95},
+    )
+
+
+def mark_invalid(fig, issues: list[str]) -> None:
+    """Figure-level version of issue_box, for plots without a natural single axes."""
+    issue_box(fig.axes[0], issues)

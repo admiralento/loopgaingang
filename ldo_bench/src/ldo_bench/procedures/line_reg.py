@@ -9,7 +9,7 @@ not distort it. VOUT comes from the DMM when one is configured.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -32,6 +32,8 @@ class LineRegResult:
     reg: LineRegulation
     vout_source: str
     vin_source: str = "ad2"
+    vout_nominal: float = 1.0
+    issues: list[str] = field(default_factory=list)
 
     @property
     def vin_label(self) -> str:
@@ -39,6 +41,8 @@ class LineRegResult:
 
     def summary(self) -> dict:
         return {
+            "valid": not self.issues,
+            "issues": self.issues,
             "vin_source": self.vin_source,
             "load_code": self.load_code,
             "i_load_a": self.i_load,
@@ -49,6 +53,17 @@ class LineRegResult:
 
     def report(self) -> str:
         r = self.reg
+        if self.issues:
+            v = [row["vout_v"] for row in self.rows]
+            return "\n".join(
+                [
+                    f"Line regulation (code {self.load_code}), VOUT from {self.vout_source.upper()}:",
+                    "  NOT A VALID MEASUREMENT (data saved and plotted as measured):",
+                    *(f"    - {i}" for i in self.issues),
+                    f"  measured VOUT ranged {min(v):.4f} to {max(v):.4f} V "
+                    f"(expected ~{self.vout_nominal} V)",
+                ]
+            )
         if np.isfinite(r.dropout_vin):
             drop = (
                 f"VIN {r.dropout_vin:.3f} V, dropout voltage {r.dropout_voltage * 1e3:.0f} mV "
@@ -99,13 +114,12 @@ def run(bench: Bench, lr: LineRegConfig) -> LineRegResult:
     # Low VIN points are in dropout (VOUT legitimately low): check VOUT at the first point with
     # clear headroom instead, or at the top of the sweep.
     v_check = min(bench.cfg.dut.vout_nominal + 0.5, float(vins[-1]))
-    checked = False
+    bad = []  # (VIN, VOUT, source) where VOUT should be regulated but isn't near nominal
     for k, v in enumerate(vins):
         bench.vin_from_psu(float(v))
         p = bench.measure_point(lr.dc_window, vin_source=lr.vin_source)
-        if not checked and v >= v_check - 1e-9:
-            bench.check_vout(p.vout, test="line regulation", source=p.source.upper())
-            checked = True
+        if v >= v_check - 1e-9 and bench.vout_issue(p.vout, source=p.source.upper()):
+            bad.append((float(v), p.vout, p.source.upper()))
         row = {
             "vin_set_v": float(v),
             "vin_v": p.vin,
@@ -134,11 +148,68 @@ def run(bench: Bench, lr: LineRegConfig) -> LineRegResult:
         fit_vin_min=lr.fit_vin_min,
         knee_margin=KNEE_STEPS * lr.vin_step,
     )
-    i_load = bank.current(lr.load_code, reg.v_ref)
-    return LineRegResult(lr.load_code, i_load, rows, reg, rows[0]["vout_source"], lr.vin_source)
+    issues = []
+    if bad:
+        n_reg = sum(1 for r in rows if r["vin_set_v"] >= v_check - 1e-9)
+        vb, vo, src = bad[0]
+        issues.append(
+            f"VOUT out of range at {len(bad)} of {n_reg} points with VIN >= {v_check:.2f} V (at VIN "
+            f"{vb:.2f} V it reads {vo:.4f} V, expected {bench.cfg.dut.vout_nominal} V +/-"
+            f"{bench.cfg.dut.vout_tolerance:.0%}): is the {src} on VOUT / GND and the LDO enabled?"
+        )
+        log.warning("line regulation: %s", issues[0])
+    i_load = bank.current(lr.load_code, bench.cfg.dut.vout_nominal)
+    return LineRegResult(
+        lr.load_code,
+        i_load,
+        rows,
+        reg,
+        rows[0]["vout_source"],
+        lr.vin_source,
+        bench.cfg.dut.vout_nominal,
+        issues,
+    )
+
+
+def _plot_invalid(res: LineRegResult, dut: str):
+    """The whole sweep as measured (absolute VOUT vs VIN) with the expected VOUT; no fit, no dropout."""
+    x = np.array([row["vin_v"] for row in res.rows])
+    y = np.array([row["vout_v"] for row in res.rows])
+    order = np.argsort(x)
+    fig, ax = plotting.figure(size=(7.0, 4.6))
+    ax.axhline(
+        res.vout_nominal,
+        color=plotting.CRITICAL,
+        lw=1.2,
+        ls=(0, (5, 3)),
+        label=f"Expected VOUT {res.vout_nominal:.3f} V",
+        zorder=2,
+    )
+    ax.plot(
+        x[order],
+        y[order],
+        color=plotting.SERIES[0],
+        marker="o",
+        ms=3.5,
+        mec=plotting.SURFACE,
+        mew=0.8,
+        label=f"Measured ({res.vout_source.upper()})",
+        zorder=3,
+    )
+    ax.set_xlabel(res.vin_label)
+    ax.set_ylabel("VOUT (V)")
+    ax.set_title("SETUP PROBLEM, not a valid measurement", pad=20, color=plotting.CRITICAL)
+    plotting.subtitle(
+        ax, f"{res.i_load * 1e3:.1f} mA load  ·  no fit: the measured VOUT isn't the LDO output"
+    )
+    ax.legend(loc="center right")
+    plotting.issue_box(ax, res.issues)
+    return fig
 
 
 def plot(res: LineRegResult, dut: str):
+    if res.issues:
+        return _plot_invalid(res, dut)
     r = res.reg
     x = np.array([row["vin_v"] for row in res.rows])
     y = np.array([row["vout_v"] for row in res.rows])

@@ -178,6 +178,7 @@ class SimAnalogDiscovery:
         pre_trigger: float,
         stimulus: Callable[[], None],
         timeout: float,
+        force: bool = False,
     ) -> Capture:
         m = self.m
         vin0, g0, ref0 = m.vin, m.conductance(), m.ref_value()
@@ -193,7 +194,7 @@ class SimAnalogDiscovery:
             if edge == "rising"
             else trig_before > trigger_level >= trig_after
         )
-        if not crossed:
+        if not crossed and not force:
             raise InstrumentError(
                 f"trigger timeout: ch{trigger_channel} went {trig_before:.3f} -> {trig_after:.3f} V, "
                 f"no {edge} crossing of {trigger_level:.3f} V"
@@ -213,7 +214,7 @@ class SimAnalogDiscovery:
             vout[i_trig] += m.glitch * (1 if (di < 0 or dvin > 0) else -1)
         ref = np.where(after, ref1, ref0) + m.noise(n_samples) * 0.25
         ch1, ch2 = (vout, ref) if self.vout_channel == 1 else (ref, vout)
-        return Capture(sample_rate, ch1, ch2, i_trig)
+        return Capture(sample_rate, ch1, ch2, i_trig, edge_found=not force)
 
     # --- DigitalOut ---------------------------------------------------------
     def write_pins(self, levels: dict[int, bool]) -> None:

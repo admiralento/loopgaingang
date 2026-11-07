@@ -154,6 +154,7 @@ class AnalogDiscovery2:
         pre_trigger: float,
         stimulus: Callable[[], None],
         timeout: float,
+        force: bool = False,
     ) -> Capture:
         p, ai = self._p, self.dev.analogIn
         if trigger_channel not in setups:
@@ -168,6 +169,19 @@ class AnalogDiscovery2:
         window = n / rate
 
         ai.acquisitionModeSet(p.DwfAcquisitionMode.Single)
+        if force:  # untriggered: record whatever is on the channels right now
+            ai.triggerSourceSet(p.DwfTriggerSource.None_)
+            self._wrap("start", ai.configure, False, True)
+            stimulus()
+            self._wait((p.DwfState.Done,), timeout, "an untriggered capture")
+            data = self._read(setups, n)
+            return Capture(
+                rate,
+                data.get(1, np.zeros(n)),
+                data.get(2, np.zeros(n)),
+                round(pre_trigger * n),
+                edge_found=False,
+            )
         ai.triggerSourceSet(p.DwfTriggerSource.DetectorAnalogIn)
         ai.triggerAutoTimeoutSet(0.0)  # normal mode: wait for a real trigger
         ai.triggerChannelSet(trigger_channel - 1)
@@ -189,11 +203,10 @@ class AnalogDiscovery2:
         expected = round(pre_trigger * n)
         found = _find_crossing(data[trigger_channel], trigger_level, edge, expected)
         if found is None:
-            # The hardware triggered but the captured data has no such edge: don't guess where it was.
-            raise InstrumentError(
-                f"scope triggered, but channel {trigger_channel}'s data has no {edge} crossing of "
-                f"{trigger_level:.3f} V. The trigger signal may be marginal or noisy; check the wiring."
-            )
+            # The hardware triggered but the data has no such edge. Keep the real data; its time axis is
+            # the configured trigger position, and edge_found=False says so (reported as a setup issue).
+            log.warning("scope triggered, but channel %d's data has no %s edge", trigger_channel, edge)
+            return Capture(rate, ch1, ch2, expected, edge_found=False)
         if abs(found - expected) > 0.05 * n:
             log.warning(
                 "trigger edge at sample %d, expected near %d; check triggerPositionSet sign on this SDK",

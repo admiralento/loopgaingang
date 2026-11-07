@@ -170,15 +170,17 @@ def _save(
 ) -> Path | None:
     """Write data.csv, summary.json, meta.json and plot.png for one run.
 
-    Only real measurements are saved: a test that couldn't measure the board raises before it
-    gets here, and simulated runs are not saved unless --save-sim (then marked SIM everywhere).
+    Everything saved is what was measured. Runs with setup problems are saved too, so the plot
+    shows what went wrong, but their folder ends in _INVALID and summary.json has valid=false.
+    Simulated runs are not saved unless --save-sim (then marked SIM everywhere).
     """
     from ldo_bench import plotting
     from ldo_bench.results import RunDir
 
     if bench.is_sim and not save_sim:
         return None
-    run = RunDir(out, module.NAME, cfg, config_path=config_path, simulated=bench.is_sim)
+    invalid = bool(getattr(res, "issues", []))
+    run = RunDir(out, module.NAME, cfg, config_path=config_path, simulated=bench.is_sim, invalid=invalid)
     run.write_csv("data.csv", res.rows)
     for name, rows in getattr(res, "extra_csvs", dict)().items():
         run.write_csv(name, rows)
@@ -201,11 +203,18 @@ def _echo_report(bench: Bench, res) -> None:
     typer.echo(res.report())
 
 
-def _saved(path: Path | None, *, fg: str = "green") -> None:
+def _saved(path: Path | None, *, fg: str = "green", res=None) -> None:
+    issues = list(getattr(res, "issues", []) or [])
+    if issues:
+        typer.secho("SETUP PROBLEM: this run is NOT a valid measurement.", fg="red", bold=True)
+        for i in issues:
+            typer.secho(f"  - {i}", fg="red")
     if path is None:
         typer.secho("Simulated run: nothing saved (add --save-sim to keep it, marked SIM).", fg="magenta")
     else:
-        typer.secho(f"Saved to {path}", fg=fg)
+        typer.secho(f"Saved to {path}", fg="red" if issues else fg)
+    if issues:
+        raise typer.Exit(3)  # finished, but the data isn't a valid measurement
 
 
 NoDmmOpt = Annotated[bool, typer.Option("--no-dmm", help="Measure VOUT with the AD2 even if a DMM is set up")]
@@ -255,7 +264,7 @@ def load_tran(
         res = proc.run(bench, lt, cfg.analysis)
         path = _save(bench, cfg, config, out, proc, res, save_sim)
     _echo_report(bench, res)
-    _saved(path, fg="green")
+    _saved(path, fg="green", res=res)
 
 
 @app.command("line-tran")
@@ -300,7 +309,7 @@ def line_tran(
         res = proc.run(bench, lt, cfg.analysis)
         path = _save(bench, cfg, config, out, proc, res, save_sim)
     _echo_report(bench, res)
-    _saved(path, fg="green")
+    _saved(path, fg="green", res=res)
 
 
 @app.command("loadbank-check")
@@ -326,7 +335,7 @@ def loadbank_check(
         res = proc.run(bench, cfg.loadbank_check)
         path = _save(bench, cfg, config, out, proc, res, save_sim)
     _echo_report(bench, res)
-    _saved(path, fg="green" if res.passed else "yellow")
+    _saved(path, fg="green" if res.passed else "yellow", res=res)
 
 
 @app.command("psu-check")
@@ -349,7 +358,7 @@ def psu_check(
         res = proc.run(bench, cfg.psu_check)
         path = _save(bench, cfg, config, out, proc, res, save_sim)
     _echo_report(bench, res)
-    _saved(path, fg="green" if res.passed is not False else "yellow")
+    _saved(path, fg="green" if res.passed is not False else "yellow", res=res)
 
 
 @app.command("line-reg")
@@ -393,7 +402,7 @@ def line_reg(
         res = proc.run(bench, lr)
         path = _save(bench, cfg, config, out, proc, res, save_sim)
     _echo_report(bench, res)
-    _saved(path, fg="green")
+    _saved(path, fg="green", res=res)
 
 
 @app.command("load-reg")
@@ -422,7 +431,7 @@ def load_reg(
         res = proc.run(bench, lr)
         path = _save(bench, cfg, config, out, proc, res, save_sim)
     _echo_report(bench, res)
-    _saved(path, fg="green")
+    _saved(path, fg="green", res=res)
 
 
 def main() -> None:

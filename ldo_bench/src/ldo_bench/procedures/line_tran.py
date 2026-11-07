@@ -10,7 +10,7 @@ steps land on vin_low / vin_high. The scope triggers on VIN itself.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -18,7 +18,7 @@ from ldo_bench.analysis import SettlingResult, settling_analysis
 from ldo_bench.bench import Bench
 from ldo_bench.config import AnalysisConfig, LineTranConfig
 from ldo_bench.instruments.base import ChannelSetup, InstrumentError
-from ldo_bench.procedures.transient import averaged_step, plot_edges, validate_capture
+from ldo_bench.procedures.transient import averaged_step, capture_issues, edge_report, plot_edges
 
 log = logging.getLogger(__name__)
 
@@ -27,6 +27,7 @@ INTERLOCK_RAIL = 1.0  # V on the buffer rail while checking the PSU isn't on VIN
 INTERLOCK_FRACTION = 0.6  # VIN above this fraction of the rail means the PSU is on VIN
 CAL_TOLERANCE = 0.005  # V, how close the calibrated VIN levels must land
 CAL_ITERATIONS = 4
+CAL_MAX_CORRECTION = 0.25  # V: W1 never goes further than this from the target chasing a dead buffer
 
 
 @dataclass
@@ -40,6 +41,8 @@ class EdgeResult:
     vout_smoothed: np.ndarray
     ref: np.ndarray
     trigger_level: float | None = None
+    issues: list[str] = field(default_factory=list)
+    vout_channel: int = 1
 
     @property
     def title(self) -> str:
@@ -49,7 +52,8 @@ class EdgeResult:
     @property
     def rejection(self) -> float:
         """Peak VOUT deviation per volt of VIN step (V/V)."""
-        return abs(self.metrics.deviation / (self.v_to - self.v_from))
+        dv = self.v_to - self.v_from
+        return abs(self.metrics.deviation / dv) if dv else float("nan")
 
 
 @dataclass
@@ -61,6 +65,15 @@ class LineTranResult:
     w1_high: float
     averages: int
     edges: list[EdgeResult]
+    vout_nominal: float = 1.0
+    setup_issues: list[str] = field(default_factory=list)  # found before any capture
+
+    @property
+    def issues(self) -> list[str]:
+        out = list(self.setup_issues)
+        for e in self.edges:
+            out += [f"{e.edge}: {i}" for i in e.issues if i not in self.setup_issues]
+        return out
 
     @property
     def rows(self) -> list[dict]:
@@ -84,6 +97,8 @@ class LineTranResult:
                     "trustworthy": m.trustworthy,
                     "load_code": self.load_code,
                     "i_load_a": self.i_load,
+                    "valid": not e.issues,
+                    "issues": " | ".join(e.issues),
                 }
             )
         return out
@@ -99,6 +114,8 @@ class LineTranResult:
 
     def summary(self) -> dict:
         return {
+            "valid": not self.issues,
+            "issues": self.issues,
             "buffer_rail_v": self.rail,
             "load_code": self.load_code,
             "i_load_a": self.i_load,
@@ -122,27 +139,8 @@ class LineTranResult:
             f"buffer rail {self.rail:.2f} V, {self.averages} averages per edge:"
         ]
         for e in self.edges:
-            m = e.metrics
-            ts = (
-                "did not settle in the capture"
-                if np.isnan(m.settling_time)
-                else f"{m.settling_time * 1e6:.2f} us"
-            )
-            lines += [
-                f"  {e.title}",
-                f"    nominal   {m.nominal:.5f} V",
-                f"    peak      {m.deviation * 1e3:+.2f} mV  ({e.rejection * 1e3:.1f} mV/V of VIN step, "
-                f"band ±{m.band * 1e3:.2f} mV)",
-                f"    settling  {ts}  (to the {'pre-step' if m.reference == 'pre' else 'final'} level)",
-                f"    noise     {m.noise * 1e3:.3f} mV rms"
-                + ("" if m.trustworthy else "  ! above band/3: settling time limited by noise"),
-            ]
-            shift = m.final - m.nominal
-            if m.reference == "pre" and np.isfinite(shift) and abs(shift) > m.band:
-                lines.append(
-                    f"    ! VOUT ends {shift * 1e3:+.2f} mV from the pre-step level (DC line regulation), "
-                    f'outside the band. Set analysis.settle_reference = "post" to measure to the final level.'
-                )
+            extra = [f"    per VIN   {e.rejection * 1e3:.1f} mV of VOUT per V of VIN step"]
+            lines += edge_report(e, extra)
         return "\n".join(lines)
 
 
@@ -180,8 +178,12 @@ def _interlock(bench: Bench, rail: float) -> None:
         )
 
 
-def _calibrate(bench: Bench, target: float) -> tuple[float, float]:
-    """W1 setpoint that puts VIN at `target` through the buffer. Returns (w1, measured VIN)."""
+def _calibrate(bench: Bench, target: float) -> tuple[float, float, str | None]:
+    """W1 setpoint that puts VIN at `target` through the buffer: (w1, measured VIN, issue or None).
+
+    The correction is capped (CAL_MAX_CORRECTION) so a buffer that isn't driving VIN can't make us
+    push W1 up; going over dut.vin_max is a hard stop.
+    """
     w = target
     vin = float("nan")
     for _ in range(CAL_ITERATIONS):
@@ -192,11 +194,14 @@ def _calibrate(bench: Bench, target: float) -> tuple[float, float]:
             raise InstrumentError(f"VIN reached {vin:.3f} V, above dut.vin_max: stopping")
         err = target - vin
         if abs(err) <= CAL_TOLERANCE:
-            return w, vin
-        w += err
-    raise InstrumentError(
-        f"could not set VIN to {target:.3f} V through the buffer (got {vin:.3f} V with W1 at {w:.3f} V). "
-        "Check the buffer rail headroom (line_tran.psu_voltage), JP4, and the W1 -> buffer input wiring."
+            return w, vin, None
+        w = min(max(w + err, target - CAL_MAX_CORRECTION), target + CAL_MAX_CORRECTION)
+    bench.vin_from_wavegen(w)
+    return (
+        w,
+        vin,
+        f"VIN reached {vin:.3f} V, not {target:.3f} V, with W1 at {w:.3f} V: check the buffer rail "
+        "headroom (line_tran.psu_voltage), JP4, and the W1 -> buffer input wiring",
     )
 
 
@@ -210,22 +215,29 @@ def run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig) -> LineTranResult:
     bench.loadbank.set(lt.load_code)
     _interlock(bench, lt.psu_voltage)
     bench.buffer_rail(lt.psu_voltage)
-    w_lo, v_lo = _calibrate(bench, lt.vin_low)
-    w_hi, v_hi = _calibrate(bench, lt.vin_high)
+    w_lo, v_lo, cal_lo = _calibrate(bench, lt.vin_low)
+    w_hi, v_hi, cal_hi = _calibrate(bench, lt.vin_high)
     log.info("VIN levels %.4f / %.4f V (W1 %.4f / %.4f V)", v_lo, v_hi, w_lo, w_hi)
+    bench.vin_from_wavegen(w_lo)
     vout_dc, _ = bench.measure_dc(0.05)
-    bench.check_vout(vout_dc.mean, test="line transient", source=f"scope {a.vout_channel}")
-    i_load = bench.loadbank.current(lt.load_code, vout_dc.mean)
+    setup_issues = [
+        i for i in (cal_lo, cal_hi, bench.vout_issue(vout_dc.mean, source=f"scope {a.vout_channel}")) if i
+    ]
+    for i in setup_issues:
+        log.warning("line transient: %s (running anyway; the data will show it)", i)
+    i_load = bench.loadbank.current(lt.load_code, bench.cfg.dut.vout_nominal)
+    # trigger halfway between the commanded levels (the measured ones may be wrong if the buffer is)
+    trig_level = (lt.vin_low + lt.vin_high) / 2
 
     results = []
     for edge in lt.edges:
         (w_from, v_from), (w_to, v_to) = ((w_lo, v_lo), (w_hi, v_hi))[:: 1 if edge == "rising" else -1]
-        cap = averaged_step(
+        cap, trig_issues = averaged_step(
             bench,
             lt,
             setups=setups,
             trigger_channel=a.ref_channel,
-            trigger_level=(v_lo + v_hi) / 2,
+            trigger_level=trig_level,
             trigger_edge=edge,
             start=lambda w=w_from: bench.vin_from_wavegen(w),
             step=lambda w=w_to: bench.vin_from_wavegen(w),
@@ -243,27 +255,41 @@ def run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig) -> LineTranResult:
             blank_time=an.blank_time,
             reference=an.settle_reference,
         )
-        validate_capture(
-            bench,
-            m,
-            vin,
-            expected_swing=abs(v_hi - v_lo),
-            test=f"line transient ({edge})",
-            ref_desc="VIN",
+        issues = (
+            setup_issues
+            + trig_issues
+            + capture_issues(bench, m, cap, vin, expected_swing=abs(lt.vin_high - lt.vin_low), ref_desc="VIN")
         )
-        i0 = m.step_index
+        issues = list(dict.fromkeys(issues))  # same problem reported once
+        i0 = m.step_index if m.step_index >= 0 else cap.trigger_index
         t = (np.arange(len(vout)) - i0) / cap.sample_rate
-        results.append(EdgeResult(edge, v_from, v_to, m, t, vout, smoothed, vin, (v_lo + v_hi) / 2))
-        log.info("%s: peak %+.2f mV, settling %.2f us", edge, m.deviation * 1e3, m.settling_time * 1e6)
+        results.append(
+            EdgeResult(edge, v_from, v_to, m, t, vout, smoothed, vin, trig_level, issues, a.vout_channel)
+        )
+        if issues:
+            log.warning("VIN step %s: %d setup issue(s), see the plot", edge, len(issues))
+        else:
+            log.info("%s: peak %+.2f mV, settling %.2f us", edge, m.deviation * 1e3, m.settling_time * 1e6)
 
     bench.wavegen_off()
     bench.loadbank.off()
-    return LineTranResult(lt.psu_voltage, lt.load_code, i_load, w_lo, w_hi, lt.averages, results)
+    return LineTranResult(
+        lt.psu_voltage,
+        lt.load_code,
+        i_load,
+        w_lo,
+        w_hi,
+        lt.averages,
+        results,
+        bench.cfg.dut.vout_nominal,
+        setup_issues,
+    )
 
 
 def plot(res: LineTranResult, dut: str):
     return plot_edges(
         res.edges,
+        vout_nominal=res.vout_nominal,
         ref_label="VIN, scope 2 (V)",
         suptitle=f"Line transient: {dut}  ·  {res.i_load * 1e3:.1f} mA load  ·  {res.averages} averages  ·  "
         "shaded = settling band",

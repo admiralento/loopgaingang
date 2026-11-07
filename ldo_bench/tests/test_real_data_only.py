@@ -1,4 +1,8 @@
-"""Only real measurements produce results: invalid runs and simulated runs save nothing."""
+"""Everything saved is what was measured; setup problems are flagged, not hidden or fixed up.
+
+Simulated runs save nothing unless --save-sim. Runs with setup problems finish, save the real
+data under an _INVALID folder, list the problems on the plot and exit with code 3.
+"""
 
 from pathlib import Path
 
@@ -7,7 +11,7 @@ from typer.testing import CliRunner
 
 from ldo_bench.bench import open_bench
 from ldo_bench.cli import app
-from ldo_bench.instruments.base import DcReading, InstrumentError
+from ldo_bench.instruments.base import DcReading
 from ldo_bench.procedures import line_tran, load_reg, load_tran
 
 CONFIGS = Path(__file__).parents[1] / "configs"
@@ -30,12 +34,11 @@ def test_save_sim_marks_the_folder(tmp_path):
         app, ["load-tran", "-c", str(CONFIGS / "demo_board.toml"), "--sim", "--save-sim", "-o", str(tmp_path)]
     )
     assert r.exit_code == 0, r.output
-    (run,) = tmp_path.iterdir()
+    (run,) = (tmp_path / "load-tran").iterdir()
     assert run.name.endswith("_SIM") and (run / "plot.png").exists()
 
 
-def test_failed_check_saves_nothing(tmp_path, monkeypatch):
-    """A run that stops on a validity check leaves no folder (and so no plot) behind."""
+def test_setup_problem_saved_as_invalid(tmp_path, monkeypatch):
     from ldo_bench.instruments import sim
 
     monkeypatch.setattr(
@@ -44,8 +47,12 @@ def test_failed_check_saves_nothing(tmp_path, monkeypatch):
     r = runner.invoke(
         app, ["load-tran", "-c", str(CONFIGS / "demo_board.toml"), "--sim", "--save-sim", "-o", str(tmp_path)]
     )
-    assert r.exit_code == 1 and "isn't VOUT" in r.output
-    assert list(tmp_path.iterdir()) == []
+    assert r.exit_code == 3 and "NOT a valid measurement" in r.output
+    (run,) = (tmp_path / "load-tran").iterdir()
+    assert run.name.endswith("_SIM_INVALID") and (run / "plot.png").exists()
+    import json
+
+    assert json.loads((run / "summary.json").read_text())["valid"] is False
 
 
 def test_load_tran_trigger_on_wrong_signal(cfg, monkeypatch):
@@ -59,8 +66,8 @@ def test_load_tran_trigger_on_wrong_signal(cfg, monkeypatch):
             return c
 
         monkeypatch.setattr(b.scope, "capture", small_ref)
-        with pytest.raises(InstrumentError, match="wrong signal"):
-            load_tran.run(b, lt, cfg.analysis)
+        res = load_tran.run(b, lt, cfg.analysis)
+    assert any("wrong signal" in i for i in res.issues)
 
 
 def test_line_tran_vin_swing_must_match(jafwak, monkeypatch):
@@ -74,11 +81,11 @@ def test_line_tran_vin_swing_must_match(jafwak, monkeypatch):
             return c
 
         monkeypatch.setattr(b.scope, "capture", big_ref)
-        with pytest.raises(InstrumentError, match="wrong signal"):
-            line_tran.run(b, lt, jafwak.analysis)
+        res = line_tran.run(b, lt, jafwak.analysis)
+    assert any("wrong signal" in i for i in res.issues)
 
 
-def test_load_reg_stops_if_probe_comes_loose(cfg, monkeypatch):
+def test_load_reg_flags_probe_coming_loose(cfg, monkeypatch):
     with open_bench(cfg, sim=True, use_dmm=False) as b:
         real, n = b.scope.measure_dc, {"calls": 0}
 
@@ -90,5 +97,7 @@ def test_load_reg_stops_if_probe_comes_loose(cfg, monkeypatch):
             return r
 
         monkeypatch.setattr(b.scope, "measure_dc", loose)
-        with pytest.raises(InstrumentError, match="isn't VOUT"):
-            load_reg.run(b, cfg.load_reg)
+        res = load_reg.run(b, cfg.load_reg)
+    assert any("out of range at" in i for i in res.issues)
+    assert len(res.rows) == len(b.loadbank.allowed_codes())  # every point measured and kept
+    load_reg.plot(res, "x")

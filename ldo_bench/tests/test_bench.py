@@ -79,8 +79,8 @@ def test_dut_current_limit_enforced_in_config(jafwak):
         BenchConfig.model_validate(d)
 
 
-def test_check_vout(jafwak):
+def test_vout_issue(jafwak):
     with open_bench(jafwak, sim=True) as b:
-        b.check_vout(1.19, test="t", source="scope 1")  # within 20 % of 1.2 V
-        with pytest.raises(InstrumentError, match="isn't VOUT"):
-            b.check_vout(-0.0004, test="t", source="scope 1")  # floating input, like the 15:09 run
+        assert b.vout_issue(1.19, source="scope 1") is None  # within 20 % of 1.2 V
+        msg = b.vout_issue(-0.0004, source="scope 1")  # floating input, like the 15:09 run
+        assert msg and "should be at 1.2 V" in msg

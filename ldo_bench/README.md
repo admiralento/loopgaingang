@@ -83,16 +83,20 @@ uv run ldo-bench load-tran -c configs/demo_board.toml   # load steps: peak + set
 uv run ldo-bench line-tran -c configs/jafwak.toml       # VIN steps via W1 + BUF634 (--low 1.8 --high 2.0 --load 19mA)
 ```
 
-**Only real measurements are saved.** Before a test saves anything, it checks that it really measured the board:
-- **VOUT is near the board's nominal output:** within `dut.vout_tolerance`, 20 %. Load regulation checks this at every point.
-- **The transient captures are real:**
-  - the trigger channel shows a step
-  - its swing is the commanded stimulus: about 3.3 V for a DIO pin, or the VIN step
-  - VOUT before the step is at the nominal output
+**Everything saved and plotted is what was measured: nothing is filled in or assumed.** Each test runs to the end and checks that it really measured the board:
+- **VOUT is near the board's nominal output:** within `dut.vout_tolerance`, 20 %, checked at every point.
+- **For transients:** the trigger channel shows a step, and its swing is the commanded stimulus.
+- **If the scope never triggers:** one untriggered capture records what is actually on the channels.
 
-If any check fails, the test stops with an error saying what to look at. It writes **no folder and no plot**, so a plot always means real data. `--sim` runs print the report marked SIMULATED and save nothing. Use `--save-sim` to keep them; the folder then ends in `_SIM` and the plot carries a SIMULATED banner.
+**When a check fails:**
+- **Plot:** the problem is obvious there. VOUT is plotted in absolute volts against a red dashed "expected VOUT" line, with a red **SETUP PROBLEM** box saying what to check. Peak, band, settling and fit markers are left off, so nothing looks like a result.
+- **Saved data:** the measured data is still saved. The folder name ends in `_INVALID`, `summary.json` has `"valid": false` plus the list of issues, the terminal prints them in red, and the command exits with code 3.
 
-Each run writes a folder under `results/`:
+Safety limits still stop a run immediately: the line-transient interlock, `dut.i_max` and `dut.vin_max`.
+
+`--sim` runs print the report marked SIMULATED and save nothing. With `--save-sim`, the folder ends in `_SIM` and the plot carries a SIMULATED banner.
+
+Each run writes a folder under `results/<test>/`, e.g. `results/load-tran/20261106-143714_TPS7A7001-demo-board_load-tran/`:
 - `data.csv`: every point
 - `summary.json`: the headline numbers
 - `meta.json`: config, instrument IDs, git commit, package versions
