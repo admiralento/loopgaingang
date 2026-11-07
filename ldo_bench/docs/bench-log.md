@@ -31,6 +31,7 @@ The five-reviewer panel (`.claude/reviewer-panel/`: manager, critic, algorithms,
 **Answers from the team:**
 - **R1 on JAFWAK** is an output current-sense resistor, and the LDO has no feedback loop. VOUT measured at J13.3 is after R1, so the output resistance measured there includes R1's 0.1 Ω (1.9 mV at 19.2 mA); probe at OUTA (J13.4) to exclude it.
 - **Reversed `iq` leads** are recorded as an issue (no sign flip).
+- **Demo-board load bank** stays on its ideal resistor values (`loadbank.switch_resistance` unset), although `loadbank-check` measured about 0.3 Ω of switch resistance. The load-reg fit uses the estimated current (VOUT / R), so at the larger codes the currents read about 1.3 % high and the output resistance about 1.3 % low (2.7 mΩ is really about 2.74 mΩ). That's inside what the fit resolves, and it's the team's choice.
 
 **Figures to check against datasheets** (recalled, not verified):
 - the AD2's DC accuracy (`ad2.vin_offset_error`, `vin_gain_error`: ±10 mV ± 0.5 %)
@@ -40,7 +41,6 @@ The five-reviewer panel (`.claude/reviewer-panel/`: manager, critic, algorithms,
 **Still open:**
 - **Interlock proof on hardware:** can the BUF634 drive the proof levels (0.1 / 0.3 V) with its rail at 1.9 V? First real line-tran / psrr run will tell; adjust `proof_levels` if not.
 - **BUF634 low side:** only its upper headroom is checked; V− looks like GND in the schematic (unconfirmed).
-- **Demo-board switch resistance:** set `loadbank.switch_resistance = 0.3`, as `loadbank-check` measured? Load currents currently read about 1.3 % high.
 - **Coherent pickup in PSRR:** AD2 crosstalk is invisible to the floor; needs the spectrum analyzer or a shorted-input run.
 
 ## 2026-11-06: first session (`ldo-bench` branch)
