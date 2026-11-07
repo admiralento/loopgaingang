@@ -26,6 +26,7 @@ from ldo_bench.loadbank import LoadBank
 log = logging.getLogger(__name__)
 
 SETPOINT_TOLERANCE = 1e-3  # V: the supply's setpoint readback must match what was programmed
+VIN_SET_REL, VIN_SET_ABS = 0.02, 0.020  # measured VIN may be off its setpoint by 2 % + 20 mV
 
 # What the AD2 ref channel is wired to, for the simulator: (signal, DIO pin if signal is "dio" else 0).
 RefProbe = tuple[Literal["vin", "dio", "vref", "iin", "iout", "en_ain"], int]
@@ -307,6 +308,22 @@ class Bench:
         return (
             f"VOUT reads {vout:.4f} V on the {source}, but {self.cfg.dut.name} should be at {nom} V "
             f"(+/-{tol:.0%}): is the {source} on VOUT / GND, the LDO enabled and VIN applied?"
+        )
+
+    def vin_issue(self, vin: float, setpoint: float, *, source: str) -> str | None:
+        """A setup problem if VIN measured at the board is off its setpoint by more than
+        VIN_SET_TOLERANCE (2 % + 20 mV, which allows for cable drop under load).
+
+        Catches a VIN probe on the wrong node, a supply in current limit, or a lost command: the
+        data would otherwise be analysed against a VIN axis that isn't the LDO's input.
+        """
+        tol = VIN_SET_REL * setpoint + VIN_SET_ABS
+        if abs(vin - setpoint) <= tol:
+            return None
+        return (
+            f"VIN at the board reads {vin:.4f} V on the {source} with the PSU set to {setpoint:.4f} V "
+            f"(more than {tol * 1e3:.0f} mV off): is the {source} on VIN at the LDO input, and is the "
+            "supply in current limit?"
         )
 
     def measure_point(self, duration: float, vin_source: Literal["ad2", "psu"] = "ad2") -> DcPoint:

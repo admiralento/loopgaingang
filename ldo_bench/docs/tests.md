@@ -88,7 +88,10 @@ Powers VIN up (default `load_reg.vin`), then reads VOUT, VIN and the supply's V 
   - **Load current:** estimated as VOUT / R from the bank resistors.
   - **Output resistance:** the slope dVOUT/dI (mV/mA, equal to the output resistance).
   - **Total change:** ΔVOUT over the range (mV and %).
-- **Setup check:** VOUT within `dut.vout_tolerance` (20 %) of nominal at every point.
+- **Setup checks:**
+  - VOUT within `dut.vout_tolerance` (20 %) of nominal at every point
+  - VIN at the board within 2 % + 20 mV of the setpoint (probe on the wrong node, supply in current limit)
+  - with `psu_readback` on: the supply's current must rise by what each code should draw, within `loadbank_check`'s tolerances. A dead bit or a missing ground would otherwise look like perfect regulation. With it off, the report notes that the load current is only the bank estimate.
 - **Options:**
   - `--vin 2.0`
   - `--no-dmm`
@@ -104,8 +107,13 @@ Powers VIN up (default `load_reg.vin`), then reads VOUT, VIN and the supply's V 
   - `"ad2"`: scope 2 at the board, which excludes cable drop.
   - `"psu"`: the supply's own readback. It needs no scope probes, but includes cable drop and the 1–3 mV readback error. That's negligible for the slope.
 - **Computes:**
-  - **Dropout:** the point where VOUT falls `dropout_fraction` (1 %) below its value at the highest VIN, interpolated between points.
+  - **Dropout:** where VOUT, coming up from the bottom of the sweep, first rises to within `dropout_fraction` (1 %) of its value at the highest VIN, interpolated between points. At light load this knee can be the part's minimum operating VIN rather than true dropout (the demo board's 0.415 V at no load is likely the TPS7A7001's VIN minimum, about 1.4 V, not yet checked against the datasheet); measure dropout at a heavy load.
   - **Line regulation:** dVOUT/dVIN in mV/V and %/V, fitted from 3 steps above the knee (or from `fit_vin_min`).
+- **Setup checks:**
+  - VOUT near nominal wherever there's headroom
+  - measured VIN within 2 % + 20 mV of the setpoint
+  - a VOUT reading below the dropout threshold *above* the knee (a bad reading: the knee is taken from the bottom of the sweep, so it doesn't move)
+  - fewer than 2 points to fit, or `fit_vin_min` below the dropout point
 - **Options:**
   - `--load 30mA` (or a code)
   - `--vin-from psu`

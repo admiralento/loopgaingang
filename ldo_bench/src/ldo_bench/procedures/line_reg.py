@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from ldo_bench import plotting
-from ldo_bench.analysis import LineRegulation, line_regulation
+from ldo_bench.analysis import LineRegulation, dropout_strays, line_regulation
 from ldo_bench.bench import Bench
 from ldo_bench.config import LineRegConfig
 
@@ -144,11 +144,15 @@ def run(bench: Bench, lr: LineRegConfig) -> LineRegResult:
     # clear headroom instead, or at the top of the sweep.
     v_check = min(bench.cfg.dut.vout_nominal + 0.5, float(vins[-1]))
     bad = []  # (VIN, VOUT, source) where VOUT should be regulated but isn't near nominal
+    vin_bad: list[str] = []  # VIN measured off its setpoint
     for k, v in enumerate(vins):
         bench.vin_from_psu(float(v))
         p = bench.measure_point(lr.dc_window, vin_source=lr.vin_source)
         if v >= v_check - 1e-9 and bench.vout_issue(p.vout, source=p.source.upper()):
             bad.append((float(v), p.vout, p.source.upper()))
+        vin_src = f"scope {bench.cfg.ad2.ref_channel}" if lr.vin_source == "ad2" else "PSU readback"
+        if (vi := bench.vin_issue(p.vin, float(v), source=vin_src)) is not None:
+            vin_bad.append(vi)
         row = {
             "vin_set_v": float(v),
             "vin_v": p.vin,
@@ -187,6 +191,29 @@ def run(bench: Bench, lr: LineRegConfig) -> LineRegResult:
             f"{bench.cfg.dut.vout_tolerance:.0%}): is the {src} on VOUT / GND and the LDO enabled?"
         )
         log.warning("line regulation: %s", issues[0])
+    if vin_bad:
+        issues.append(f"{vin_bad[0]} ({len(vin_bad)} of {len(rows)} points)")
+    strays = dropout_strays(x, y, lr.dropout_fraction)
+    if strays:
+        issues.append(
+            f"VOUT dips below the dropout threshold at VIN {', '.join(f'{s:.2f}' for s in strays)} V, above "
+            "the dropout knee: a bad reading or the LDO misbehaving there (the knee is taken from the bottom "
+            "of the sweep)"
+        )
+    if lr.fit_vin_min is not None and np.isfinite(reg.dropout_vin) and lr.fit_vin_min < reg.dropout_vin:
+        issues.append(
+            f"line_reg.fit_vin_min ({lr.fit_vin_min} V) is below the dropout point ({reg.dropout_vin:.3f} V): "
+            "the fit includes dropout points"
+        )
+    if not np.isfinite(reg.slope):
+        issues.append(
+            f"no line regulation fit: fewer than 2 points above {reg.dropout_vin + KNEE_STEPS * lr.vin_step:.2f} V "
+            "(the dropout knee + margin). Raise vin_stop or lower the load"
+            if np.isfinite(reg.dropout_vin)
+            else "no line regulation fit: fewer than 2 points in the sweep"
+        )
+    for i in issues[1 if bad else 0 :]:  # the VOUT issue (if any) was logged above
+        log.warning("line regulation: %s", i)
     i_load = bank.current(lr.load_code, bench.cfg.dut.vout_nominal)
     return LineRegResult(
         lr.load_code,

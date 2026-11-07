@@ -48,11 +48,13 @@ class LoadRegResult:
     vout_source: str = "ad2"  # "dmm" or "ad2"
     vout_nominal: float = 1.0  # V
     issues: list[str] = field(default_factory=list)  # setup problems: non-empty = not valid
+    notes: list[str] = field(default_factory=list)  # worth knowing, not a setup problem
 
     def summary(self) -> dict:
         return {
             "valid": not self.issues,
             "issues": self.issues,
+            "notes": self.notes,
             "vin_set": self.vin_set,
             "points": len(self.rows),
             "vout_source": self.vout_source,
@@ -78,6 +80,7 @@ class LoadRegResult:
             f"  VOUT       {r.v_at_i_min:.5f} V -> {r.v_at_i_max:.5f} V\n"
             f"  dVOUT      {r.delta_v * 1e3:.3f} mV  ({r.percent:.3f} %)\n"
             f"  slope      {r.slope:.4f} mV/mA  (R_out {r.r_out * 1e3:.1f} mOhm, R^2 {r.r2:.4f})"
+            + "".join(f"\n  note: {n}" for n in self.notes)
         )
 
 
@@ -110,11 +113,13 @@ def run(bench: Bench, lr: LoadRegConfig) -> LoadRegResult:
         p = bench.measure_point(lr.dc_window)
         # every point: catches a probe that comes loose mid-sweep
         issue = bench.vout_issue(p.vout, source=p.source.upper())
+        vin_issue = bench.vin_issue(p.vin, lr.vin, source=f"scope {bench.cfg.ad2.ref_channel}")
         row = {
             "code": code,
             "i_est_a": bank.current(code, p.vout),  # used for the fit
             "i_expected_a": bank.current(code, bench.cfg.dut.vout_nominal),  # what the code should draw
             "vout_ok": issue is None,
+            "vin_issue": vin_issue or "",
             "vout_v": p.vout,
             "vout_std_v": p.vout_std,
             "vout_source": p.source,
@@ -147,11 +152,44 @@ def run(bench: Bench, lr: LoadRegConfig) -> LoadRegResult:
             "the LDO enabled and VIN applied?"
         )
         log.warning("load regulation: %s", issues[0])
+    vin_bad = [r for r in rows if r["vin_issue"]]
+    if vin_bad:
+        issues.append(f"{vin_bad[0]['vin_issue']} ({len(vin_bad)} of {len(rows)} points)")
+    notes = []
+    if lr.psu_readback:
+        issues += _load_current_issues(bench, rows)
+    else:
+        notes.append(
+            "load current is the bank estimate (VOUT / R) only: with load_reg.psu_readback off nothing "
+            "checks that the load bank draws it (run loadbank-check)"
+        )
     i = np.array([r["i_est_a"] for r in rows])
     v = np.array([r["vout_v"] for r in rows])
     return LoadRegResult(
-        lr.vin, rows, load_regulation(i, v), rows[0]["vout_source"], bench.cfg.dut.vout_nominal, issues
+        lr.vin, rows, load_regulation(i, v), rows[0]["vout_source"], bench.cfg.dut.vout_nominal, issues, notes
     )
+
+
+def _load_current_issues(bench: Bench, rows: list[dict]) -> list[str]:
+    """Compare the estimated load current with the rise in the supply's own current reading.
+
+    The fit uses the estimate (VOUT / R); a dead bit, a missing ground or a swapped wire would
+    otherwise look like excellent regulation. Each point's supply current minus the lightest load's
+    must match its estimate minus the lightest load's, within loadbank_check's tolerances (the
+    subtraction cancels the readback offset and the LDO's own quiescent current).
+    """
+    lc = bench.cfg.loadbank_check
+    base = min(rows, key=lambda r: r["i_est_a"])
+    for r in rows:
+        expected = r["i_est_a"] - base["i_est_a"]
+        seen = r["i_psu_a"] - base["i_psu_a"]
+        if abs(seen - expected) > max(lc.tolerance * abs(expected), lc.abs_tolerance):
+            return [
+                f"at code {r['code']} the load bank should draw {expected * 1e3:.1f} mA more than at code "
+                f"{base['code']}, but the supply's current rose by {seen * 1e3:.1f} mA: is the load bank "
+                "wired (DIO pins, AD2 GND)? Run loadbank-check"
+            ]
+    return []
 
 
 def _plot_invalid(res: LoadRegResult, dut: str):
@@ -189,7 +227,7 @@ def _plot_invalid(res: LoadRegResult, dut: str):
     ax.set_ylabel("VOUT (V)")
     ax.set_title("SETUP PROBLEM, not a valid measurement", pad=20, color=plotting.CRITICAL)
     plotting.subtitle(
-        ax, f"Load regulation: {dut}  ·  VIN {res.vin_set:.2f} V  ·  no fit: this VOUT isn't the LDO output"
+        ax, f"Load regulation: {dut}  ·  VIN {res.vin_set:.2f} V  ·  no fit: see the setup problems"
     )
     ax.legend(loc="center right")
     plotting.issue_box(ax, res.issues)

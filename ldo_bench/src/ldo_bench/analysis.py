@@ -129,26 +129,47 @@ class LineRegulation:
         return asdict(self)
 
 
-def find_dropout(vin, vout, fraction: float) -> tuple[float, float]:
-    """(VIN, VOUT) where VOUT first stays within `fraction` of its max-VIN value (interpolated).
-
-    vin, vout in V (any order; sorted by VIN here). The threshold is (1 - fraction) * VOUT at
-    the highest VIN; the returned point is where VOUT last crosses up through it, linearly
-    interpolated between the two samples either side, so the returned VOUT is the threshold.
-    (NaN, NaN) if VOUT is above the threshold everywhere, or below it at the top of the sweep.
-    """
+def _below(vin, vout, fraction: float):
+    """VIN-sorted (x, y, threshold, below-threshold mask) for the dropout functions."""
     order = np.argsort(vin)
     x, y = np.asarray(vin, float)[order], np.asarray(vout, float)[order]
     threshold = (1.0 - fraction) * y[-1]
-    below = np.nonzero(y < threshold)[0]
-    if not len(below):
-        return float("nan"), float("nan")  # in regulation over the whole sweep
-    k = int(below[-1]) + 1  # first point of the final in-regulation run
-    if k >= len(x):
+    return x, y, threshold, y < threshold
+
+
+def find_dropout(vin, vout, fraction: float) -> tuple[float, float]:
+    """(VIN, VOUT) where VOUT first rises into regulation, coming up from the bottom of the sweep.
+
+    vin, vout in V (any order; sorted by VIN here). The threshold is (1 - fraction) * VOUT at
+    the highest VIN. The dropout region is the run of points below it starting at the lowest VIN;
+    the returned point is where VOUT crosses up out of that run, linearly interpolated between the
+    two samples either side, so the returned VOUT is the threshold. A low reading further up the
+    sweep doesn't move it (see dropout_strays). (NaN, NaN) if the lowest point is already in
+    regulation, or VOUT never comes up.
+    """
+    x, y, threshold, below = _below(vin, vout, fraction)
+    if not below[0]:
+        return float("nan"), float("nan")  # in regulation from the bottom of the sweep
+    above = np.nonzero(~below)[0]
+    if not len(above):
         return float("nan"), float("nan")  # never regulated
+    k = int(above[0])  # first point out of the bottom dropout run
     x0, x1, y0, y1 = x[k - 1], x[k], y[k - 1], y[k]
     xc = x0 + (threshold - y0) * (x1 - x0) / (y1 - y0) if y1 != y0 else x1
     return float(xc), float(threshold)
+
+
+def dropout_strays(vin, vout, fraction: float) -> list[float]:
+    """VIN (V) of points below the dropout threshold that sit above an in-regulation point.
+
+    In a clean sweep VOUT is below the threshold only at the bottom (dropout). A low point higher
+    up is a bad reading or the LDO misbehaving; line-reg reports it instead of moving the knee.
+    """
+    x, _, _, below = _below(vin, vout, fraction)
+    above = np.nonzero(~below)[0]
+    if not len(above):
+        return []
+    return [float(v) for v in x[above[0] :][below[above[0] :]]]
 
 
 def line_regulation(
