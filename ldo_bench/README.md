@@ -145,7 +145,7 @@ The analysis is a Python port of `AD_workspaces/load_tran_script.js`, using the 
 If VOUT's final level after the step is outside the band (DC load regulation), it can never settle back to the pre-step level. The report says so and suggests `settle_reference = "post"`.
 
 There are two plots per run:
-- `plot.png` zooms in on the step and settling.
+- `plot.png` zooms in on the step and settling. **Every edge uses the same time span**, so the panels compare directly. The default span is 2.5 × the slowest settling time + 10 µs. Set it yourself with `--plot-us 100` (or `load_tran.plot_window = 100e-6`) to match a scope at 10 µs/div. A settling time beyond the span is noted in the corner.
 - `plot_full.png` shows each edge over the whole capture window: about −0.16 to +0.66 ms by default (8192 samples at 10 MS/s).
 
 For a longer window, `--window-ms 5` lowers the sample rate to fit 5 ms into the same 8192 samples. Fast details are coarser at lower rates, e.g. the 1 µs smoothing becomes a 3-sample average at 1.6 MS/s, which slightly reduces the reported peak.

@@ -108,3 +108,22 @@ def test_never_triggers_keeps_untriggered_data(cfg, monkeypatch):
         res = load_tran.run(b, lt, cfg.analysis)
     assert any("never triggered" in i for i in res.issues)
     assert len(res.edges[0].vout) == lt.n_samples  # real (untriggered) capture, nothing invented
+
+
+def test_edges_share_one_time_span(cfg):
+    """Regression: each edge used to be zoomed to its own settling time, so a slow edge's panel
+    covered ~8x more time than a fast one's and neither matched a scope's fixed time/div."""
+    an = cfg.analysis.model_copy(update={"settle_reference": "post"})
+    with open_bench(cfg, sim=True) as b:
+        res = load_tran.run(b, cfg.load_tran.model_copy(update={"averages": 2}), an)
+    res.edges[1].metrics = res.edges[1].metrics.__class__(
+        **{**res.edges[1].metrics.__dict__, "settling_time": 200e-6}  # make one edge much slower
+    )
+    fig = load_tran.plot(res, "x")
+    vout_axes = [ax for ax in fig.axes if "VOUT" in ax.get_ylabel()]
+    assert vout_axes[0].get_xlim() == pytest.approx(vout_axes[1].get_xlim())
+    res.plot_window = 100e-6  # --plot-us 100
+    fig = load_tran.plot(res, "x")
+    for ax in (ax for ax in fig.axes if "VOUT" in ax.get_ylabel()):
+        lo, hi = ax.get_xlim()
+        assert hi == pytest.approx(100, abs=0.2) and lo == pytest.approx(-15, abs=0.2)

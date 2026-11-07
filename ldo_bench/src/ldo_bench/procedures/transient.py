@@ -310,6 +310,7 @@ def plot_edges(
     ref_label: str = "Scope 2 (V)",
     vout_nominal: float | None = None,
     full: bool = False,
+    window: float | None = None,
 ):
     """One column per edge: the scope 2 (trigger) trace on a small panel on top, sharing the time
     axis with VOUT below, both in absolute volts.
@@ -323,6 +324,18 @@ def plot_edges(
     from matplotlib.ticker import FormatStrFormatter
 
     n = len(edges)
+    # One time span for every edge, so the panels (and a scope at a fixed time/div) compare
+    # directly. `window` (s after the step) sets it; else the largest automatic span:
+    # 2.5 x the slowest valid edge's settling time + 10 us.
+    if window is not None:
+        t_end_us = window * 1e6
+    else:
+        spans = [
+            e.metrics.settling_time * 1e6 * 2.5 + 10
+            for e in edges
+            if not getattr(e, "issues", []) and np.isfinite(e.metrics.settling_time)
+        ]
+        t_end_us = max(spans) if spans else None
     fig, axes = plotting.figure(
         2, n, size=(5.4 * n, 5.8), squeeze=False, sharex="col", height_ratios=[1, 3.2]
     )
@@ -335,9 +348,8 @@ def plot_edges(
         # long full-capture windows read better in ms; settling times stay labelled in µs
         scale, unit = (1e3, "ms") if full and (e.t[-1] - e.t[0]) > 2e-3 else (1e6, "µs")
         us = e.t * scale
-        if valid and not full and np.isfinite(m.settling_time):  # zoom on the step and settling
-            t_end = m.settling_time * 1e6 * 2.5 + 10
-            view = (us >= -0.15 * t_end) & (us <= t_end)
+        if not full and t_end_us is not None and (valid or window is not None):  # zoom on the step
+            view = (us >= -0.15 * t_end_us) & (us <= t_end_us)
         else:
             view = np.ones_like(us, dtype=bool)  # whole capture: nothing hidden
 
@@ -384,7 +396,7 @@ def plot_edges(
             ax.axhspan(m.lower, m.upper, color=plotting.GRID, alpha=0.8, lw=0, zorder=0)
             ax.plot(us[view], v, color=plotting.SERIES[0], lw=0.8, alpha=0.35, zorder=2, label="Averaged")
             ax.plot(us[view], vs, color=plotting.SERIES[0], lw=1.8, zorder=3, label="Smoothed")
-            if np.isfinite(m.settling_time):
+            if np.isfinite(m.settling_time) and m.settling_time * scale <= us[view][-1]:
                 ax.axvline(m.settling_time * scale, color=plotting.INK_2, lw=1, ls=(0, (3, 2)), zorder=2)
                 ax.annotate(
                     f"settled {m.settling_time * 1e6:.1f} µs",
@@ -392,6 +404,17 @@ def plot_edges(
                     xycoords=("data", "axes fraction"),
                     xytext=(4, -12),
                     textcoords="offset points",
+                    fontsize=8,
+                    color=plotting.INK_2,
+                )
+            elif np.isfinite(m.settling_time):  # beyond the chosen span: say so instead of widening it
+                ax.annotate(
+                    f"settles at {m.settling_time * 1e6:.1f} µs →",
+                    (1.0, 1.0),
+                    xycoords="axes fraction",
+                    xytext=(-4, -12),
+                    textcoords="offset points",
+                    ha="right",
                     fontsize=8,
                     color=plotting.INK_2,
                 )
@@ -436,6 +459,7 @@ def plot_edges(
         pad = 0.15 * (hi - lo or 1e-3)
         ax.set_ylim(lo - pad, hi + pad)
         ax.yaxis.set_major_formatter(FormatStrFormatter("%.4f"))
+        ax.set_xlim(us[view][0], us[view][-1])  # exactly the chosen span, the same for every edge
         ax.set_xlabel(
             f"Time from step ({unit})" if e.metrics.step_index >= 0 else f"Time from scope trigger ({unit})"
         )

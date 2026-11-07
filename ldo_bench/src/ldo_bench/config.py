@@ -253,6 +253,15 @@ class TransientCaptureConfig(_Model):
     edges: list[Literal["rising", "falling"]] = Field(default_factory=lambda: ["rising", "falling"])
     timeout: float = Field(5.0, gt=0)
     rest_time: float = Field(0.02, ge=0, description="Settle at the starting level before each capture (s)")
+    plot_window: float | None = Field(
+        None,
+        gt=0,
+        description=(
+            "Zoomed plot (plot.png): time shown after the step (s), the same for every edge. "
+            "None = automatic (2.5 x the slowest settling time + 10 us). "
+            "E.g. 100e-6 matches a scope at 10 us/div"
+        ),
+    )
 
 
 class LoadTranConfig(TransientCaptureConfig):

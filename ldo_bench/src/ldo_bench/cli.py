@@ -39,6 +39,13 @@ WindowOpt = Annotated[
 NoXScopeOpt = Annotated[
     bool, typer.Option("--no-xscope", help="Don't use the [xscope] cross-check scope for this run")
 ]
+PlotUsOpt = Annotated[
+    float | None,
+    typer.Option(
+        "--plot-us",
+        help="Zoomed plot: µs shown after the step, same for every edge (e.g. 100 = a scope at 10 µs/div)",
+    ),
+]
 YesOpt = Annotated[bool, typer.Option("--yes", "-y", help="Don't ask to confirm wiring")]
 VerboseOpt = Annotated[bool, typer.Option("--verbose", "-v", help="Debug logging")]
 
@@ -270,6 +277,7 @@ def load_tran(
     ] = None,
     averages: Annotated[int | None, typer.Option("--avg", help="Captures averaged per edge")] = None,
     window_ms: WindowOpt = None,
+    plot_us: PlotUsOpt = None,
     out: OutOpt = Path("results"),
     sim: SimOpt = False,
     save_sim: SaveSimOpt = False,
@@ -296,6 +304,11 @@ def load_tran(
     except ValueError as e:
         typer.secho(str(e), fg="red", err=True)
         raise typer.Exit(2) from e
+    if plot_us is not None:
+        if plot_us <= 0:
+            typer.secho("--plot-us must be positive", fg="red", err=True)
+            raise typer.Exit(2)
+        update["plot_window"] = plot_us * 1e-6
     if window_ms is not None:
         if window_ms <= 0:
             typer.secho("--window-ms must be positive", fg="red", err=True)
@@ -321,6 +334,7 @@ def line_tran(
     load: Annotated[str | None, typer.Option(help="Load as a code or current, e.g. 4 or 19mA")] = None,
     averages: Annotated[int | None, typer.Option("--avg", help="Captures averaged per edge")] = None,
     window_ms: WindowOpt = None,
+    plot_us: PlotUsOpt = None,
     out: OutOpt = Path("results"),
     sim: SimOpt = False,
     save_sim: SaveSimOpt = False,
@@ -342,6 +356,11 @@ def line_tran(
         update["vin_low"] = low
     if high is not None:
         update["vin_high"] = high
+    if plot_us is not None:
+        if plot_us <= 0:
+            typer.secho("--plot-us must be positive", fg="red", err=True)
+            raise typer.Exit(2)
+        update["plot_window"] = plot_us * 1e-6
     if window_ms is not None:
         if window_ms <= 0:
             typer.secho("--window-ms must be positive", fg="red", err=True)

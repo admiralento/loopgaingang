@@ -68,6 +68,7 @@ class LoadTranResult:
     edges: list[EdgeResult]
     vout_nominal: float = 1.0
     setup_issues: list[str] = field(default_factory=list)  # found before any capture
+    plot_window: float | None = None  # s after the step shown in plot.png (None = automatic)
 
     @property
     def issues(self) -> list[str]:
@@ -242,7 +243,9 @@ def run(bench: Bench, lt: LoadTranConfig, an: AnalysisConfig) -> LoadTranResult:
         else:
             log.info("%s: peak %+.2f mV, settling %.2f us", edge, m.deviation * 1e3, m.settling_time * 1e6)
     bank.off()
-    return LoadTranResult(lt.vin, pin, lt.averages, results, bench.cfg.dut.vout_nominal, setup_issues)
+    return LoadTranResult(
+        lt.vin, pin, lt.averages, results, bench.cfg.dut.vout_nominal, setup_issues, lt.plot_window
+    )
 
 
 def plot(res: LoadTranResult, dut: str, full: bool = False):
@@ -253,6 +256,7 @@ def plot(res: LoadTranResult, dut: str, full: bool = False):
     return plot_edges(
         res.edges,
         full=full,
+        window=res.plot_window,
         vout_nominal=res.vout_nominal,
         ref_label=f"DIO {res.trigger_pin}, scope 2 (V)",
         suptitle=f"Load transient: {dut}  ·  VIN {res.vin:.2f} V  ·  {res.averages} averages  ·  "

@@ -78,6 +78,7 @@ class LineTranResult:
     edges: list[EdgeResult]
     vout_nominal: float = 1.0
     setup_issues: list[str] = field(default_factory=list)  # found before any capture
+    plot_window: float | None = None  # s after the step shown in plot.png (None = automatic)
 
     @property
     def issues(self) -> list[str]:
@@ -318,6 +319,7 @@ def run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig) -> LineTranResult:
         results,
         bench.cfg.dut.vout_nominal,
         setup_issues,
+        lt.plot_window,
     )
 
 
@@ -329,6 +331,7 @@ def plot(res: LineTranResult, dut: str, full: bool = False):
     return plot_edges(
         res.edges,
         full=full,
+        window=res.plot_window,
         vout_nominal=res.vout_nominal,
         ref_label="VIN, scope 2 (V)",
         suptitle=f"Line transient: {dut}  ·  {res.i_load * 1e3:.1f} mA load  ·  {res.averages} averages  ·  "
