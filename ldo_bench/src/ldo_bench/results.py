@@ -94,8 +94,16 @@ class RunDir:
         # never mistake a simulated run, or one with setup problems, for a valid measurement
         suffix = ("_SIM" if simulated else "") + ("_INVALID" if invalid else "")
         # one folder per test: results/load-reg/..., results/line-tran/...
-        self.path = Path(root) / test / f"{stamp}_{_slug(cfg.dut.name)}_{test}{suffix}"
-        self.path.mkdir(parents=True, exist_ok=False)  # never overwrite an earlier run
+        # never overwrite an earlier run: a second run in the same second gets <stamp>-2, -3, ...
+        k = 1
+        while True:
+            tag = stamp if k == 1 else f"{stamp}-{k}"
+            self.path = Path(root) / test / f"{tag}_{_slug(cfg.dut.name)}_{test}{suffix}"
+            try:
+                self.path.mkdir(parents=True, exist_ok=False)
+                break
+            except FileExistsError:
+                k += 1
 
     def file(self, name: str) -> Path:
         """Path of `name` inside the run folder."""

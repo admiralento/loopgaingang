@@ -1,7 +1,7 @@
 [project]
 name = "ldo-bench"
 version = "0.1.0"
-description = "Bench automation for LDO characterization: load/line regulation and load/line transient (Agilent E3638A + Analog Discovery 2)"
+description = "Bench automation for LDO characterization: load/line regulation, load/line transient, PSRR, quiescent current and enable tests (Agilent E3648A, 34401A, 54621A, Analog Discovery 2)"
 readme = "README.md"
 authors = [
     { name = "Alek Farmer", email = "farmer.alek@gmail.com" }

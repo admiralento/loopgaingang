@@ -47,6 +47,7 @@ class DcPoint:
     vin: float
     vout_ad2: float
     source: Literal["dmm", "ad2"]
+    dmm_range: float = float("nan")  # V: the DMM's range for this point (NaN: no DMM, or not reported)
 
 
 class Bench:
@@ -348,7 +349,7 @@ class Bench:
             vin_psu = self.psu.measure_voltage()
             n = self.cfg.dmm.samples if self.cfg.dmm else 1
             x = np.array([self.dmm.read_dcv() for _ in range(n)])
-            return DcPoint(float(x.mean()), float(x.std()), vin_psu, float("nan"), "dmm")
+            return DcPoint(float(x.mean()), float(x.std()), vin_psu, float("nan"), "dmm", self._dmm_range())
         vout_ad2, vin = self.measure_dc(duration)
         if vin_source == "psu":
             vin = DcReading(self.psu.measure_voltage(), 0.0, 1)
@@ -356,7 +357,11 @@ class Bench:
             return DcPoint(vout_ad2.mean, vout_ad2.std, vin.mean, vout_ad2.mean, "ad2")
         n = self.cfg.dmm.samples if self.cfg.dmm else 1
         x = np.array([self.dmm.read_dcv() for _ in range(n)])
-        return DcPoint(float(x.mean()), float(x.std()), vin.mean, vout_ad2.mean, "dmm")
+        return DcPoint(float(x.mean()), float(x.std()), vin.mean, vout_ad2.mean, "dmm", self._dmm_range())
+
+    def _dmm_range(self) -> float:
+        """The DMM's DC volts range (V) after a reading, so a sweep shows where autorange switched."""
+        return float(self.dmm.dcv_range()) if hasattr(self.dmm, "dcv_range") else float("nan")
 
     # --- Shutdown -----------------------------------------------------------
     def shutdown(self) -> None:

@@ -86,6 +86,10 @@ class HP34401A:
         v = float(self.t.query("READ?"))
         return float("inf") * (1 if v > 0 else -1) if abs(v) >= OVERLOAD else v
 
+    def dcv_range(self) -> float:
+        """The DC volts range in use (V), e.g. the one autorange picked for the last reading."""
+        return float(self.t.query("VOLT:DC:RANG?"))
+
     def read_dcv(self) -> float:
         """One reading (V). Unlike read(), an overload comes back as the raw +/-9.9E+37."""
         return float(self.t.query("READ?"))

@@ -1,4 +1,4 @@
-# no trailing slash: also matches a .venv symlink (see README, macOS)
+# no trailing slash: also matches .venv if it is a symlink
 .venv
 __pycache__/
 *.pyc

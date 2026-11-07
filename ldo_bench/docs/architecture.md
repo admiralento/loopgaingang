@@ -175,12 +175,12 @@ results/
         ├── plot.png           (+ plot_full.png, waveform_*.csv for transients)
 ```
 
-`_PARTIAL` means saving stopped part way (the error is printed): the folder is incomplete. `meta.json`'s `dirty` is `null` when git wasn't available. `results/` is in `.gitignore`: runs stay on the machine that made them.
+A second run in the same second gets `<stamp>-2`, so nothing is overwritten. `_PARTIAL` means saving stopped part way (the error is printed): the folder is incomplete. `meta.json`'s `dirty` is `null` when git wasn't available. `results/` is in `.gitignore`: runs stay on the machine that made them.
 
 ## Tests and tooling
 
 ```
-uv run poe verify         # the gate: format check, lint, both configs validated, 174 tests (~5 s, no hardware)
+uv run poe verify         # the gate: format check, lint, both configs validated, 263 tests (~10 s, no hardware)
 uv run poe test           # just the tests
 uv run poe format         # format the code
 ```

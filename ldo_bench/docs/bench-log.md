@@ -2,6 +2,47 @@
 
 What was built, what was measured, and what went wrong along the way. Newest session first.
 
+## 2026-11-07: review panel and fixes
+
+The five-reviewer panel (`.claude/reviewer-panel/`: manager, critic, algorithms, domain, test engineer) plus a refuter went over the whole branch. 58 of its 68 findings stood; all were fixed, with a test for each that failed before the fix. No hardware was run.
+
+**Safety** (commit `4641522`):
+- **Interlock:** the line-tran / psrr interlock could pass with the PSU on VIN *and* the VIN probe off, since both read ~0 V. It now also proves VIN follows W1, with the rail held at `dut.vin_max`, before raising it further.
+- **VIN reads and margins:** VIN through the buffer is read on the AD2's 5 V range, and every limit keeps a margin for the AD2's DC error below `vin_max`.
+- **`enable-sine`:** goes through a Bench method with a runtime limit.
+- **OVP:** a rejected OVP setting stops the run.
+
+**Results that could be wrong while looking right:**
+- **Supply and links:** setpoints are read back and `OUTP OFF` is confirmed. Failed shutdown steps exit 1. Cut-off serial replies are rejected.
+- **DC tests:**
+  - VIN is checked against its setpoint
+  - load-reg checks the load current against the supply's current
+  - line-reg's knee no longer moves on one bad reading
+  - fits with too few points are issues
+- **PSRR:** the floor now sees mains hum and nearby tones.
+- **Startup:** currents under the AD2's resolution are bounds, and unsettled edges are issues.
+- **`iq`:**
+  - the supply is switched off before the zero
+  - reversed leads are an issue, not flipped
+  - the floor follows the NPLC
+  - the series method uses a fixed range
+- **DMM range:** load-reg and line-reg record its range at each point and note an autorange switch inside the fit. That keeps the 1 µV range where it fits; JAFWAK's 1.2 V sits at the top of the 1 V range.
+
+**Answers from the team:**
+- **R1 on JAFWAK** is an output current-sense resistor, and the LDO has no feedback loop. VOUT measured at J13.3 is after R1, so the output resistance measured there includes R1's 0.1 Ω (1.9 mV at 19.2 mA); probe at OUTA (J13.4) to exclude it.
+- **Reversed `iq` leads** are recorded as an issue (no sign flip).
+
+**Figures to check against datasheets** (recalled, not verified):
+- the AD2's DC accuracy (`ad2.vin_offset_error`, `vin_gain_error`: ±10 mV ± 0.5 %)
+- the 34401A resolution by NPLC (`procedures/iq.py` RESOLUTION)
+- the TPS7A7001's minimum VIN
+
+**Still open:**
+- **Interlock proof on hardware:** can the BUF634 drive the proof levels (0.1 / 0.3 V) with its rail at 1.9 V? First real line-tran / psrr run will tell; adjust `proof_levels` if not.
+- **BUF634 low side:** only its upper headroom is checked; V− looks like GND in the schematic (unconfirmed).
+- **Demo-board switch resistance:** set `loadbank.switch_resistance = 0.3`, as `loadbank-check` measured? Load currents currently read about 1.3 % high.
+- **Coherent pickup in PSRR:** AD2 crosstalk is invisible to the floor; needs the spectrum analyzer or a shorted-input run.
+
 ## 2026-11-06: first session (`ldo-bench` branch)
 
 ### What we built
@@ -40,7 +81,7 @@ What was built, what was measured, and what went wrong along the way. Newest ses
 
 All runs below were valid (no setup issues). The run folders are on Alek's machine, under `results/`, which isn't in git.
 
-**Supply check** (`psu-check`, DMM across OUT1):
+**Supply check** (`psu-check`, DMM across OUT1; 5 of its 8 points shown):
 
 | Set (V) | PSU readback (V) | DMM (V) | DMM − set (mV) | readback − DMM (mV) |
 |---|---|---|---|---|
@@ -60,7 +101,7 @@ All runs below were valid (no setup issues). The run folders are on Alek's machi
 - Output resistance (the slope) is 2.7 mΩ (r² = 0.997).
 
 **Line regulation** (`line-reg`, no load, VIN from the supply readback, VOUT from the DMM, 80 points up to 5.0 V):
-- **Dropout:** at VIN = 1.40 V, i.e. a 0.415 V dropout at no load (VOUT falls 1 % below its value at 5 V).
+- **Knee:** VOUT falls 1 % below its value at 5 V at VIN = 1.40 V (the tool reports 0.415 V "dropout"). At no load that is almost certainly the TPS7A7001's minimum operating VIN (about 1.4 V, to check against the datasheet), not dropout, which scales with load current. Measure dropout at a heavy load.
 - **Line regulation:** 0.021 mV/V (0.002 %/V), fitted from 1.55 to 5.0 V.
 
 **Load transient** (`load-tran`, VIN 2.0 V, 4 ↔ 69 mA, 16 averages):

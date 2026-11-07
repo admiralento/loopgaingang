@@ -85,7 +85,7 @@ Powers VIN up (default `load_reg.vin`), then reads VOUT, VIN and the supply's V 
   - VIN at the board from AD2 scope 2, averaged over 0.1 s (a whole number of 50/60 Hz cycles)
   - optionally, the supply's V/I readback (about 0.8 s per point)
 - **Computes:**
-  - **Load current:** estimated as VOUT / R from the bank resistors.
+  - **Load current:** estimated as VOUT / R from the bank resistors. On JAFWAK, VOUT measured at J13.3 is after R1 (the 0.1 Ω output current-sense resistor; there's no feedback loop), so the output resistance includes R1's 0.1 Ω. Probe at OUTA (J13.4) to exclude it.
   - **Output resistance:** the slope dVOUT/dI (mV/mA, equal to the output resistance).
   - **Total change:** ΔVOUT over the range (mV and %).
 - **Setup checks:**

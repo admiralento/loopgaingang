@@ -504,9 +504,18 @@ class SimDmm:
         self.m = model
         self.idn = "SIM,34401A,0,sim"
         self.mode = "dcv"
+        self.range: float | None = None  # None = autorange
+        self.last = 0.0
 
     def configure_dcv(self, *, range: float | None, nplc: float) -> None:
         self.mode = "dcv"
+        self.range = range
+
+    def dcv_range(self) -> float:
+        """Range (V) for the last reading: the configured one, or the smallest that holds it (120 %)."""
+        if self.range is not None:
+            return self.range
+        return next(r for r in (0.1, 1.0, 10.0, 100.0, 1000.0) if abs(self.last) <= 1.2 * r)
 
     def configure_dci(self, *, range: float | None, nplc: float) -> None:
         self.mode = "dci"
@@ -519,6 +528,10 @@ class SimDmm:
         return self.read_dcv()
 
     def read_dcv(self) -> float:
+        self.last = self._read_dcv()
+        return self.last
+
+    def _read_dcv(self) -> float:
         m = self.m
         if m.dmm_probe == "open":  # leads not on anything
             return float(m.rng.normal(0.0, m.dmm_noise_v))

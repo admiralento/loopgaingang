@@ -125,7 +125,7 @@ def test_full_capture_plot_and_window(tmp_path):
             str(tmp_path),
         ],
     )
-    assert r.exit_code in (0, 3), r.output  # sim's DC shift may trip the 'pre' settle note, not validity
+    assert r.exit_code == 0, r.output
     (run,) = runs(tmp_path / "load-tran")
     assert (run / "plot.png").exists() and (run / "plot_full.png").exists()
     cfg = json.loads((run / "meta.json").read_text())["config"]["load_tran"]
@@ -134,13 +134,13 @@ def test_full_capture_plot_and_window(tmp_path):
 
 def test_latest_images_follow_the_newest_run(tmp_path):
     base = ["-c", str(CONFIGS / "demo_board.toml"), "--sim", "--save-sim", "-o", str(tmp_path)]
-    assert runner.invoke(app, ["load-tran", *base]).exit_code in (0, 3)
+    assert runner.invoke(app, ["load-tran", *base]).exit_code == 0
     tran_latest = (tmp_path / "latest.png").read_bytes()
     (tran_run,) = runs(tmp_path / "load-tran")
     assert tran_latest == (tran_run / "plot.png").read_bytes()
     assert (tmp_path / "load-tran" / "latest_full.png").exists()
 
-    assert runner.invoke(app, ["load-reg", *base]).exit_code in (0, 3)
+    assert runner.invoke(app, ["load-reg", *base]).exit_code == 0
     (reg_run,) = runs(tmp_path / "load-reg")
     assert (tmp_path / "latest.png").read_bytes() == (reg_run / "plot.png").read_bytes()  # newest test wins
     assert (tmp_path / "load-tran" / "latest.png").read_bytes() == tran_latest  # per-test copy kept

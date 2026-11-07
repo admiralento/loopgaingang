@@ -70,6 +70,8 @@ def test_setup_and_readback():
     p = AgilentE36xx(t)
     p.setup(current_limit=0.3, ovp=6.0, voltage_range=None)
     assert "OUTP OFF" in t.sent and "CURR 0.3000" in t.sent and "VOLT:PROT 6.000" in t.sent
+    assert "VOLT:PROT:STAT ON" in t.sent
+    assert t.sent.index("OUTP OFF") < t.sent.index("CURR 0.3000")  # off before anything is set up
     p.set_voltage(1.8)
     assert p.get_voltage_setpoint() == pytest.approx(1.8)
     assert p.measure_voltage() == pytest.approx(1.8001)

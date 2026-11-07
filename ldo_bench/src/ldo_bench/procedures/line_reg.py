@@ -55,6 +55,7 @@ class LineRegResult:
     vin_source: str = "ad2"  # "ad2" = measured at the board, "psu" = PSU readback
     vout_nominal: float = 1.0  # V
     issues: list[str] = field(default_factory=list)  # setup problems: non-empty = not valid
+    notes: list[str] = field(default_factory=list)  # worth knowing, not a setup problem
 
     @property
     def vin_label(self) -> str:
@@ -64,6 +65,7 @@ class LineRegResult:
         return {
             "valid": not self.issues,
             "issues": self.issues,
+            "notes": self.notes,
             "vin_source": self.vin_source,
             "load_code": self.load_code,
             "i_load_a": self.i_load,
@@ -99,7 +101,7 @@ class LineRegResult:
             f"  slope      {r.slope * 1e3:.4f} mV/V  ({r.percent_per_v:.4f} %/V, R^2 {r.r2:.4f})\n"
             f"  fit range  VIN {r.fit_vin_min:.3f} to {r.fit_vin_max:.3f} V  "
             f"(dVOUT {r.delta_v * 1e3:.3f} mV)\n"
-            f"  dropout    {drop}"
+            f"  dropout    {drop}" + "".join(f"\n  note: {n}" for n in self.notes)
         )
 
 
@@ -161,6 +163,7 @@ def run(bench: Bench, lr: LineRegConfig) -> LineRegResult:
             "vout_std_v": p.vout_std,
             "vout_source": p.source,
             "vout_ad2_v": p.vout_ad2,
+            "dmm_range_v": p.dmm_range,
             "load_code": lr.load_code,
             "i_est_a": bank.current(lr.load_code, p.vout),  # bank resistors at the measured VOUT
         }
@@ -214,6 +217,16 @@ def run(bench: Bench, lr: LineRegConfig) -> LineRegResult:
         )
     for i in issues[1 if bad else 0 :]:  # the VOUT issue (if any) was logged above
         log.warning("line regulation: %s", i)
+    notes = []
+    in_fit = [r for r in rows if r["vin_v"] >= reg.fit_vin_min - 1e-9]
+    ranges = sorted({r["dmm_range_v"] for r in in_fit if np.isfinite(r["dmm_range_v"])})
+    if len(ranges) > 1:
+        switch = next(r["vin_v"] for r in in_fit if r["dmm_range_v"] != in_fit[0]["dmm_range_v"])
+        notes.append(
+            f"the DMM autoranged inside the fit ({' / '.join(f'{g:g} V' for g in ranges)} ranges, switching near "
+            f"VIN {switch:.2f} V): a range-to-range offset may bend the slope. Fixing dmm.range avoids it, at the "
+            "cost of resolution"
+        )
     i_load = bank.current(lr.load_code, bench.cfg.dut.vout_nominal)
     return LineRegResult(
         lr.load_code,
@@ -224,6 +237,7 @@ def run(bench: Bench, lr: LineRegConfig) -> LineRegResult:
         lr.vin_source,
         bench.cfg.dut.vout_nominal,
         issues,
+        notes,
     )
 
 

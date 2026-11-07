@@ -124,6 +124,7 @@ def run(bench: Bench, lr: LoadRegConfig) -> LoadRegResult:
             "vout_std_v": p.vout_std,
             "vout_source": p.source,
             "vout_ad2_v": p.vout_ad2,
+            "dmm_range_v": p.dmm_range,
             "vin_board_v": p.vin,
             "vin_set_v": lr.vin,
         }
@@ -156,6 +157,12 @@ def run(bench: Bench, lr: LoadRegConfig) -> LoadRegResult:
     if vin_bad:
         issues.append(f"{vin_bad[0]['vin_issue']} ({len(vin_bad)} of {len(rows)} points)")
     notes = []
+    ranges = sorted({r["dmm_range_v"] for r in rows if np.isfinite(r["dmm_range_v"])})
+    if len(ranges) > 1:
+        notes.append(
+            f"the DMM autoranged during the sweep ({' / '.join(f'{g:g} V' for g in ranges)} ranges): a "
+            "range-to-range offset may bend the fit. Fixing dmm.range avoids it, at the cost of resolution"
+        )
     if lr.psu_readback:
         issues += _load_current_issues(bench, rows)
     else:

@@ -38,6 +38,8 @@ The supply, DMM and 54621A each work over any of these:
 
 Each scan runs once per run, and a port that one instrument has claimed is never probed for another. Progress is printed as it goes, so a slow search isn't silent.
 
+**Built-in serial ports:** automatic search only probes USB serial adapters, so a PC's built-in COM port is never searched; name it explicitly (`resource = "serial:COM1"`).
+
 **RS-232 specifics:**
 - The serial settings are ignored on GPIB.
 - On RS-232, the supply and DMM are put in remote mode for the run (`SYST:REM`) and handed back to the front panel afterwards (`SYST:LOC`).
@@ -68,7 +70,7 @@ On the meter's front panel (**Shift > I/O MENU**), set:
 If the parity in the config is wrong, discovery still finds the meter and tells you which setting to use. A garbled reply is reported as a baud/parity mismatch instead of being read as a number.
 
 How each test uses it:
-- **DC tests:** the meter measures VOUT, at 10 NPLC, autozero on, >10 GΩ input. The AD2's own VOUT reading is saved next to it as `vout_ad2_v`. Use `--no-dmm` or `dmm.enabled = false` to take VOUT from the AD2.
+- **DC tests:** the meter measures VOUT, at 10 NPLC, autozero on, >10 GΩ input. It autoranges, and load-reg / line-reg record its range at every point (`dmm_range_v`). A note appears if it switched range inside a fit. JAFWAK's 1.2 V sits at the top of the 1 V range (1 µV resolution, reads up to 1.2 V), so VOUT can cross into the 10 V range (10 µV). Set `dmm.range` to fix the range if that matters more than resolution. The AD2's own VOUT reading is saved next to it as `vout_ad2_v`. Use `--no-dmm` or `dmm.enabled = false` to take VOUT from the AD2.
 - **`iq`, shunt method:** DC volts on the 100 mV range, across R13.
 - **`iq`, series method:** DC amps (the I and LO jacks). Ranges 10 mA / 100 mA / 1 A / 3 A, or auto. An overload (+9.9E+37) is reported as such, not as a number.
 
@@ -78,6 +80,7 @@ How the tests use each part of it:
 - **Scope 1:** VOUT.
 - **Scope 2:** the reference: VIN at the board, the DIO trigger line in load-tran, TP3 / R13 / R1 in enable-startup, or EN_AIN in enable-sine.
   - Ranges: 5 V (±2.5 V, the fine one) or 50 V.
+  - DC accuracy: taken as ±10 mV ± 0.5 % on the 5 V range (`ad2.vin_offset_error`, `vin_gain_error`), recalled from the datasheet and **not yet checked**. It sets the margin kept below `dut.vin_max` when the wavegen drives VIN.
   - Samples: 8192 per channel, at up to 100 MS/s. The rate is rounded to 100 MHz / an integer, and the analysis always uses the rate the AD2 reports.
 - **W1:**
   - DC through the BUF634 for line-tran
