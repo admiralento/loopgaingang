@@ -392,6 +392,95 @@ def line_tran(
     _saved(path, fg="green", res=res)
 
 
+@app.command("enable-sine")
+def enable_sine(
+    config: ConfigOpt,
+    freq: Annotated[float | None, typer.Option("--freq", help="Sine frequency (Hz)")] = None,
+    captures: Annotated[
+        int | None, typer.Option("--captures", help="Separate captures (threshold spread)")
+    ] = None,
+    out: OutOpt = Path("results"),
+    sim: SimOpt = False,
+    save_sim: SaveSimOpt = False,
+    psu: PsuOpt = None,
+    ad_serial: AdOpt = None,
+    yes: YesOpt = False,
+    verbose: VerboseOpt = False,
+) -> None:
+    """Enable block on its own: a sine into EN_AIN, its square-wave EN_OUT -> thresholds and hysteresis."""
+    from ldo_bench.procedures import en_sine as proc
+
+    _logging(verbose)
+    cfg = _load(config)
+    es = _section(cfg, "en-sine")
+    update: dict = {}
+    if freq is not None:
+        update["frequency"] = freq
+    if captures is not None:
+        update["captures"] = captures
+    if update:
+        cfg = _load_with(cfg, en_sine=es.model_copy(update=update))
+        es = cfg.en_sine
+    with _bench(cfg, sim, psu, ad_serial, yes, use_dmm=False) as bench:
+        res = proc.run(bench, es)
+        path = _save(bench, cfg, config, out, proc, res, save_sim)
+    _echo_report(bench, res)
+    _saved(path, res=res)
+
+
+@app.command("enable-startup")
+def enable_startup(
+    config: ConfigOpt,
+    ch2: Annotated[
+        str | None,
+        typer.Option("--ch2", help="Scope 2: vref (TP3, BGR), iin (across R13) or iout (across R1)"),
+    ] = None,
+    averages: Annotated[int | None, typer.Option("--avg", help="Captures averaged per edge")] = None,
+    window_ms: WindowOpt = None,
+    load: Annotated[
+        str | None, typer.Option(help="Load during the edges: code or current, e.g. 4 or 19mA")
+    ] = None,
+    out: OutOpt = Path("results"),
+    sim: SimOpt = False,
+    save_sim: SaveSimOpt = False,
+    psu: PsuOpt = None,
+    ad_serial: AdOpt = None,
+    yes: YesOpt = False,
+    verbose: VerboseOpt = False,
+) -> None:
+    """Enable the LDO through the enable block: VOUT and VREF (or current) startup / shutdown timing."""
+    from ldo_bench.loadbank import LoadBank, parse_load
+    from ldo_bench.procedures import startup as proc
+
+    _logging(verbose)
+    cfg = _load(config)
+    su = _section(cfg, "startup")
+    update: dict = {}
+    if ch2 is not None:
+        if ch2 not in ("vref", "iin", "iout"):
+            typer.secho("--ch2 must be vref, iin or iout", fg="red", err=True)
+            raise typer.Exit(2)
+        update["ch2"] = ch2
+    if averages is not None:
+        update["averages"] = averages
+    if window_ms is not None:
+        update["window"] = window_ms * 1e-3
+    if load is not None:
+        try:
+            update["load_code"] = parse_load(load, LoadBank(cfg.loadbank, None), cfg.dut.vout_nominal)
+        except ValueError as e:
+            typer.secho(str(e), fg="red", err=True)
+            raise typer.Exit(2) from e
+    if update:
+        cfg = _load_with(cfg, startup=su.model_copy(update=update))
+        su = cfg.startup
+    with _bench(cfg, sim, psu, ad_serial, yes, use_dmm=False) as bench:
+        res = proc.run(bench, su)
+        path = _save(bench, cfg, config, out, proc, res, save_sim)
+    _echo_report(bench, res)
+    _saved(path, res=res)
+
+
 @app.command("loadbank-check")
 def loadbank_check(
     config: ConfigOpt,

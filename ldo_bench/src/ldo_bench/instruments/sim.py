@@ -53,6 +53,22 @@ class LdoModel:
     psu_offset: float = -1.0e-3  # V, sim supply output error: offset + gain, like the bench E3648A
     psu_gain: float = 4.5e-4
     psu_readback_gain: float = 5.5e-4  # readback reads high, ~2.7 mV at 5 V
+    # enable block (EN_AIN -> Schmitt comparator -> EN_OUT) and turn-on / turn-off dynamics
+    en_pin: int | None = None  # AD2 DIO driving EN_CTRL_33 -> enable path; None = always enabled
+    en_vt_rise: float = 0.58  # fraction of EN_VDD (= VIN) where EN_OUT goes high
+    en_vt_fall: float = 0.42
+    en_t_rise: float = 30e-9  # EN_OUT edge time (s)
+    vref_nominal: float = 1.2  # BGR output (V)
+    vref_delay: float = 4e-6
+    vref_tau: float = 8e-6
+    vout_delay: float = 15e-6  # after VREF starts
+    vout_tau: float = 35e-6
+    vout_off_tau: float = 300e-6  # discharge with no load
+    c_out: float = 10e-6  # output capacitance: inrush = C dV/dt
+    iq_on: float = 150e-6  # quiescent current when enabled (A)
+    sense_ohm: float = 0.1  # R13 / R1
+    ch1_probe: str = "vout"  # what the VOUT channel is on: "vout" or "en_out"
+    awg_sine: dict[int, tuple[float, float, float]] = field(default_factory=dict)  # ch -> (f, low, high)
 
     def __post_init__(self) -> None:
         self.rng = np.random.default_rng(self.seed)
@@ -78,10 +94,14 @@ class LdoModel:
             if self.dio.get(pin, not self.active_high) == self.active_high
         )
 
+    @property
+    def enabled(self) -> bool:
+        return self.en_pin is None or bool(self.dio.get(self.en_pin, False))
+
     def vout_dc(self, vin: float | None = None, g: float | None = None) -> float:
         vin = self.vin if vin is None else vin
         g = self.conductance() if g is None else g
-        if vin <= 0:
+        if vin <= 0 or not self.enabled:
             return 0.0
         v = self.vout_nominal
         for _ in range(4):  # load current depends on vout; iterate to a fixed point
@@ -104,7 +124,54 @@ class LdoModel:
         kind, pin = self.ref_probe
         if kind == "dio":
             return 3.3 if self.dio.get(pin, False) else 0.0
+        if kind == "vref":
+            return self.vref_nominal if self.enabled and self.vin > 0 else 0.0
+        if kind == "iin":  # across R13: everything the board draws from VIN
+            return self.sense_ohm * (self.load_current() + (self.iq_on if self.enabled else self.iq))
+        if kind == "iout":  # across R1: the LDO's output current
+            return self.sense_ohm * self.load_current()
         return self.vin
+
+    def startup_signals(self, t: np.ndarray, on_before: bool, on_after: bool) -> dict[str, np.ndarray]:
+        """VOUT, VREF, input and output current around an enable / disable edge at t = 0."""
+        v_on = self.vout_dc() if on_after else self.vout_dc_if(on_before)
+        g = self.conductance()
+        ts = np.clip(t, 0, None)
+        if on_after and not on_before:  # turn-on
+            vref = np.where(
+                t >= self.vref_delay,
+                self.vref_nominal * (1 - np.exp(-(ts - self.vref_delay) / self.vref_tau)),
+                0,
+            )
+            vref = np.clip(vref, 0, None)
+            d = self.vref_delay + self.vout_delay
+            vout = np.where(t >= d, v_on * (1 - np.exp(-(ts - d) / self.vout_tau)), 0.0)
+            vout = np.clip(vout, 0, None)
+            dvdt = np.where(t >= d, v_on / self.vout_tau * np.exp(-(ts - d) / self.vout_tau), 0.0)
+            iq = np.where(t >= 0, self.iq_on, self.iq)
+        elif on_before and not on_after:  # turn-off: VREF drops fast, VOUT discharges through load
+            tau = self.vout_off_tau if g == 0 else min(self.vout_off_tau, self.c_out / g)
+            vref = np.where(t >= 0, self.vref_nominal * np.exp(-ts / (self.vref_tau / 4)), self.vref_nominal)
+            vout = np.where(t >= 0, v_on * np.exp(-ts / tau), v_on)
+            dvdt = np.zeros_like(t)
+            iq = np.where(t >= 0, self.iq, self.iq_on)
+        else:
+            level = v_on if on_after else 0.0
+            vref = np.full_like(t, self.vref_nominal if on_after else 0.0)
+            vout = np.full_like(t, level)
+            dvdt = np.zeros_like(t)
+            iq = np.full_like(t, self.iq_on if on_after else self.iq)
+        iout = vout * g + self.c_out * dvdt
+        return {"vout": vout, "vref": vref, "iout": iout, "iin": iout + iq}
+
+    def vout_dc_if(self, enabled: bool) -> float:
+        saved = self.en_pin
+        try:
+            if enabled:
+                self.en_pin = None
+            return self.vout_dc() if enabled else 0.0
+        finally:
+            self.en_pin = saved
 
     def noise(self, n: int) -> np.ndarray:
         return self.rng.normal(0.0, self.noise_rms, n)
@@ -179,8 +246,13 @@ class SimAnalogDiscovery:
         stimulus: Callable[[], None],
         timeout: float,
         force: bool = False,
+        dio_trigger: tuple[int, Edge] | None = None,
     ) -> Capture:
         m = self.m
+        if m.awg_sine:
+            return self._sine_capture(sample_rate, n_samples, trigger_level, edge, pre_trigger, stimulus)
+        if dio_trigger is not None:
+            return self._dio_capture(sample_rate, n_samples, dio_trigger, pre_trigger, stimulus, force)
         vin0, g0, ref0 = m.vin, m.conductance(), m.ref_value()
         v0 = m.vout_dc(vin0, g0)
         stimulus()
@@ -217,6 +289,64 @@ class SimAnalogDiscovery:
         self.last_capture = Capture(sample_rate, ch1, ch2, i_trig, edge_found=not force)
         return self.last_capture
 
+    def _put(self, vout_side: np.ndarray, ref_side: np.ndarray, rate: float, i0: int, found: bool) -> Capture:
+        ch1, ch2 = (vout_side, ref_side) if self.vout_channel == 1 else (ref_side, vout_side)
+        self.last_capture = Capture(rate, ch1, ch2, i0, edge_found=found)
+        return self.last_capture
+
+    def _sine_capture(self, rate, n, level, edge, pre, stimulus) -> Capture:
+        """W1 sine on EN_AIN (scope ref channel), the enable comparator's EN_OUT on the other."""
+        m = self.m
+        stimulus()
+        f, lo, hi = next(iter(m.awg_sine.values()))
+        mid, amp = (hi + lo) / 2, (hi - lo) / 2
+        i0 = round(pre * n)
+        t = (np.arange(n) - i0) / rate
+        ratio = float(np.clip((level - mid) / amp, -1, 1))
+        phase = math.asin(ratio) if edge == "rising" else math.pi - math.asin(ratio)
+        ain = mid + amp * np.sin(2 * math.pi * f * t + phase)
+        vdd = m.vin
+        hi_th, lo_th = m.en_vt_rise * vdd, m.en_vt_fall * vdd
+        out = np.zeros(n)
+        state = ain[0] > (hi_th + lo_th) / 2
+        for k, a in enumerate(ain):
+            if not state and a >= hi_th:
+                state = True
+            elif state and a <= lo_th:
+                state = False
+            out[k] = vdd if state else 0.0
+        # finite edge time: a short moving average over en_t_rise
+        w = max(1, round(m.en_t_rise * rate))
+        if w > 1:
+            out = np.convolve(out, np.ones(w) / w, mode="same")
+        out = out + m.noise(n) * 0.5
+        en_out = out if m.ch1_probe == "en_out" else np.full(n, m.vout_dc()) + m.noise(n)
+        return self._put(en_out, ain + m.noise(n) * 0.25, rate, i0, True)
+
+    def _dio_capture(self, rate, n, dio_trigger, pre, stimulus, force) -> Capture:
+        """Enable / disable edge from the AD2's own DIO: VOUT and whatever the ref channel is on."""
+        m = self.m
+        pin, dedge = dio_trigger
+        before = bool(m.dio.get(pin, False))
+        on_before = m.enabled and m.vin > 0
+        stimulus()
+        after = bool(m.dio.get(pin, False))
+        on_after = m.enabled and m.vin > 0
+        moved = (not before and after) if dedge == "rising" else (before and not after)
+        if not moved and not force:
+            raise InstrumentError(f"trigger timeout: DIO {pin} had no {dedge} edge")
+        i0 = round(pre * n)
+        t = (np.arange(n) - i0) / rate
+        sig = m.startup_signals(t, on_before, on_after)
+        kind = m.ref_probe[0]
+        ref = (
+            sig[kind] * (m.sense_ohm if kind in ("iin", "iout") else 1.0)
+            if kind in sig
+            else np.full(n, m.ref_value())
+        )
+        vout = sig["vout"] + m.noise(n)
+        return self._put(vout, ref + m.noise(n) * (0.05 if kind in ("iin", "iout") else 0.25), rate, i0, True)
+
     # --- DigitalOut ---------------------------------------------------------
     def write_pins(self, levels: dict[int, bool]) -> None:
         self.m.dio.update(levels)
@@ -233,8 +363,18 @@ class SimAnalogDiscovery:
             raise InstrumentError("AD2 wavegen is limited to +/-5 V")
         self.m.awg_v[channel] = volts
 
+    def set_sine(self, channel: int, *, frequency: float, low: float, high: float) -> None:
+        if not (-5.0 <= low < high <= 5.0):
+            raise InstrumentError("AD2 wavegen is limited to +/-5 V")
+        self.m.awg_v.pop(channel, None)
+        self.m.awg_sine[channel] = (frequency, low, high)
+
+    def set_vplus(self, volts: float | None) -> None:
+        self.vplus = volts
+
     def off(self, channel: int) -> None:
         self.m.awg_v.pop(channel, None)
+        self.m.awg_sine.pop(channel, None)
 
     def close(self) -> None:
         pass

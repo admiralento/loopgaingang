@@ -95,11 +95,15 @@ class Oscilloscope(Protocol):
         stimulus: Callable[[], None],
         timeout: float,
         force: bool = False,
+        dio_trigger: tuple[int, Edge] | None = None,
     ) -> Capture:
         """Arm a single triggered capture, call `stimulus()` once armed, return the data.
 
         force=True: don't wait for a trigger (start acquiring at once), for showing what is on the
         channels when the trigger never comes. Such captures have edge_found=False.
+        dio_trigger=(pin, edge): trigger on the scope's own digital pin instead of an analog channel
+        (frees both channels for signals); trigger_channel / trigger_level are then ignored and
+        t = 0 is the hardware trigger.
         """
         ...
 
@@ -123,6 +127,7 @@ class DigitalOut(Protocol):
 @runtime_checkable
 class Wavegen(Protocol):
     def set_dc(self, channel: int, volts: float) -> None: ...
+    def set_sine(self, channel: int, *, frequency: float, low: float, high: float) -> None: ...
     def off(self, channel: int) -> None: ...
 
 

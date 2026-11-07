@@ -282,3 +282,151 @@ def settling_analysis(
         SettlingResult(v0, v_pk, band, level, t_set, noise, final, sample_rate, i_step, reference),
         f,
     )
+
+
+# --- enable block: Schmitt / comparator thresholds from a sine input ------------------------------
+@dataclass(frozen=True)
+class SchmittResult:
+    """Thresholds and output of a comparator driven by a slow sine.
+
+    vt_rise / vt_fall: input voltage when the output crosses its midpoint going up / down (median over
+    the edges in the capture). At 1 kHz into a 0-1.8 V sine, a 100 ns output delay shifts these by < 1 mV.
+    edges_per_cycle: output rising edges per input cycle; > 1 means it chatters on each crossing.
+    """
+
+    vt_rise: float
+    vt_fall: float
+    voh: float
+    vol: float
+    t_rise: float  # 10-90 %, s (median); limited by the sample interval
+    t_fall: float
+    duty: float  # fraction of time the output is high
+    n_rise: int
+    n_fall: int
+    input_cycles: float
+    edges_per_cycle: float
+
+    @property
+    def hysteresis(self) -> float:
+        return self.vt_rise - self.vt_fall
+
+    def as_dict(self) -> dict:
+        return {**asdict(self), "hysteresis": self.hysteresis}
+
+
+def _crossings(x: np.ndarray, level: float, rising: bool) -> np.ndarray:
+    """Fractional sample indices where x crosses `level` in one direction."""
+    a, b = x[:-1], x[1:]
+    k = np.nonzero((a < level) & (b >= level))[0] if rising else np.nonzero((a > level) & (b <= level))[0]
+    return k + (level - a[k]) / (b[k] - a[k])
+
+
+def _edge_time(x: np.ndarray, k: float, lo: float, hi: float, rising: bool, fs: float, span: int) -> float:
+    """10-90 % time of the edge around fractional index k (searching +/- span samples)."""
+    i0, i1 = max(0, int(k) - span), min(len(x), int(k) + span + 2)
+    seg = x[i0:i1]
+    c_lo = _crossings(seg, lo, rising)
+    c_hi = _crossings(seg, hi, rising)
+    if not len(c_lo) or not len(c_hi):
+        return float("nan")
+    rel = k - i0
+    a = c_lo[np.argmin(np.abs(c_lo - rel))]
+    b = c_hi[np.argmin(np.abs(c_hi - rel))]
+    return abs(b - a) / fs
+
+
+def schmitt_analysis(ain, aout, sample_rate: float, frequency: float) -> SchmittResult:
+    vin, vout = np.asarray(ain, float), np.asarray(aout, float)
+    vol, voh = float(np.percentile(vout, 5)), float(np.percentile(vout, 95))
+    mid = (vol + voh) / 2
+    rise, fall = _crossings(vout, mid, True), _crossings(vout, mid, False)
+
+    def at(idx: np.ndarray) -> float:
+        return float(np.median(np.interp(idx, np.arange(len(vin)), vin))) if len(idx) else float("nan")
+
+    span = max(4, int(0.05 * sample_rate / frequency))  # search 5 % of a period around each edge
+    swing = voh - vol
+    t_r = [_edge_time(vout, k, vol + 0.1 * swing, vol + 0.9 * swing, True, sample_rate, span) for k in rise]
+    t_f = [_edge_time(vout, k, voh - 0.1 * swing, voh - 0.9 * swing, False, sample_rate, span) for k in fall]
+    cycles = len(vin) / sample_rate * frequency
+    return SchmittResult(
+        vt_rise=at(rise),
+        vt_fall=at(fall),
+        voh=voh,
+        vol=vol,
+        t_rise=float(np.nanmedian(t_r)) if np.isfinite(t_r).any() else float("nan"),
+        t_fall=float(np.nanmedian(t_f)) if np.isfinite(t_f).any() else float("nan"),
+        duty=float(np.mean(vout > mid)),
+        n_rise=len(rise),
+        n_fall=len(fall),
+        input_cycles=cycles,
+        edges_per_cycle=len(rise) / cycles if cycles else float("nan"),
+    )
+
+
+# --- turn-on / turn-off: delay, rise time, settling of a signal after a known edge at t = 0 -------
+@dataclass(frozen=True)
+class StepMetrics:
+    """A signal's response to an edge at t = 0 (e.g. VOUT or VREF after the enable edge).
+
+    before / after: mean before t = 0 and over the last 10 % of the capture.
+    t10 / t90: time from the edge to 10 % / 90 % of the way from before to after (startup delay and
+    rise = t90 - t10). t_settle: after the last sample outside +/- settle_fraction of the step around
+    `after` (NaN if still outside at the end). overshoot: beyond `after`, as a fraction of the step.
+    peak: the most extreme value after t = 0 (e.g. peak inrush current).
+    """
+
+    before: float
+    after: float
+    t10: float
+    t90: float
+    t_settle: float
+    overshoot: float
+    peak: float
+
+    @property
+    def step(self) -> float:
+        return self.after - self.before
+
+    @property
+    def rise_time(self) -> float:
+        return self.t90 - self.t10
+
+    def as_dict(self) -> dict:
+        return {**asdict(self), "step": self.step, "rise_time": self.rise_time}
+
+
+def step_metrics(t, x, settle_fraction: float = 0.02) -> StepMetrics:
+    t, x = np.asarray(t, float), np.asarray(x, float)
+    pre, post = x[t < 0], x[t >= 0]
+    tp = t[t >= 0]
+    before = float(pre.mean()) if len(pre) else float(x[0])
+    after = float(post[-max(1, len(post) // 10) :].mean()) if len(post) else float("nan")
+    step = after - before
+    nan = float("nan")
+    if not len(post) or step == 0:
+        return StepMetrics(before, after, nan, nan, nan, nan, float(post.max()) if len(post) else nan)
+    up = step > 0
+    norm = (post - before) / step  # 0 before, 1 at the final level
+
+    def first_cross(frac: float) -> float:
+        k = np.nonzero(norm >= frac)[0]
+        return float(tp[k[0]]) if len(k) else nan
+
+    outside = np.nonzero(np.abs(norm - 1) > settle_fraction)[0]
+    if not len(outside):
+        t_settle = 0.0
+    elif outside[-1] < len(post) - max(1, len(post) // 10):
+        t_settle = float(tp[outside[-1] + 1])
+    else:
+        t_settle = nan  # still outside the band in the final 10 %
+    peak = float(post.max() if up else post.min())
+    return StepMetrics(
+        before=before,
+        after=after,
+        t10=first_cross(0.1),
+        t90=first_cross(0.9),
+        t_settle=t_settle,
+        overshoot=float(max(0.0, norm.max() - 1)),
+        peak=peak,
+    )

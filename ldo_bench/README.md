@@ -81,6 +81,8 @@ uv run ldo-bench load-reg  -c configs/demo_board.toml   # load regulation (all 3
 uv run ldo-bench line-reg  -c configs/demo_board.toml   # line regulation + dropout (--load 30mA)
 uv run ldo-bench load-tran -c configs/demo_board.toml   # load steps: peak + settling (--from 4mA --to 67mA --avg 32)
 uv run ldo-bench line-tran -c configs/jafwak.toml       # VIN steps via W1 + BUF634 (--low 1.8 --high 2.0 --load 19mA)
+uv run ldo-bench enable-sine -c configs/jafwak.toml     # enable block: sine in, square out -> VT+/VT-, hysteresis (--freq 1e3)
+uv run ldo-bench enable-startup -c configs/jafwak.toml  # enable edge -> VOUT + VREF (or current) startup timing (--ch2 iin)
 ```
 
 **Everything saved and plotted is what was measured: nothing is filled in or assumed.** Each test runs to the end and checks that it really measured the board:
@@ -160,6 +162,28 @@ VIN is driven by the AD2 wavegen through the board's BUF634 buffer:
 - **Interlock:** before raising the rail, the test powers it at only 1.0 V with W1 off and checks that VIN stays low. If VIN follows the supply, the leads are on VIN. The test then stops before applying the full rail voltage.
 - **Calibration:** the buffer's offset is calibrated out from VIN measured at the board (scope ch2), so the steps land on `vin_low` / `vin_high` within 5 mV. If the buffer can't reach a level, the test says to check headroom, JP4 and the W1 wiring.
 - **Measurement:** the scope triggers on VIN itself. Each edge is averaged and analysed like load transient. The report also gives the peak VOUT deviation per volt of VIN step (mV/V).
+
+### Enable block (JAFWAK)
+
+**`enable-sine`** tests the enable block on its own.
+- **Stimulus:** AD2 W1 drives a sine (0 V to VIN, 1 kHz) into `EN_AIN`, through the EN_FG SMA (J2), J6 5-6 and R23. `EN_VDD` comes from INB through J1 9-11.
+- **Scope:** ch2 on TP6 (`EN_AIN`), which is also the trigger; ch1 on J8.2 (`EN_OUT`).
+- **Measured:** the input voltage at each output crossing gives **VT+** and **VT-**, and their difference is the hysteresis. Also VOH/VOL, 10-90 % edge times (limited by the sample interval), duty cycle, and output edges per input cycle (more than 1 means it chatters). Several captures give the spread of the thresholds.
+- **Plot:** input and output against time, and output against input (the hysteresis loop).
+
+**`enable-startup`** steps the enable line through the board's enable path.
+- **Enable path:** AD2 DIO `enable.dio_pin` → J13.12 `EN_CTRL_33` → level shifter → `EN_CTRL_18` → J6 7-8 → `EN_AIN` → enable block → `EN_OUT` → J8 1-2 → `EN_IN`. `~EN_IN` comes from `~EN_OUT` through J8 9-10, and `enable.dio_pin_n` drives `~EN_CTRL_33` inverted.
+- **Level-shifter supply:** the AD2's V+ supplies 3.3 V to `V_33` (J13.14), switched off at the end of the run.
+- **Trigger:** the scope triggers on the AD2's own DIO edge, so both channels are free.
+  - ch1 is VOUT.
+  - ch2 (`startup.ch2` / `--ch2`) is `vref` (TP3, the BGR output), `iin` (across R13, J13.1–J13.2) or `iout` (across R1, J13.4–J13.3).
+- **Measured:** for each edge (enable and disable), averaged:
+  - 10 %/90 % times from the edge (which include the level shifter and the enable block)
+  - rise or fall time, time to settle within 2 %, and overshoot
+  - for currents: the levels before and after, and the peak (inrush)
+- **Setup checks:** VOUT already up before the enable edge (the enable path isn't controlling the LDO), VOUT not reaching nominal after enabling, and VREF off its expected level (`vref_nominal`).
+
+Neither test has been run on hardware yet. The AD2's digital trigger in particular (Digital In's detector driving the scope trigger) needs checking on the first run.
 
 ### Interfaces: GPIB or RS-232, for every instrument
 

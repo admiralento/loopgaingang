@@ -22,7 +22,7 @@ from ldo_bench.loadbank import LoadBank
 
 log = logging.getLogger(__name__)
 
-RefProbe = tuple[Literal["vin", "dio"], int]
+RefProbe = tuple[Literal["vin", "dio", "vref", "iin", "iout", "en_ain"], int]
 ConfirmFn = Callable[[str], bool]
 
 
@@ -105,6 +105,8 @@ class Bench:
         dmm_probe: Literal["vout", "psu"] = "vout",
         bank_on_psu: bool = False,
         psu_to: Literal["vin", "rail"] = "vin",
+        ch1_probe: Literal["vout", "en_out"] = "vout",
+        en_pin: int | None = None,
     ) -> None:
         """Show the wiring a test needs and wait for the user to confirm it.
 
@@ -115,6 +117,8 @@ class Bench:
             self.sim_model.dmm_probe = dmm_probe
             self.sim_model.bank_on_psu = bank_on_psu
             self.sim_model.psu_to = psu_to
+            self.sim_model.ch1_probe = ch1_probe
+            self.sim_model.en_pin = en_pin
         text = "\n".join([f"Wiring for {title}:", *(f"  - {s}" for s in lines)])
         if self.is_sim or self.assume_yes or self._confirm is None:
             log.info(text)  # not asking: still record what the run assumed
@@ -168,6 +172,20 @@ class Bench:
             raise InstrumentError(f"refusing to drive VIN to {volts} V from the wavegen (limit {limit} V)")
         self.awg.set_dc(self.cfg.ad2.wavegen_channel, volts)
         self._awg_on = True
+
+    def enable_logic(self, on: bool) -> None:
+        """AD2 V+ on V_33 (the enable level shifters' 3.3 V side), if the config says the AD2 supplies it."""
+        v = self.cfg.enable.v33
+        if v is not None and hasattr(self.scope, "set_vplus"):
+            self.scope.set_vplus(v if on else None)
+
+    def set_enable(self, on: bool) -> None:
+        """Drive EN_CTRL_33 (and ~EN_CTRL_33 inverted, if wired) from the AD2."""
+        e = self.cfg.enable
+        levels = {e.dio_pin: on}
+        if e.dio_pin_n is not None:
+            levels[e.dio_pin_n] = not on
+        self.dio.write_pins(levels)
 
     def wavegen_off(self) -> None:
         self.awg.off(self.cfg.ad2.wavegen_channel)
@@ -226,6 +244,8 @@ class Bench:
         """Wavegen off, load off, PSU off, close. Each step runs even if an earlier one fails."""
         steps: list[tuple[str, Callable[[], None]]] = [
             ("wavegen off", lambda: self.awg.off(self.cfg.ad2.wavegen_channel)),
+            ("wavegen 2 off", lambda: self.awg.off(2 if self.cfg.ad2.wavegen_channel == 1 else 1)),
+            ("AD2 V+ off", lambda: self.scope.set_vplus(None) if hasattr(self.scope, "set_vplus") else None),
             ("load bank off", self.loadbank.off),
             ("DIO release", self.dio.release_all),
             ("PSU output off", lambda: self.psu.output(False)),

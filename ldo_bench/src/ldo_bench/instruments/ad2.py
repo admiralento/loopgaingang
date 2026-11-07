@@ -155,6 +155,7 @@ class AnalogDiscovery2:
         stimulus: Callable[[], None],
         timeout: float,
         force: bool = False,
+        dio_trigger: tuple[int, Edge] | None = None,
     ) -> Capture:
         p, ai = self._p, self.dev.analogIn
         if trigger_channel not in setups:
@@ -182,25 +183,37 @@ class AnalogDiscovery2:
                 round(pre_trigger * n),
                 edge_found=False,
             )
-        ai.triggerSourceSet(p.DwfTriggerSource.DetectorAnalogIn)
         ai.triggerAutoTimeoutSet(0.0)  # normal mode: wait for a real trigger
-        ai.triggerChannelSet(trigger_channel - 1)
-        ai.triggerTypeSet(p.DwfAnalogInTriggerType.Edge)
-        ai.triggerLevelSet(trigger_level)
-        ai.triggerHysteresisSet(0.01 * setups[trigger_channel].range)
-        ai.triggerConditionSet(p.DwfTriggerSlope.Rise if edge == "rising" else p.DwfTriggerSlope.Fall)
+        if dio_trigger is not None:
+            # Digital In's trigger detector watches the AD2's own DIO pin (e.g. the enable line it drives)
+            pin, dedge = dio_trigger
+            di = self.dev.digitalIn
+            di.reset()
+            mask = 1 << pin
+            di.triggerSet(0, 0, mask if dedge == "rising" else 0, mask if dedge == "falling" else 0)
+            ai.triggerSourceSet(p.DwfTriggerSource.DetectorDigitalIn)
+        else:
+            ai.triggerSourceSet(p.DwfTriggerSource.DetectorAnalogIn)
+            ai.triggerChannelSet(trigger_channel - 1)
+            ai.triggerTypeSet(p.DwfAnalogInTriggerType.Edge)
+            ai.triggerLevelSet(trigger_level)
+            ai.triggerHysteresisSet(0.01 * setups[trigger_channel].range)
+            ai.triggerConditionSet(p.DwfTriggerSlope.Rise if edge == "rising" else p.DwfTriggerSlope.Fall)
         # Single mode: position = time of the window centre relative to the trigger.
         ai.triggerPositionSet(window * (0.5 - pre_trigger))
 
         self._wrap("arm", ai.configure, False, True)
         self._wait((p.DwfState.Armed,), timeout, "the scope to arm")
         stimulus()
-        self._wait((p.DwfState.Done,), timeout, f"a {edge} trigger on scope channel {trigger_channel}")
+        what = f"DIO {dio_trigger[0]}" if dio_trigger else f"scope channel {trigger_channel}"
+        self._wait((p.DwfState.Done,), timeout, f"a {edge} trigger on {what}")
         data = self._read(setups, n)
         ch1 = data.get(1, np.zeros(n))
         ch2 = data.get(2, np.zeros(n))
 
         expected = round(pre_trigger * n)
+        if dio_trigger is not None:  # the trigger isn't on an analog channel: t = 0 is the hardware trigger
+            return Capture(rate, ch1, ch2, expected)
         found = _find_crossing(data[trigger_channel], trigger_level, edge, expected)
         if found is None:
             # The hardware triggered but the data has no such edge. Keep the real data; its time axis is
@@ -254,6 +267,36 @@ class AnalogDiscovery2:
             ao.nodeOffsetSet(ch, carrier, volts)
             self._wrap("wavegen update", ao.configure, ch, 3)  # apply without restarting
 
+    def set_sine(self, channel: int, *, frequency: float, low: float, high: float) -> None:
+        """Continuous sine between `low` and `high` volts (AD2 W1/W2: +/-5 V)."""
+        p, ao = self._p, self.dev.analogOut
+        if not (-5.0 <= low < high <= 5.0):
+            raise InstrumentError(f"sine {low}..{high} V is outside the AD2 wavegen's +/-5 V")
+        ch, carrier = channel - 1, p.DwfAnalogOutNode.Carrier
+        ao.reset(ch)
+        ao.idleSet(ch, p.DwfAnalogOutIdle.Offset)
+        ao.nodeEnableSet(ch, carrier, True)
+        ao.nodeFunctionSet(ch, carrier, p.DwfAnalogOutFunction.Sine)
+        ao.nodeFrequencySet(ch, carrier, frequency)
+        ao.nodeAmplitudeSet(ch, carrier, (high - low) / 2)
+        ao.nodeOffsetSet(ch, carrier, (high + low) / 2)
+        self._wrap("wavegen sine", ao.configure, ch, 1)
+        self._awg_running.discard(channel)  # a later set_dc() must reconfigure from scratch
+
+    def set_vplus(self, volts: float | None) -> None:
+        """AD2 V+ supply (0.5..5 V), or None to switch it off. Used for the board's 3.3 V logic rail."""
+        aio = self.dev.analogIO
+        if volts is None:
+            aio.channelNodeSet(0, 0, 0)
+            aio.enableSet(False)
+        else:
+            if not 0.5 <= volts <= 5.0:
+                raise InstrumentError(f"AD2 V+ can't be set to {volts} V (0.5..5 V)")
+            aio.channelNodeSet(0, 1, volts)  # V+ voltage
+            aio.channelNodeSet(0, 0, 1)  # V+ enable
+            aio.enableSet(True)  # master enable
+        self._wrap("V+ supply", aio.configure)
+
     def off(self, channel: int) -> None:
         p, ao = self._p, self.dev.analogOut
         ch = channel - 1
@@ -265,6 +308,7 @@ class AnalogDiscovery2:
     def close(self) -> None:
         for name, fn in (
             ("wavegen reset", lambda: self.dev.analogOut.reset(-1)),
+            ("V+ supply off", lambda: self.set_vplus(None)),
             ("DIO reset", self.dev.digitalIO.reset),
             ("scope reset", self.dev.analogIn.reset),
             ("close", self.dev.close),

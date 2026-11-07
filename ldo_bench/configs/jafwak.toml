@@ -101,3 +101,31 @@ n_samples = 8192
 pre_trigger = 0.2
 averages = 16
 edges = ["rising", "falling"]
+
+[enable]                     # how the AD2 drives the enable path (J13)
+dio_pin = 5                  # AD2 DIO 5 -> J13.12 EN_CTRL_33 -> U6 -> EN_CTRL_18
+dio_pin_n = 6                # AD2 DIO 6 -> J13.10 ~EN_CTRL_33 -> U5 -> ~EN_CTRL_18 (driven inverted)
+v33 = 3.3                    # AD2 V+ -> J13.14 V_33 (level shifters' 3.3 V side)
+
+[en_sine]                    # enable block on its own: W1 sine -> EN_FG SMA (J2) -> J6 5-6 -> EN_AIN
+vin = 1.8                    # VIN -> EN_VDD through J1 9-11
+frequency = 1e3
+low = 0.0
+# high = 1.8                 # default: vin (EN_VDD)
+cycles = 4
+captures = 8
+
+[startup]                    # EN_CTRL_33 step -> enable block -> EN_IN: VOUT + VREF (or current) timing
+vin = 1.8
+load_code = 0
+edges = ["rising", "falling"]
+window = 1e-3                # s; 8192 samples -> 8.2 MS/s
+pre_trigger = 0.1
+averages = 8
+off_time = 0.05
+on_time = 0.05
+ch2 = "vref"                 # "vref" (TP3), "iin" (across R13), "iout" (across R1)
+sense_ohm = 0.1
+settle_fraction = 0.02
+# vref_nominal = 1.2         # set to check the BGR output level
+

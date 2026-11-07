@@ -310,6 +310,86 @@ class LoadTranConfig(TransientCaptureConfig):
     dio_high_level: float = Field(3.3, gt=0, description="DIO logic-high voltage, for the trigger level")
 
 
+class EnableConfig(_Model):
+    """How the AD2 drives the board's enable path.
+
+    JAFWAK: AD2 DIO -> J13.12 EN_CTRL_33 -> FXLP34 (U6) -> EN_CTRL_18, and DIO -> J13.10 ~EN_CTRL_33
+    -> U5 -> ~EN_CTRL_18. The level shifters' 3.3 V side is V_33 (J13.14), which the AD2's V+ supply
+    can provide; their low side runs from VIN.
+    """
+
+    dio_pin: int = Field(5, ge=0, le=15, description="AD2 DIO wired to EN_CTRL_33 (J13.12)")
+    dio_pin_n: int | None = Field(
+        6, ge=0, le=15, description="AD2 DIO wired to ~EN_CTRL_33 (J13.10), driven inverted; None = not wired"
+    )
+    v33: float | None = Field(
+        3.3,
+        ge=0.5,
+        le=5.0,
+        description="AD2 V+ on V_33 (J13.14) for the level shifters; None = supplied externally",
+    )
+
+    @model_validator(mode="after")
+    def _distinct(self) -> EnableConfig:
+        if self.dio_pin_n is not None and self.dio_pin_n == self.dio_pin:
+            raise ValueError("enable.dio_pin and enable.dio_pin_n must differ")
+        return self
+
+
+class EnSineConfig(_Model):
+    """en-sine: a sine into the enable block's analog input, its output watched for the thresholds."""
+
+    vin: float = Field(gt=0, description="PSU on VIN (feeds EN_VDD through J1 9-11) (V)")
+    frequency: float = Field(1e3, gt=0, description="Sine frequency (Hz)")
+    low: float = Field(0.0, ge=-0.3, description="Sine minimum (V)")
+    high: float | None = Field(None, gt=0, description="Sine maximum (V); None = vin (EN_VDD)")
+    cycles: float = Field(4.0, gt=0.5, description="Sine cycles per capture")
+    n_samples: int = Field(8192, gt=64)
+    captures: int = Field(
+        8, ge=1, description="Separate captures; thresholds are reported as mean and spread"
+    )
+    wavegen_channel: Literal[1, 2] = Field(1, description="AD2 W1/W2 -> EN_FG SMA (J2)")
+    timeout: float = Field(5.0, gt=0)
+
+    @property
+    def sine_high(self) -> float:
+        return self.vin if self.high is None else self.high
+
+    @model_validator(mode="after")
+    def _check(self) -> EnSineConfig:
+        if self.sine_high <= self.low:
+            raise ValueError("en_sine.high must be above en_sine.low")
+        return self
+
+
+class StartupConfig(_Model):
+    """enable-startup: step the enable line and record VOUT and the BGR (VREF) / supply current."""
+
+    vin: float = Field(gt=0)
+    load_code: int = Field(0, ge=0, description="Load during the edges (0 = none)")
+    edges: list[Literal["rising", "falling"]] = Field(
+        default_factory=lambda: ["rising", "falling"], description="rising = enable, falling = disable"
+    )
+    window: float = Field(1e-3, gt=0, description="Capture length (s)")
+    n_samples: int = Field(8192, gt=64)
+    pre_trigger: float = Field(0.1, gt=0, lt=1)
+    averages: int = Field(8, ge=1)
+    off_time: float = Field(0.05, ge=0, description="Time disabled before each enable edge (s)")
+    on_time: float = Field(0.05, ge=0, description="Time enabled before each disable edge (s)")
+    ch2: Literal["vref", "iin", "iout"] = Field(
+        "vref", description="Scope 2: VREF at TP3 (BGR), or across R13 (input current) / R1 (output current)"
+    )
+    ch2_range: float = Field(5.0, gt=0, description="Scope 2 peak-to-peak range (V); 5 is the AD2's finest")
+    sense_ohm: float = Field(0.1, gt=0, description="R13 / R1 value (ohm)")
+    settle_fraction: float = Field(
+        0.02, gt=0, lt=1, description="Settled = within this fraction of the final level"
+    )
+    vref_nominal: float | None = Field(
+        None, gt=0, description="Expected BGR output (V) for the setup check; None = no check"
+    )
+    timeout: float = Field(5.0, gt=0)
+
+
 class LineTranConfig(TransientCaptureConfig):
     psu_voltage: float = Field(gt=0, description="PSU voltage on VS_BUFF (buffer supply) (V)")
     vin_low: float = Field(ge=0, description="W1 low level -> VIN through the BUF634 (V)")
@@ -345,6 +425,9 @@ class BenchConfig(_Model):
     line_reg: LineRegConfig | None = None
     load_tran: LoadTranConfig | None = None
     line_tran: LineTranConfig | None = None
+    enable: EnableConfig = EnableConfig()
+    en_sine: EnSineConfig | None = None
+    startup: StartupConfig | None = None
 
     @model_validator(mode="after")
     def _cross_checks(self) -> BenchConfig:
@@ -388,6 +471,22 @@ class BenchConfig(_Model):
             code_ok("load_tran.code_high", lt.code_high)
             if lt.code_low >= lt.code_high:
                 raise ValueError("load_tran.code_low must be below code_high")
+        en_pins = {self.enable.dio_pin} | ({self.enable.dio_pin_n} - {None})
+        clash = en_pins & set(self.loadbank.dio_pins)
+        if (self.en_sine or self.startup) and clash:
+            raise ValueError(
+                f"enable DIO pins {sorted(clash)} are also load bank pins {self.loadbank.dio_pins}"
+            )
+        if self.en_sine:
+            es = self.en_sine
+            vin_ok("en_sine.vin", es.vin)
+            if es.sine_high > self.dut.vin_max:
+                raise ValueError(
+                    f"en_sine.high ({es.sine_high} V) exceeds dut.vin_max ({self.dut.vin_max} V)"
+                )
+        if self.startup:
+            vin_ok("startup.vin", self.startup.vin)
+            code_ok("startup.load_code", self.startup.load_code)
         if self.line_tran:
             lt = self.line_tran
             # Here the PSU feeds the buffer rail; VIN comes from the wavegen through the buffer.
