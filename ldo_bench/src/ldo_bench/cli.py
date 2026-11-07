@@ -28,6 +28,14 @@ OutOpt = Annotated[Path, typer.Option("--out", "-o", help="Folder for run result
 SaveSimOpt = Annotated[
     bool, typer.Option("--save-sim", help="With --sim: save the run folder anyway (marked SIM)")
 ]
+WindowOpt = Annotated[
+    float | None,
+    typer.Option(
+        "--window-ms",
+        help="Capture length after scaling the sample rate (ms), e.g. 5 for a 5 ms window. "
+        "Default: n_samples / sample_rate from the config (0.82 ms)",
+    ),
+]
 YesOpt = Annotated[bool, typer.Option("--yes", "-y", help="Don't ask to confirm wiring")]
 VerboseOpt = Annotated[bool, typer.Option("--verbose", "-v", help="Debug logging")]
 
@@ -202,11 +210,13 @@ def _save(
         run.write_csv(name, rows)
     run.write_json("summary.json", res.summary())
     run.write_meta(idns=bench.idns(), sim=bench.is_sim)
-    fig = module.plot(res, cfg.dut.name)
-    if bench.is_sim:
-        plotting.mark_simulated(fig)
-    run.save_fig(fig)
-    plotting.close(fig)
+    figs = {"plot.png": module.plot(res, cfg.dut.name)}
+    figs.update(getattr(module, "extra_plots", lambda r, d: {})(res, cfg.dut.name))
+    for name, fig in figs.items():
+        if bench.is_sim:
+            plotting.mark_simulated(fig)
+        run.save_fig(fig, name)
+        plotting.close(fig)
     return run.path
 
 
@@ -246,6 +256,7 @@ def load_tran(
         str | None, typer.Option("--to", help="High load: code or current, e.g. 17 or 67mA")
     ] = None,
     averages: Annotated[int | None, typer.Option("--avg", help="Captures averaged per edge")] = None,
+    window_ms: WindowOpt = None,
     out: OutOpt = Path("results"),
     sim: SimOpt = False,
     save_sim: SaveSimOpt = False,
@@ -271,6 +282,11 @@ def load_tran(
     except ValueError as e:
         typer.secho(str(e), fg="red", err=True)
         raise typer.Exit(2) from e
+    if window_ms is not None:
+        if window_ms <= 0:
+            typer.secho("--window-ms must be positive", fg="red", err=True)
+            raise typer.Exit(2)
+        update["sample_rate"] = lt.n_samples / (window_ms * 1e-3)
     if averages is not None:
         update["averages"] = averages
     if update:
@@ -290,6 +306,7 @@ def line_tran(
     high: Annotated[float | None, typer.Option("--high", help="VIN high level (V)")] = None,
     load: Annotated[str | None, typer.Option(help="Load as a code or current, e.g. 4 or 19mA")] = None,
     averages: Annotated[int | None, typer.Option("--avg", help="Captures averaged per edge")] = None,
+    window_ms: WindowOpt = None,
     out: OutOpt = Path("results"),
     sim: SimOpt = False,
     save_sim: SaveSimOpt = False,
@@ -310,6 +327,11 @@ def line_tran(
         update["vin_low"] = low
     if high is not None:
         update["vin_high"] = high
+    if window_ms is not None:
+        if window_ms <= 0:
+            typer.secho("--window-ms must be positive", fg="red", err=True)
+            raise typer.Exit(2)
+        update["sample_rate"] = lt.n_samples / (window_ms * 1e-3)
     if averages is not None:
         update["averages"] = averages
     if load is not None:

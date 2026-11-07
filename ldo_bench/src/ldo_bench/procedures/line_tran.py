@@ -288,11 +288,21 @@ def run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig) -> LineTranResult:
     )
 
 
-def plot(res: LineTranResult, dut: str):
+def plot(res: LineTranResult, dut: str, full: bool = False):
+    span = ""
+    if full and res.edges:
+        t = res.edges[0].t * 1e3
+        span = f"\nFull capture: {t[0]:.2f} to {t[-1]:.2f} ms around the step"
     return plot_edges(
         res.edges,
+        full=full,
         vout_nominal=res.vout_nominal,
         ref_label="VIN, scope 2 (V)",
         suptitle=f"Line transient: {dut}  ·  {res.i_load * 1e3:.1f} mA load  ·  {res.averages} averages  ·  "
-        "shaded = settling band",
+        "shaded = settling band" + span,
     )
+
+
+def extra_plots(res, dut: str) -> dict:
+    """Saved next to plot.png: the same edges over the whole capture window."""
+    return {"plot_full.png": plot(res, dut, full=True)}

@@ -101,3 +101,27 @@ def test_load_reg_flags_probe_coming_loose(cfg, monkeypatch):
     assert any("out of range at" in i for i in res.issues)
     assert len(res.rows) == len(b.loadbank.allowed_codes())  # every point measured and kept
     load_reg.plot(res, "x")
+
+
+def test_full_capture_plot_and_window(tmp_path):
+    import json
+
+    r = runner.invoke(
+        app,
+        [
+            "load-tran",
+            "-c",
+            str(CONFIGS / "demo_board.toml"),
+            "--sim",
+            "--save-sim",
+            "--window-ms",
+            "5",
+            "-o",
+            str(tmp_path),
+        ],
+    )
+    assert r.exit_code in (0, 3), r.output  # sim's DC shift may trip the 'pre' settle note, not validity
+    (run,) = (tmp_path / "load-tran").iterdir()
+    assert (run / "plot.png").exists() and (run / "plot_full.png").exists()
+    cfg = json.loads((run / "meta.json").read_text())["config"]["load_tran"]
+    assert cfg["n_samples"] / cfg["sample_rate"] == pytest.approx(5e-3)  # 5 ms window

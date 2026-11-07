@@ -136,7 +136,13 @@ def edge_report(e, extra: list[str] | None = None) -> list[str]:
     return lines
 
 
-def plot_edges(edges, suptitle: str, ref_label: str = "Scope 2 (V)", vout_nominal: float | None = None):
+def plot_edges(
+    edges,
+    suptitle: str,
+    ref_label: str = "Scope 2 (V)",
+    vout_nominal: float | None = None,
+    full: bool = False,
+):
     """One column per edge: the scope 2 (trigger) trace on a small panel on top, sharing the time
     axis with VOUT below, both in absolute volts.
 
@@ -158,8 +164,10 @@ def plot_edges(edges, suptitle: str, ref_label: str = "Scope 2 (V)", vout_nomina
         m, issues = e.metrics, list(getattr(e, "issues", []))
         valid = not issues
         any_invalid |= not valid
-        us = e.t * 1e6
-        if valid and np.isfinite(m.settling_time):
+        # long full-capture windows read better in ms; settling times stay labelled in µs
+        scale, unit = (1e3, "ms") if full and (e.t[-1] - e.t[0]) > 2e-3 else (1e6, "µs")
+        us = e.t * scale
+        if valid and not full and np.isfinite(m.settling_time):  # zoom on the step and settling
             t_end = m.settling_time * 1e6 * 2.5 + 10
             view = (us >= -0.15 * t_end) & (us <= t_end)
         else:
@@ -190,12 +198,12 @@ def plot_edges(edges, suptitle: str, ref_label: str = "Scope 2 (V)", vout_nomina
         if valid:
             ax.axhspan(m.lower, m.upper, color=plotting.GRID, alpha=0.8, lw=0, zorder=0)
             ax.plot(us[view], v, color=plotting.SERIES[0], lw=0.8, alpha=0.35, zorder=2, label="Averaged")
-            ax.plot(us[view], vs, color=plotting.SERIES[0], lw=1.8, zorder=3, label="Smoothed (1 µs)")
+            ax.plot(us[view], vs, color=plotting.SERIES[0], lw=1.8, zorder=3, label="Smoothed")
             if np.isfinite(m.settling_time):
-                ax.axvline(m.settling_time * 1e6, color=plotting.INK_2, lw=1, ls=(0, (3, 2)), zorder=2)
+                ax.axvline(m.settling_time * scale, color=plotting.INK_2, lw=1, ls=(0, (3, 2)), zorder=2)
                 ax.annotate(
                     f"settled {m.settling_time * 1e6:.1f} µs",
-                    (m.settling_time * 1e6, 1.0),
+                    (m.settling_time * scale, 1.0),
                     xycoords=("data", "axes fraction"),
                     xytext=(4, -12),
                     textcoords="offset points",
@@ -243,7 +251,9 @@ def plot_edges(edges, suptitle: str, ref_label: str = "Scope 2 (V)", vout_nomina
         pad = 0.15 * (hi - lo or 1e-3)
         ax.set_ylim(lo - pad, hi + pad)
         ax.yaxis.set_major_formatter(FormatStrFormatter("%.4f"))
-        ax.set_xlabel("Time from step (µs)" if e.metrics.step_index >= 0 else "Time from scope trigger (µs)")
+        ax.set_xlabel(
+            f"Time from step ({unit})" if e.metrics.step_index >= 0 else f"Time from scope trigger ({unit})"
+        )
         ax.set_ylabel(f"VOUT, scope {getattr(e, 'vout_channel', 1)} (V)")
     if any_invalid:  # two lines so it fits; invalid edges draw no band, so drop its legend note
         suptitle = "SETUP PROBLEM, not a valid measurement\n" + suptitle.replace(
