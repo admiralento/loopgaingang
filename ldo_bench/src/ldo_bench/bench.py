@@ -25,6 +25,8 @@ from ldo_bench.loadbank import LoadBank
 
 log = logging.getLogger(__name__)
 
+SETPOINT_TOLERANCE = 1e-3  # V: the supply's setpoint readback must match what was programmed
+
 # What the AD2 ref channel is wired to, for the simulator: (signal, DIO pin if signal is "dio" else 0).
 RefProbe = tuple[Literal["vin", "dio", "vref", "iin", "iout", "en_ain"], int]
 ConfirmFn = Callable[[str], bool]  # shows a prompt, returns True if the user answered yes
@@ -98,6 +100,7 @@ class Bench:
         self._psu_ready = False  # current limit / OVP / range programmed
         self._psu_on = False  # output enabled
         self._awg_on = False
+        self.shutdown_errors: list[str] = []  # steps of the last shutdown() that failed
 
     @property
     def is_sim(self) -> bool:
@@ -194,6 +197,14 @@ class Bench:
             self.psu.set_voltage(v)
             if abs(target - v) > 1e-9:
                 self.sleep(0.02)
+        # Confirm the supply took it: a lost or rejected command would leave VIN somewhere else
+        # while the data records the requested value.
+        got = self.psu.get_voltage_setpoint()
+        if abs(got - target) > SETPOINT_TOLERANCE:
+            raise InstrumentError(
+                f"the PSU setpoint reads {got:.4f} V after programming {target:.4f} V: the supply didn't "
+                "take the command (check the connection)"
+            )
         self.sleep(self.cfg.psu.settle_time)
 
     def vin_from_psu(self, volts: float) -> None:
@@ -342,6 +353,7 @@ class Bench:
                 fn()
             except Exception as e:  # keep going: the remaining steps matter more
                 log.error("shutdown: %s failed: %s", name, e)
+                self.shutdown_errors.append(f"{name}: {e}")
         self._psu_on = self._awg_on = self._psu_ready = False
 
 

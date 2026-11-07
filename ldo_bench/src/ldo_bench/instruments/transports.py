@@ -251,9 +251,12 @@ class PrologixTransport:
         self._ser.reset_input_buffer()
         self.write(cmd)
         self._raw("++read eoi")
-        reply = self._ser.readline().decode("ascii", "replace").strip()
+        raw = self._ser.readline()
+        reply = raw.decode("ascii", "replace").strip()
         if not reply:
             raise InstrumentError(f"{self.name}: no reply to '{cmd}' (wrong GPIB address?)")
+        if not raw.endswith(b"\n"):  # the adapter ends every reply with LF; no LF = timed out mid-reply
+            raise InstrumentError(f"{self.name}: reply to '{cmd}' was cut off ({raw[:24]!r})")
         log.debug("%s <- %s -> %s", self.name, cmd, reply)
         return reply
 
@@ -365,7 +368,11 @@ class SerialTransport:
         t_end = time.monotonic() + self.DSR_WAIT
         while not getattr(self._ser, "dsr", True):  # test fakes may have no dsr attribute: treat as ready
             if time.monotonic() > t_end:
-                log.debug("%s: DSR never asserted; not using the handshake", self.name)
+                log.warning(
+                    "%s: DSR never asserted; pacing commands without the handshake from now on "
+                    "(the instrument may drop characters)",
+                    self.name,
+                )
                 self._use_dsr = False
                 return
             time.sleep(0.005)
@@ -399,6 +406,10 @@ class SerialTransport:
             raise InstrumentError(
                 f"{self.name}: no reply to '{cmd}'. Check the instrument's interface is set to RS-232 "
                 "(baud and parity matching), and that the cable is null-modem."
+            )
+        if not raw.endswith(b"\n"):  # readline() stopped at the timeout, not at the terminator
+            raise InstrumentError(
+                f"{self.name}: reply to '{cmd}' was cut off ({raw[:24]!r}): timed out mid-reply"
             )
         log.debug("%s <- %s -> %s", self.name, cmd, reply)
         return reply

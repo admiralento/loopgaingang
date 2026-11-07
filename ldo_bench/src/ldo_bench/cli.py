@@ -127,6 +127,7 @@ def _bench(
     InstrumentError -> exit 1; KeyboardInterrupt (Ctrl-C or wiring not confirmed) -> exit 130.
     Bench.shutdown has already run by the time either is reported.
     """
+    bench = None
     try:
         with open_bench(
             cfg,
@@ -141,10 +142,28 @@ def _bench(
             yield bench
     except InstrumentError as e:
         typer.secho(f"Instrument error: {e}", fg="red", err=True)
+        _shutdown_failed(bench)
         raise typer.Exit(1) from e
     except KeyboardInterrupt as e:
-        typer.secho("Aborted; outputs are off.", fg="yellow", err=True)
+        if not _shutdown_failed(bench):
+            typer.secho("Aborted; outputs are off.", fg="yellow", err=True)
         raise typer.Exit(130) from e
+    if _shutdown_failed(bench):
+        raise typer.Exit(1)
+
+
+def _shutdown_failed(bench: Bench | None) -> bool:
+    """Print any shutdown step that failed (in red); True if one did. The bench may still be powered."""
+    errors = getattr(bench, "shutdown_errors", None) or []
+    if errors:
+        typer.secho(
+            "SHUTDOWN FAILED: check the bench by hand, the supply or wavegen may still be on:",
+            fg="red",
+            err=True,
+        )
+        for e in errors:
+            typer.secho(f"  - {e}", fg="red", err=True)
+    return bool(errors)
 
 
 @app.command("check-config")
@@ -273,19 +292,26 @@ def _save(
         return None
     invalid = bool(getattr(res, "issues", []))
     run = RunDir(out, module.NAME, cfg, config_path=config_path, simulated=bench.is_sim, invalid=invalid)
-    run.write_csv("data.csv", res.rows)
-    for name, rows in getattr(res, "extra_csvs", dict)().items():
-        run.write_csv(name, rows)
-    run.write_json("summary.json", res.summary())
-    run.write_meta(idns=bench.idns(), sim=bench.is_sim)
-    figs = {"plot.png": module.plot(res, cfg.dut.name)}
-    figs.update(getattr(module, "extra_plots", lambda r, d: {})(res, cfg.dut.name))
-    for name, fig in figs.items():
-        if bench.is_sim:
-            plotting.mark_simulated(fig)
-        run.save_fig(fig, name)
-        plotting.close(fig)
-    run.publish_latest()  # results/latest.png etc.: keep one open in the editor, it updates
+    try:
+        run.write_csv("data.csv", res.rows)
+        for name, rows in getattr(res, "extra_csvs", dict)().items():
+            run.write_csv(name, rows)
+        run.write_json("summary.json", res.summary())
+        run.write_meta(idns=bench.idns(), sim=bench.is_sim)
+        figs = {"plot.png": module.plot(res, cfg.dut.name)}
+        figs.update(getattr(module, "extra_plots", lambda r, d: {})(res, cfg.dut.name))
+        for name, fig in figs.items():
+            if bench.is_sim:
+                plotting.mark_simulated(fig)
+            run.save_fig(fig, name)
+            plotting.close(fig)
+        run.publish_latest()  # results/latest.png etc.: keep one open in the editor, it updates
+    except BaseException:
+        # Don't leave a folder that looks like a complete run: mark it, then let the error through.
+        partial = run.path.with_name(run.path.name + "_PARTIAL")
+        run.path.rename(partial)
+        typer.secho(f"Saving failed part way: {partial} is incomplete", fg="red", err=True)
+        raise
     return run.path
 
 

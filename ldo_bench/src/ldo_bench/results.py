@@ -53,7 +53,9 @@ def _git_info() -> dict[str, Any]:
             return None
         return out.stdout.strip() if out.returncode == 0 else None
 
-    return {"commit": git("rev-parse", "HEAD"), "dirty": bool(git("status", "--porcelain"))}
+    status = git("status", "--porcelain")
+    # None = git unavailable or not a checkout: unknown, not "clean"
+    return {"commit": git("rev-parse", "HEAD"), "dirty": None if status is None else bool(status)}
 
 
 def _versions() -> dict[str, str]:

@@ -136,6 +136,8 @@ class AgilentE36xx:
         self.t.write("OUTP ON" if on else "OUTP OFF")  # global: both outputs on the E3648A
         if on:  # e.g. refused while an OVP trip is latched
             self._check("OUTP ON")
+        elif self.output_state():  # a dropped OUTP OFF would leave the board powered: say so
+            raise InstrumentError(f"{self.model}: sent OUTP OFF but the output is still on")
 
     def output_state(self) -> bool:
         """True if the output is on (OUTP? replies 1 / 0). Not part of the PowerSupply Protocol."""

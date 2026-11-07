@@ -16,11 +16,17 @@ class FakeTransport:
         self.sent: list[str] = []
         self.errors = list(errors or [])
         self.volt = 0.0
+        self.on = False
+        self.ignore_off = False  # a supply that drops OUTP OFF
 
     def write(self, cmd):
         self.sent.append(cmd)
         if cmd.startswith("VOLT ") and not cmd.startswith("VOLT:"):
             self.volt = float(cmd.split()[1])
+        if cmd == "OUTP ON":
+            self.on = True
+        if cmd == "OUTP OFF" and not self.ignore_off:
+            self.on = False
 
     def query(self, cmd):
         self.sent.append(cmd)
@@ -30,6 +36,7 @@ class FakeTransport:
             "VOLT?": f"{self.volt:+.5E}",
             "MEAS:VOLT?": "+1.80010E+00",
             "MEAS:CURR?": "+1.23000E-02",
+            "OUTP?": "1" if self.on else "0",
         }[cmd]
 
     def close(self):

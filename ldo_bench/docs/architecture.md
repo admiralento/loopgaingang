@@ -23,7 +23,8 @@ procedures/<test>.run(bench, cfg.<section>) ──► Result (rows, summary(), r
 cli._save() ── RunDir: data.csv, summary.json, meta.json, plot.png (+ extras), results/latest.png
         │
         ▼
-report printed; exit code 0 (ok), 3 (finished, but a setup problem), 1 (instrument error), 2 (bad config/option), 130 (Ctrl-C)
+report printed; exit code 0 (ok), 3 (finished, but a setup problem), 1 (instrument error, or a shutdown step failed),
+2 (bad config/option), 130 (Ctrl-C)
 ```
 
 ## Folder layout
@@ -88,7 +89,8 @@ Other things the Bench does:
 - **Supply setup:** the PSU current limit and OVP are set before the output is first turned on, and voltage changes are ramped in `psu.ramp_step` steps. If the supply rejects the OVP setting, the run stops; only `psu.ovp` left out of the config runs without hardware OVP.
 - **VIN through the buffer** (line-tran, psrr): VIN is read on the AD2's fine 5 V range whenever `dut.vin_max` fits on it, and every limit check keeps a margin for the AD2's error below `dut.vin_max` (`ad2.vin_offset_error` + `ad2.vin_gain_error` × V: about 20 mV at 1.9 V; these figures are from memory of the AD2 datasheet and still need checking). The interlock is in two stages; see [tests.md](tests.md#line-tran-line-transient).
 - **Wiring prompt:** `confirm_wiring()` prints the wiring a test needs and waits for a yes (`--yes` skips it). Its keyword arguments (`ref_probe`, `dmm_probe`, `psu_to`, ...) don't affect real hardware: they tell the simulator how the bench is wired.
-- **Shutdown:** leaving the `with` block for any reason (end of test, exception, Ctrl-C) runs `shutdown()`. It turns off, in order: wavegen, AD2 V+, load bank, DIO, PSU output (then the setpoint goes to 0 V), and closes every instrument. Each step runs even if an earlier one fails.
+- **Shutdown:** leaving the `with` block for any reason (end of test, exception, Ctrl-C) runs `shutdown()`. It turns off, in order: wavegen, AD2 V+, load bank, DIO, PSU output (then the setpoint goes to 0 V), and closes every instrument. Each step runs even if an earlier one fails. A failed step is printed in red as SHUTDOWN FAILED and the command exits 1, since the bench may still be powered.
+- **Commands are confirmed:** after every ramp the supply's setpoint is read back, and `OUTP OFF` is confirmed with `OUTP?`. A serial reply that ends at the timeout instead of its line feed is rejected, not parsed.
 - **Measurements:** `measure_dc()` averages both AD2 channels, `measure_point()` takes VOUT from the DMM when there is one, and `vout_issue()` is the standard "is VOUT where it should be?" check.
 
 ## Instruments (`instruments/`)
@@ -166,14 +168,14 @@ results/
 ├── latest_run.txt             which run folder latest.png came from
 └── <test>/
     ├── latest.png, latest_full.png
-    └── <YYYYMMDD-HHMMSS>_<dut>_<test>[_SIM][_INVALID]/
+    └── <YYYYMMDD-HHMMSS>_<dut>_<test>[_SIM][_INVALID][_PARTIAL]/
         ├── data.csv           every measured point
         ├── summary.json       headline numbers, "valid", "issues"
         ├── meta.json          config used, instrument IDNs, git commit, package versions
         ├── plot.png           (+ plot_full.png, waveform_*.csv for transients)
 ```
 
-`results/` is in `.gitignore`: runs stay on the machine that made them.
+`_PARTIAL` means saving stopped part way (the error is printed): the folder is incomplete. `meta.json`'s `dirty` is `null` when git wasn't available. `results/` is in `.gitignore`: runs stay on the machine that made them.
 
 ## Tests and tooling
 

@@ -334,18 +334,22 @@ class AnalogDiscovery2:
         self._awg_running.discard(channel)
 
     def close(self) -> None:
-        """Reset every instrument on the AD2 (wavegen, V+, DIO, scope) and close it; errors are only logged."""
+        """Reset every instrument on the AD2 (wavegen, V+, DIO, scope) and close it.
+
+        Each step runs even if an earlier one fails; failures are logged as warnings, since a
+        wavegen or V+ that didn't switch off may still be driving the board.
+        """
         for name, fn in (
             ("wavegen reset", lambda: self.dev.analogOut.reset(-1)),
             ("V+ supply off", lambda: self.set_vplus(None)),
-            ("DIO reset", self.dev.digitalIO.reset),
-            ("scope reset", self.dev.analogIn.reset),
-            ("close", self.dev.close),
+            ("DIO reset", lambda: self.dev.digitalIO.reset()),
+            ("scope reset", lambda: self.dev.analogIn.reset()),
+            ("close", lambda: self.dev.close()),
         ):
             try:
                 fn()
             except Exception as e:
-                log.debug("AD2 %s failed: %s", name, e)
+                log.warning("AD2 %s failed: %s", name, e)
 
 
 def _find_crossing(x: np.ndarray, level: float, edge: Edge, near: int) -> int | None:

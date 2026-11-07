@@ -41,7 +41,7 @@ Each scan runs once per run, and a port that one instrument has claimed is never
 **RS-232 specifics:**
 - The serial settings are ignored on GPIB.
 - On RS-232, the supply and DMM are put in remote mode for the run (`SYST:REM`) and handed back to the front panel afterwards (`SYST:LOC`).
-- HP instruments pace RS-232 with DTR/DSR: `flow = "dsr-pacing"` waits for the instrument's DSR before each command, with a short gap.
+- HP instruments pace RS-232 with DTR/DSR: `flow = "dsr-pacing"` waits for the instrument's DSR before each command, with a short gap. If DSR never comes (cable without the DTR/DSR pair), it prints a warning and carries on without the handshake.
 - An HP instrument's RS-232 needs a **full-handshake null-modem** cable: TX↔RX and DTR↔DSR crossed (e.g. Agilent 34398A). A straight-through or 3-wire cable won't work, because the instrument won't transmit until it sees our DTR.
 
 ## E3648A / E3638A supply
