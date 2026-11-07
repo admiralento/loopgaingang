@@ -63,7 +63,8 @@ def test_buffer_without_headroom_is_reported(jafwak):
     res, _ = run(jafwak, setup=weak_buffer)  # runs to the end, records the problem
     assert any("headroom" in i for i in res.issues)
     # the calibration never chased the dead buffer upward
-    assert max(seen) <= jafwak.line_tran.vin_high + line_tran.CAL_MAX_CORRECTION + 1e-9
+    lt = jafwak.line_tran
+    assert max(seen) <= min(lt.vin_high + line_tran.CAL_MAX_CORRECTION, jafwak.dut.vin_max) + 1e-9
 
 
 def test_load_limit_applies(jafwak):

@@ -195,7 +195,9 @@ def _calibrate(bench: Bench, target: float) -> tuple[float, float, str | None]:
         err = target - vin
         if abs(err) <= CAL_TOLERANCE:
             return w, vin, None
-        w = min(max(w + err, target - CAL_MAX_CORRECTION), target + CAL_MAX_CORRECTION)
+        # capped near the target, and never above the DUT's VIN limit (a weak buffer becomes an issue)
+        w_max = min(target + CAL_MAX_CORRECTION, bench.cfg.dut.vin_max)
+        w = min(max(w + err, target - CAL_MAX_CORRECTION, 0.0), w_max)
     bench.vin_from_wavegen(w)
     return (
         w,
