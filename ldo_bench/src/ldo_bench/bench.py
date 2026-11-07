@@ -266,6 +266,8 @@ def open_bench(
 
     from ldo_bench.instruments.discovery import open_ad2, open_dmm, open_psu
 
+    t0 = time.monotonic()
+    log.info("Opening instruments (Ctrl-C to abort) ...")
     psu = open_psu(
         psu_resource or cfg.psu.resource, gpib_address=cfg.psu.gpib_address, channel=cfg.psu.channel
     )
@@ -277,6 +279,7 @@ def open_bench(
         if want_dmm:
             dmm = open_dmm(cfg.dmm.resource, baud=cfg.dmm.baud, parity=cfg.dmm.parity)
             opened.append(dmm)
+            log.info("Configuring the DMM ...")
             dmm.configure_dcv(range=cfg.dmm.range, nplc=cfg.dmm.nplc)
     except BaseException:
         for inst in reversed(opened):
@@ -285,4 +288,5 @@ def open_bench(
             except Exception as e:
                 log.debug("close after failed open: %s", e)
         raise
+    log.info("Instruments ready (%.1f s)", time.monotonic() - t0)
     return Bench(cfg, psu, ad2, dmm=dmm, assume_yes=assume_yes, confirm=confirm)

@@ -37,10 +37,26 @@ def _root() -> None:
     """LDO characterization on the bench (Agilent E36xxA supply + Analog Discovery 2)."""
 
 
+class _ConsoleFormatter(logging.Formatter):
+    """Plain progress messages; a prefix only for warnings/errors (and everything with -v)."""
+
+    def __init__(self, verbose: bool) -> None:
+        super().__init__()
+        self.verbose = verbose
+
+    def format(self, record: logging.LogRecord) -> str:
+        msg = record.getMessage()
+        if self.verbose:
+            return f"{record.levelname} {record.name}: {msg}"
+        if record.levelno >= logging.WARNING:
+            return f"{record.levelname}: {msg}"
+        return msg
+
+
 def _logging(verbose: bool) -> None:
-    logging.basicConfig(
-        level=logging.DEBUG if verbose else logging.INFO, format="%(levelname)s %(name)s: %(message)s"
-    )
+    handler = logging.StreamHandler()
+    handler.setFormatter(_ConsoleFormatter(verbose))
+    logging.basicConfig(level=logging.DEBUG if verbose else logging.INFO, handlers=[handler], force=True)
     logging.getLogger("matplotlib").setLevel(logging.WARNING)
     logging.getLogger("pyvisa").setLevel(logging.WARNING)
 
