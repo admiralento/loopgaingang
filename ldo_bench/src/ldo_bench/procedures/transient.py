@@ -504,7 +504,8 @@ def plot_edges(
                     color=plotting.INK_2,
                 )
             # the sample closest to the peak value (the analysis returns the value, not its index)
-            i_pk = int(np.argmin(np.abs(e.vout_smoothed - m.peak)))
+            i0 = max(m.step_index, 0)  # the peak is after the step: don't match an equal value before it
+            i_pk = i0 + int(np.argmin(np.abs(e.vout_smoothed[i0:] - m.peak)))
             ax.plot(
                 us[i_pk],
                 e.vout_smoothed[i_pk],

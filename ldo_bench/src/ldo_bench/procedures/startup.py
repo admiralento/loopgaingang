@@ -25,7 +25,7 @@ run() steps:
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
@@ -40,6 +40,8 @@ log = logging.getLogger(__name__)
 
 NAME = "enable-startup"
 
+AD2_BITS = 14  # scope ADC resolution
+RESOLVE_COUNTS = 4  # a current step must span at least this many AD2 counts to be measured
 CH2_LABEL = {"vref": "VREF (V)", "iin": "Input current (mA)", "iout": "Output current (mA)"}
 CH2_NAME = {"vref": "VREF", "iin": "I_in", "iout": "I_out"}
 
@@ -55,6 +57,8 @@ class EdgeStartup:
     vout_m: StepMetrics
     ch2_m: StepMetrics
     issues: list[str] = field(default_factory=list)  # setup problems: non-empty = not a valid edge
+    ch2_resolved: bool = True  # currents: False = the step is under what the AD2 resolves (a bound)
+    ch2_floor: float = 0.0  # A: smallest current step the AD2 resolves on this range and resistor
 
     @property
     def title(self) -> str:
@@ -111,7 +115,13 @@ class StartupResult:
             "load_code": self.load_code,
             "i_load_a": self.i_load,
             "edges": {
-                e.edge: {"vout": e.vout_m.as_dict(), self.ch2: e.ch2_m.as_dict(), "issues": e.issues}
+                e.edge: {
+                    "vout": e.vout_m.as_dict(),
+                    self.ch2: e.ch2_m.as_dict(),
+                    "ch2_resolved": e.ch2_resolved,
+                    "ch2_floor_a": e.ch2_floor,
+                    "issues": e.issues,
+                }
                 for e in self.edges
             },
         }
@@ -143,10 +153,15 @@ class StartupResult:
                     f"    VREF   {c.before:.4f} -> {c.after:.4f} V;  10 % at {us(c.t10)}, 90 % at {us(c.t90)}, "
                     f"settled ({us(c.t_settle)}), overshoot {c.overshoot * 100:.1f} %"
                 )
+            elif not e.ch2_resolved:
+                lines.append(
+                    f"    {CH2_NAME[self.ch2]:6s} step under what the AD2 resolves across the sense resistor "
+                    f"(< {e.ch2_floor * 1e3:.1f} mA); use `iq` for DC current"
+                )
             else:
                 lines.append(
-                    f"    {CH2_NAME[self.ch2]:6s} {c.before * 1e3:.2f} -> {c.after * 1e3:.2f} mA;  peak "
-                    f"{c.peak * 1e3:.1f} mA"
+                    f"    {CH2_NAME[self.ch2]:6s} {c.before * 1e3:.2f} -> {c.after * 1e3:.2f} mA (+/- "
+                    f"{e.ch2_floor / RESOLVE_COUNTS * 1e3:.1f} mA per count);  peak {c.peak * 1e3:.1f} mA"
                 )
         return "\n".join(lines)
 
@@ -247,6 +262,16 @@ def run(bench: Bench, su: StartupConfig) -> StartupResult:
         ch2 = raw2 if su.ch2 == "vref" else raw2 / su.sense_ohm  # currents: Ohm's law on R13 / R1
         vm = step_metrics(t, vout, su.settle_fraction)
         cm = step_metrics(t, ch2, su.settle_fraction)
+        resolved, floor = True, 0.0
+        if su.ch2 != "vref":
+            # One AD2 count across the sense resistor; a step of a few counts is quantisation, not a
+            # current: its timing is meaningless and its size is only a bound.
+            floor = RESOLVE_COUNTS * su.ch2_range / 2**AD2_BITS / su.sense_ohm
+            resolved = abs(cm.step) >= floor
+            if not resolved:
+                cm = replace(
+                    cm, t10=float("nan"), t90=float("nan"), t_settle=float("nan"), overshoot=float("nan")
+                )
         # setup checks from the data (the run still saves what it measured)
         if edge == "rising":
             # a disabled LDO should sit near 0 V; 20 % of nominal leaves room for leakage and noise
@@ -254,6 +279,15 @@ def run(bench: Bench, su: StartupConfig) -> StartupResult:
                 issues.append(
                     f"VOUT was already {vm.before:.3f} V before the enable edge: the enable path isn't "
                     "controlling the LDO (J6 7-8, J8 1-2 / 9-10?)"
+                )
+            if not np.isfinite(vm.t_settle):
+                issues.append(
+                    f"VOUT hasn't settled by the end of the {su.window * 1e3:g} ms capture: the timings would be "
+                    "relative to a level it hadn't reached. Lengthen the window (startup.window / --window-ms)"
+                )
+            if su.ch2 == "vref" and not np.isfinite(cm.t_settle):
+                issues.append(
+                    f"VREF hasn't settled by the end of the {su.window * 1e3:g} ms capture: lengthen the window"
                 )
             up = bench.vout_issue(vm.after, source=f"scope {a.vout_channel}")
             if up:
@@ -273,7 +307,12 @@ def run(bench: Bench, su: StartupConfig) -> StartupResult:
             down = bench.vout_issue(vm.before, source=f"scope {a.vout_channel}")
             if down:
                 issues.append(f"before disabling, {down}")
-        edges.append(EdgeStartup(edge, t, vout, ch2, vm, cm, list(dict.fromkeys(issues))))
+            elif vm.after > 0.2 * nom:  # same 20 % as "already up" on the enable edge
+                issues.append(
+                    f"VOUT is still {vm.after:.3f} V at the end of the capture after disabling: the enable path "
+                    "isn't turning the LDO off, or it discharges slower than the window (lengthen it)"
+                )
+        edges.append(EdgeStartup(edge, t, vout, ch2, vm, cm, list(dict.fromkeys(issues)), resolved, floor))
         if issues:
             log.warning("%s edge: %d setup issue(s), see the plot", edge, len(issues))
     bench.set_enable(False)

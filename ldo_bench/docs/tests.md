@@ -228,7 +228,13 @@ Powers VIN up (default `load_reg.vin`), then reads VOUT, VIN and the supply's V 
   - **Sine fit:** a least-squares fit at the injected frequency on each channel (a lock-in). VOUT/VIN is averaged coherently over the captures, which keeps the phase and averages noise down.
   - **Levelling:** W1's amplitude is re-levelled if VIN's amplitude is off by more than 15 % (the buffer and board roll off at high frequency).
   - **PSRR:** PSRR (dB) = 20·log10(|VIN| / |VOUT|), positive = rejection.
-- **Floor:** what the fit can't explain sets the smallest VOUT ripple the AD2 resolves. That's roughly 70–80 dB of PSRR at 50 mV. Points under it are drawn hollow and reported as "≥ X dB". A spectrum analyzer on VOUT will measure past that (see [architecture.md](architecture.md#recipes)).
+- **Floor:** the smallest VOUT ripple the AD2 resolves at that frequency, from the largest of three noise estimates:
+  - the fit's leftover noise
+  - how much VOUT/VIN scatters from capture to capture
+  - tones fitted 3 frequency steps either side of the test frequency
+
+  The last two catch mains hum and 1/f noise near the test frequency, which the first alone would let through as a measured PSRR. A point needs VOUT above 4σ of that noise to count as measured; points under it are drawn hollow and reported as "≥ X dB". That's roughly 70 dB at 50 mV in a quiet setup.
+- **What the floor can't see:** pickup locked to VIN, such as crosstalk between the AD2's channels or ground coupling. That needs a spectrum analyzer on VOUT, or a calibration run with scope 1 shorted at the VOUT ground point (see [architecture.md](architecture.md#recipes)).
 - **Setup checks:**
   - VIN not carrying the sine (buffer not driving VIN)
   - VOUT off nominal
@@ -258,7 +264,7 @@ Powers VIN up (default `load_reg.vin`), then reads VOUT, VIN and the supply's V 
   - **Output levels and edges:** VOH / VOL, 10–90 % edge times (limited by the sample interval) and duty cycle.
   - **Chatter:** output edges per input cycle. More than 1 means it chatters.
 - **Plot:** input and output against time, and the transfer curve (output against input: the hysteresis loop).
-- **Setup checks:**
+- **Setup checks**, on every capture (a probe can slip mid-run):
   - the input swing isn't the sine's (probe not on TP6, J6 wrong)
   - EN_OUT doesn't switch (probe not on J8.2, EN_VDD unpowered)
 - **Options:**
@@ -281,9 +287,12 @@ Powers VIN up (default `load_reg.vin`), then reads VOUT, VIN and the supply's V 
   - `iin`: across R13, the input current (inrush)
   - `iout`: across R1, the output current
 - **Computes:** 10 % / 90 % times from the edge, which include the level shifter and the enable block. Also rise or fall time, settling within 2 %, and overshoot. For currents: the levels before and after, and the peak.
+- **Current resolution:** across the 0.1 Ω sense resistors on the AD2's 5 V range, one count is about 3 mA. A current step under 4 counts (about 12 mA) is reported as "under what the AD2 resolves", with no timings. That includes the quiescent current, so use `iq` for DC current. Inrush and load steps of 20 mA or more are measurable.
 - **Setup checks:**
   - VOUT already up before enabling (the enable path isn't controlling the LDO)
   - VOUT not reaching nominal
+  - VOUT or VREF not settled by the end of the capture (lengthen `--window-ms`)
+  - VOUT still above 20 % of nominal at the end of a disable edge
   - VREF off `vref_nominal`, if set
 - **Options:**
   - `--ch2 iin`

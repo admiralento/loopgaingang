@@ -361,7 +361,9 @@ def settling_analysis(
     final = float(tail.mean()) if len(tail) else nan
     level = v0 if reference == "pre" else final
     outside = np.nonzero(np.abs(f[i_step:i_stop] - level) > band)[0]
-    if not len(outside):
+    if i_stop <= i_step:
+        t_set = nan  # the step is in the last h samples: nothing after it to judge (the JS says 0)
+    elif not len(outside):
         t_set = 0.0
     else:
         i_last = i_step + int(outside[-1])
@@ -383,7 +385,7 @@ class SchmittResult:
     the edges in the capture). At 1 kHz into a 0-1.8 V sine, a 100 ns output delay shifts these by < 1 mV.
     edges_per_cycle: output rising edges per input cycle; > 1 means it chatters on each crossing.
 
-    voh / vol: output high / low levels (V), the 95th / 5th percentile of the output.
+    voh / vol: output high / low levels (V), the medians above / below the midpoint of the output's range.
     n_rise / n_fall: output edges found. input_cycles: sine cycles in the capture.
     For an inverting stage, vt_rise is the input level on the *falling* input crossing, so the
     hysteresis comes out negative.
@@ -440,7 +442,13 @@ def schmitt_analysis(ain, aout, sample_rate: float, frequency: float) -> Schmitt
     gives the thresholds; the median over all edges is reported.
     """
     vin, vout = np.asarray(ain, float), np.asarray(aout, float)
-    vol, voh = float(np.percentile(vout, 5)), float(np.percentile(vout, 95))
+    # Two-level split rather than 5th / 95th percentiles: those both land on one level when the
+    # output spends under 5 % of the time at the other (a threshold near a sine extreme).
+    lo_x, hi_x = float(np.percentile(vout, 0.5)), float(np.percentile(vout, 99.5))
+    split = (lo_x + hi_x) / 2
+    lows, highs = vout[vout <= split], vout[vout > split]
+    vol = float(np.median(lows)) if len(lows) else lo_x
+    voh = float(np.median(highs)) if len(highs) else hi_x
     mid = (vol + voh) / 2
     rise, fall = _crossings(vout, mid, True), _crossings(vout, mid, False)
 
@@ -585,3 +593,20 @@ def sine_fit(x, sample_rate: float, frequency: float) -> SineFit:
     dof = max(1, n - 4)  # 4 fitted parameters
     # x = a cos + b sin = Re((a - jb) e^{jwt}), hence the minus sign on the sine coefficient
     return SineFit(complex(coef[0], -coef[1]), float(coef[2]), float(np.sqrt(np.sum(resid**2) / dof)), n)
+
+
+def multi_sine_fit(x, sample_rate: float, frequencies) -> list[complex]:
+    """Phasors (V peak, same convention as sine_fit) of several tones fitted together, plus offset
+    and drift. Fitting jointly keeps each tone's leakage out of the others, e.g. so noise fitted
+    next to a strong tone doesn't include that tone.
+    """
+    x = np.asarray(x, float)
+    n = len(x)
+    t = (np.arange(n) - (n - 1) / 2) / sample_rate
+    cols = []
+    for f in frequencies:
+        w = 2 * np.pi * f * t
+        cols += [np.cos(w), np.sin(w)]
+    a = np.column_stack([*cols, np.ones(n), t])
+    coef, *_ = np.linalg.lstsq(a, x, rcond=None)
+    return [complex(coef[2 * k], -coef[2 * k + 1]) for k in range(len(frequencies))]

@@ -207,18 +207,32 @@ def run(bench: Bench, es: EnSineConfig) -> EnSineResult:
     ain, aout = first.channel(a.ref_channel), first.channel(a.vout_channel)
     r0 = results[0]
 
-    # setup checks: what the data says about the wiring (the run still saves what it measured)
-    swing_in = float(np.percentile(ain, 98) - np.percentile(ain, 2))
-    if abs(swing_in - (hi - lo)) > SWING_TOLERANCE * (hi - lo):
+    # setup checks on every capture: what the data says about the wiring (a probe can slip mid-run;
+    # the run still saves what it measured)
+    swing_bad, switch_bad = [], []
+    for k, (cap, r) in enumerate(zip(caps, results, strict=True), 1):
+        x = cap.channel(a.ref_channel)
+        swing_in = float(np.percentile(x, 98) - np.percentile(x, 2))
+        if abs(swing_in - (hi - lo)) > SWING_TOLERANCE * (hi - lo):
+            swing_bad.append((k, swing_in))
+        # EN_OUT swings rail to rail of EN_VDD (~VIN) when it works; under 30 % of that it isn't switching
+        if (r.voh - r.vol) < 0.3 * es.vin or r.n_rise == 0:
+            switch_bad.append((k, r))
+
+    def which(bad) -> str:
+        return f"capture {bad[0][0]}" if len(bad) == 1 else f"captures {', '.join(str(k) for k, _ in bad)}"
+
+    if swing_bad:
+        k, sw = swing_bad[0]
         issues.append(
-            f"scope {a.ref_channel} swings {swing_in:.2f} V but the sine is {hi - lo:.2f} V: is it on TP6 (EN_AIN), "
-            "and is J6 at 5-6 (EN_FG -> EN_AIN)?"
+            f"scope {a.ref_channel} swings {sw:.2f} V but the sine is {hi - lo:.2f} V ({which(swing_bad)}): is it "
+            "on TP6 (EN_AIN), and is J6 at 5-6 (EN_FG -> EN_AIN)?"
         )
-    # EN_OUT swings rail to rail of EN_VDD (~VIN) when it works; under 30 % of that it isn't switching
-    if (r0.voh - r0.vol) < 0.3 * es.vin or r0.n_rise == 0:
+    if switch_bad:
+        k, r = switch_bad[0]
         issues.append(
-            f"EN_OUT doesn't switch (scope {a.vout_channel} swings {r0.voh - r0.vol:.2f} V, {r0.n_rise} rising "
-            f"edges): is scope {a.vout_channel} on J8.2, and is EN_VDD powered (J1 9-11)?"
+            f"EN_OUT doesn't switch ({which(switch_bad)}: scope {a.vout_channel} swings {r.voh - r.vol:.2f} V, "
+            f"{r.n_rise} rising edges): is scope {a.vout_channel} on J8.2, and is EN_VDD powered (J1 9-11)?"
         )
     notes = []
     if not issues:

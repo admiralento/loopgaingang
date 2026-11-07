@@ -106,7 +106,10 @@ class LdoModel:
     # PSRR: VOUT/VIN = h_dc (1 + j f/fz) / (1 + j f/fp)
     psrr_h_dc: float = 1e-3  # -60 dB at low frequency
     psrr_fz: float = 5e3  # Hz, zero: rejection worsens above here as loop gain falls
-    psrr_fp: float = 2e6  # Hz, pole: |H| levels off again
+    psrr_fp: float = 2e6
+    vout_hum: tuple[float, float] | None = (
+        None  # (amplitude V, frequency Hz) of a tone on VOUT, e.g. mains  # Hz, pole: |H| levels off again
+    )
 
     def __post_init__(self) -> None:
         self.rng = np.random.default_rng(self.seed)
@@ -427,6 +430,9 @@ class SimAnalogDiscovery:
             vin = np.minimum(vin, m.psu_v - m.buffer_dropout)
         h = m.psrr_h(f)
         vout = m.vout_dc(vin_dc) + abs(h) * amp * np.sin(2 * math.pi * f * t + ph + np.angle(h))
+        if m.vout_hum is not None:  # not locked to the injected tone: its phase differs each capture
+            a_hum, f_hum = m.vout_hum
+            vout = vout + a_hum * np.sin(2 * math.pi * f_hum * t + float(m.rng.uniform(0, 2 * math.pi)))
         return self._put(vout + m.noise(n), vin + m.noise(n), rate, 0, False)
 
     def _dio_capture(self, rate, n, dio_trigger, pre, stimulus, force) -> Capture:

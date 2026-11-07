@@ -42,7 +42,7 @@ from typing import Protocol
 import numpy as np
 
 from ldo_bench import plotting
-from ldo_bench.analysis import sine_fit
+from ldo_bench.analysis import multi_sine_fit, sine_fit
 from ldo_bench.bench import Bench
 from ldo_bench.config import AD2_WAVEGEN_MAX_V, PsrrConfig
 from ldo_bench.instruments.base import ChannelSetup, InstrumentError
@@ -51,7 +51,9 @@ from ldo_bench.procedures.line_tran import _calibrate, _interlock, _vin_limit
 log = logging.getLogger(__name__)
 
 NAME = "psrr"
-FLOOR_SIGMA = 3.0  # a VOUT phasor smaller than this many noise sigmas counts as "not measured"
+FLOOR_SIGMA = 4.0  # a VOUT phasor smaller than this many noise sigmas counts as "not measured"
+# (4 sigma: pure noise passes as "measured" with p = exp(-8) ~ 0.03 % per point; 3 sigma was 1.1 %)
+OFF_BINS = 3  # off-frequency noise fits this many frequency steps (1 / capture length) either side
 MIN_INJECTION = 0.3  # VIN amplitude below this fraction of the target: the sine isn't reaching VIN
 SUMMARY_FREQS = (100.0, 1e3, 10e3, 100e3, 1e6)  # Hz, reported in summary.json when measured nearby
 
@@ -82,7 +84,18 @@ class Ad2SineFit:
 
     Each capture is fitted separately; the transfer VOUT/VIN is averaged as a complex number over
     the captures (coherent averaging: noise in VOUT averages down by sqrt(averages), the phase is
-    kept). The floors are FLOOR_SIGMA x the fit's amplitude uncertainty, also / sqrt(averages).
+    kept).
+
+    The floor is FLOOR_SIGMA x the largest of three estimates of the noise on one quadrature of
+    the averaged phasor, so that a tone near the test frequency (mains hum, 1/f noise) can't pass
+    for PSRR:
+    - white: the fit's residual, sigma * sqrt(2 / n) (assumes the residual is white);
+    - spread: how much VOUT/VIN scatters from capture to capture (free-running captures see an
+      unlocked tone at a different phase each time);
+    - off-frequency: tones fitted OFF_BINS frequency steps either side, jointly with the test tone.
+    Each is divided by sqrt(averages). Pickup locked to VIN (crosstalk, ground coupling) shows in
+    none of them: it is the one floor this can't see (a spectrum analyzer or a shorted-input
+    calibration run would).
     """
 
     name = "AD2 sine fit"
@@ -105,7 +118,7 @@ class Ad2SineFit:
         b, ps, a = self.bench, self.ps, self.bench.cfg.ad2
         # ps.cycles periods per capture, unless that needs more than max_sample_rate (then more cycles)
         rate = min(ps.max_sample_rate, ps.n_samples * frequency / ps.cycles)
-        h, vin_amp, sig_in, sig_out, dc = [], [], [], [], []
+        h, vin_amp, sig_in, sig_out, off, dc = [], [], [], [], [], []
         cap = None
         for _ in range(ps.averages):
             cap = b.scope.capture(
@@ -120,22 +133,31 @@ class Ad2SineFit:
                 timeout=ps.timeout,
                 force=True,  # free-running: the ratio needs no trigger
             )
-            fin = sine_fit(cap.channel(a.ref_channel), cap.sample_rate, frequency)
-            fout = sine_fit(cap.channel(a.vout_channel), cap.sample_rate, frequency)
+            vin_x, vout_x = cap.channel(a.ref_channel), cap.channel(a.vout_channel)
+            fin = sine_fit(vin_x, cap.sample_rate, frequency)
+            fout = sine_fit(vout_x, cap.sample_rate, frequency)
             h.append(fout.phasor / fin.phasor if fin.amplitude > 0 else complex("nan"))
             vin_amp.append(fin.amplitude)
             sig_in.append(fin.amplitude_noise)
             sig_out.append(fout.amplitude_noise)
             dc.append(fin.dc)
+            step = OFF_BINS * cap.sample_rate / len(vout_x)  # Hz
+            near = [f for f in (frequency - step, frequency + step) if f > 0]
+            fitted = multi_sine_fit(vout_x, cap.sample_rate, [frequency, *near])
+            off += [abs(p) ** 2 / 2 for p in fitted[1:]]  # per-quadrature variance of each off tone
         k = len(h)
         vin = float(np.mean(vin_amp))
         n = len(cap.ch1)
+        hs = np.array(h)
+        white = float(np.mean(sig_out))
+        spread = float(np.sqrt(np.sum(np.abs(hs - hs.mean()) ** 2) / (2 * (k - 1)))) * vin if k > 1 else 0.0
+        near_noise = float(np.sqrt(np.mean(off))) if off else 0.0
         # VIN is the phase reference (real); VOUT = averaged transfer x VIN amplitude
         return Tone(
             vin=complex(vin, 0.0),
-            vout=complex(np.mean(h)) * vin,
+            vout=complex(hs.mean()) * vin,
             vin_floor=FLOOR_SIGMA * float(np.mean(sig_in)) / math.sqrt(k),
-            vout_floor=FLOOR_SIGMA * float(np.mean(sig_out)) / math.sqrt(k),
+            vout_floor=FLOOR_SIGMA * max(white, spread, near_noise) / math.sqrt(k),
             vin_dc=float(np.mean(dc)),
             sample_rate=cap.sample_rate,
             cycles=frequency * n / cap.sample_rate,
