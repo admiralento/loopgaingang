@@ -133,10 +133,12 @@ Each run writes a folder under `results/<test>/`, e.g. `results/load-tran/202611
 ## Development
 
 ```
-uv run pytest -q             # check the exit code, not just the last line
-uv run ruff check src tests
-uv run ruff format src tests
+uv run poe verify            # the gate: format check, lint, both configs, tests (no hardware)
+uv run poe format            # format the code
+uv run poe                   # list all tasks
 ```
+
+Repo rules for people and AI agents are in [`AGENTS.md`](../AGENTS.md) at the repo root.
 
 - **Simulator:** every test runs end to end on it (`instruments/sim.py`), including deliberately miswired cases. Drivers are tested against fake serial / VISA links.
 - **Git:** work happens on the `ldo-bench` branch, one commit per step.

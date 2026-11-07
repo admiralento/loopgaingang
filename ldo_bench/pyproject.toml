@@ -29,9 +29,23 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "poethepoet>=0.49.0",
     "pytest>=9.2.0",
     "ruff>=0.17.4",
 ]
+
+# Task runner: `uv run poe <task>` (`uv run poe` lists them). Works the same on macOS and Windows.
+# None of these touch hardware: tests run on the simulator.
+[tool.poe.tasks]
+format = { cmd = "ruff format src tests", help = "Format the code" }
+format-check = { cmd = "ruff format --check src tests", help = "Check formatting without changing files" }
+lint = { cmd = "ruff check src tests", help = "Lint" }
+test = { cmd = "pytest -q", help = "Run the test suite (simulator and fake instruments, no hardware)" }
+check-configs = { sequence = [
+    { cmd = "ldo-bench check-config -c configs/jafwak.toml" },
+    { cmd = "ldo-bench check-config -c configs/demo_board.toml" },
+], help = "Validate both board configs" }
+verify = { sequence = ["format-check", "lint", "check-configs", "test"], help = "The gate: everything must pass before a commit" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

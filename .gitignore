@@ -29,9 +29,13 @@ fp-info-cache
 *.dsn
 *.ses
 
-# Exported BOM files
-*.xml
-*.csv
+# Exported BOM files (KiCad folders only: ldo_bench keeps CSV/XML data and fixtures)
+/LDO_Stable_JAFWAK/**/*.xml
+/LDO_Stable_JAFWAK/**/*.csv
+/TPS7A7001_Evaluation_Board/**/*.xml
+/TPS7A7001_Evaluation_Board/**/*.csv
+/Switched_R_Load_Bank/**/*.xml
+/Switched_R_Load_Bank/**/*.csv
 
 # Archived Backups (KiCad 6.0)
 **/*-backups/*.zip

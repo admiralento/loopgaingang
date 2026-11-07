@@ -175,14 +175,16 @@ results/
 ## Tests and tooling
 
 ```
-uv run pytest -q          # 174 tests, no hardware needed, ~5 s
-uv run ruff check src tests
-uv run ruff format src tests
+uv run poe verify         # the gate: format check, lint, both configs validated, 174 tests (~5 s, no hardware)
+uv run poe test           # just the tests
+uv run poe format         # format the code
 ```
+
+The tasks are defined in `[tool.poe.tasks]` in `pyproject.toml` (poethepoet, a dev dependency, so nothing is installed on the host and it works the same on Windows).
 
 - **Drivers** are tested against fake transports that record what was sent and answer like the instrument (`FakeSerial`, `FakeScope`).
 - **Procedures** run end to end on the simulator, including deliberately miswired cases.
-- **Before committing,** check pytest's exit code, not just the last lines of its output.
+- **Before committing,** run `uv run poe verify` and check its exit code, not just the last lines of its output.
 
 ## Recipes
 
