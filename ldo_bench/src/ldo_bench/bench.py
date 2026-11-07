@@ -20,7 +20,14 @@ from typing import Literal
 import numpy as np
 
 from ldo_bench.config import AD2_WAVEGEN_MAX_V, BenchConfig
-from ldo_bench.instruments.base import ChannelSetup, DcReading, InstrumentError, PowerSupply, Voltmeter
+from ldo_bench.instruments.base import (
+    ChannelSetup,
+    DcReading,
+    InstrumentError,
+    PowerSupply,
+    SupplyOutput,
+    Voltmeter,
+)
 from ldo_bench.loadbank import LoadBank
 
 log = logging.getLogger(__name__)
@@ -66,9 +73,18 @@ class Bench:
     every change is ramped in steps of psu.ramp_step with a short pause between them, then
     psu.settle_time. The load bank refuses codes above dut.i_max (see LoadBank).
 
-    `shutdown()` (also run on leaving `with Bench`) turns things off in this order: wavegen (both
-    channels) -> AD2 V+ -> load bank -> DIO released -> PSU output off and 0 V -> close the
-    instruments. Signals into the board go first, so nothing drives an unpowered DUT.
+    External reference (`vref_external=True`, `--vref ext`, needs [vref]): the PSU's other output
+    drives VREF_IN in place of the BGR (JP2 removed). It is set up with the supply and held at 0 V
+    (OUTP switches both outputs together) until a procedure calls `reference_on()` with VIN up; that
+    ramps it to vref.external_v and proves VOUT follows it. While it is on, VIN may not go more than
+    vref.above_vin below it, and anything that would take VIN away (`supply_off`, turning off the
+    wavegen that drives VIN) ramps the reference to 0 V first. `reference_on()` does nothing in the
+    normal (BGR) mode, so procedures call it unconditionally.
+
+    `shutdown()` (also run on leaving `with Bench`) turns things off in this order: external
+    reference 0 V -> wavegen (both channels) -> AD2 V+ -> load bank -> DIO released -> PSU output
+    off and 0 V -> close the instruments. Signals into the board go first, so nothing drives an
+    unpowered DUT.
 
     In simulation (`sim_model` set) `sleep` doesn't wait and wiring isn't asked about.
     `xscope_issue` holds why the optional cross-check scope is missing, if it was wanted.
@@ -85,7 +101,10 @@ class Bench:
         sim_model=None,
         assume_yes: bool = False,
         confirm: ConfirmFn | None = None,
+        vref_external: bool = False,
     ) -> None:
+        if vref_external and cfg.vref is None:
+            raise InstrumentError("an external reference needs a [vref] section in the config")
         self.cfg = cfg
         self.psu = psu
         self.dmm = dmm
@@ -103,6 +122,14 @@ class Bench:
         self._psu_on = False  # output enabled
         self._awg_on = False
         self.shutdown_errors: list[str] = []  # steps of the last shutdown() that failed
+        # external reference (see the class docstring)
+        self.vref_external = vref_external
+        self.vref_out: SupplyOutput | None = None  # the PSU output on VREF_IN, once set up
+        self._vref_on = False  # driving vref.external_v (not held at 0 V)
+        self.vref_proof: dict | None = None  # what reference_on() measured, for the run's records
+        # what VIN is now (V) and what drives it, so the reference never sits above it
+        self._vin_level: float | None = None
+        self._vin_from: Literal["psu", "wavegen"] | None = None
 
     @property
     def is_sim(self) -> bool:
@@ -165,12 +192,41 @@ class Bench:
             self.sim_model.psu_to = psu_to
             self.sim_model.ch1_probe = ch1_probe
             self.sim_model.en_pin = en_pin
+        if self.vref_external:
+            lines = [*lines, *self.vref_wiring()]
+            if self.sim_model is not None:  # the simulated operator followed the instructions
+                self.sim_model.vref_wired = True
+                self.sim_model.jp2_fitted = False
         text = "\n".join([f"Wiring for {title}:", *(f"  - {s}" for s in lines)])
         if self.is_sim or self.assume_yes or self._confirm is None:
             log.info(text)  # not asking: still record what the run assumed
-            return
-        if not self._confirm(f"{text}\nIs the bench wired like this? (--yes skips this)"):
+        elif not self._confirm(f"{text}\nIs the bench wired like this? (--yes skips this)"):
             raise KeyboardInterrupt("wiring not confirmed")
+        if self.vref_external and not self.is_sim:
+            self._confirm_jp2()
+
+    def vref_wiring(self) -> list[str]:
+        """Wiring lines for the external reference."""
+        n = self.cfg.vref.psu_channel
+        return [
+            "JP2 (VREF) REMOVED: VREF_OUT (the BGR) must not be joined to VREF_IN",
+            f"PSU OUT{n} + -> VREF_IN (JP2's VREF_IN pin), OUT{n} - -> GND "
+            f"({self.cfg.vref.external_v} V, set by this run)",
+        ]
+
+    def _confirm_jp2(self) -> None:
+        """Ask, every run and even with --yes, that JP2 is out: nothing can measure it beforehand."""
+        n = self.cfg.vref.psu_channel
+        question = (
+            f"External reference: is JP2 removed, with PSU OUT{n} on VREF_IN? If JP2 is still fitted, "
+            f"OUT{n} back-drives the BGR output. (Asked every run; --yes doesn't skip it.)"
+        )
+        if self._confirm is None:
+            raise InstrumentError(
+                "--vref ext needs a person to confirm JP2 is removed, and this run can't ask (no prompt)"
+            )
+        if not self._confirm(question):
+            raise KeyboardInterrupt("JP2 removal not confirmed")
 
     # --- Supplies -----------------------------------------------------------
     def _ensure_psu(self) -> None:
@@ -181,6 +237,12 @@ class Bench:
         self.psu.output(False)
         self.psu.setup(current_limit=p.current_limit, ovp=p.ovp, voltage_range=p.voltage_range)
         self.psu.set_voltage(0.0)
+        if self.vref_external:
+            vr = self.cfg.vref
+            if not hasattr(self.psu, "aux"):
+                raise InstrumentError(f"the supply ({self.psu.idn}) has no second output for the reference")
+            self.vref_out = self.psu.aux(vr.psu_channel)
+            self.vref_out.setup(current_limit=vr.current_limit, ovp=vr.ovp)
         self._psu_ready = True
 
     def _psu_ramp(self, target: float, limit: float) -> None:
@@ -216,22 +278,29 @@ class Bench:
         on from its front panel.
         """
         self._ensure_psu()
+        self.reference_off()
         self.psu.output(False)
         self._psu_on = False
+        self._vin_level, self._vin_from = None, None
 
     def vin_from_psu(self, volts: float) -> None:
         """PSU drives the LDO's VIN directly: ramp to `volts` (V), at most min(dut.vin_max, psu.v_max)."""
+        self._vref_allows_vin(volts)
         self._psu_ramp(volts, min(self.cfg.dut.vin_max, self.cfg.psu.v_max))
+        self._vin_level, self._vin_from = volts, "psu"
 
     def psu_output(self, volts: float) -> None:
         """PSU with nothing but a meter on it (psu-check): only psu.v_max applies."""
+        self._no_reference("psu_output")
         self._psu_ramp(volts, self.cfg.psu.v_max)
 
     def buffer_rail(self, volts: float) -> None:
         """PSU drives the BUF634 supply (VS_BUFF / VDD_BUF) during line transient and PSRR.
 
-        Only psu.v_max applies: the buffer rail doesn't reach VIN (the wavegen sets VIN).
+        Only psu.v_max applies: the buffer rail doesn't reach VIN (the wavegen sets VIN). Refused
+        while the external reference is on (lowering the rail could pull VIN below it).
         """
+        self._no_reference("buffer_rail")
         self._psu_ramp(volts, self.cfg.psu.v_max)
 
     def vin_from_wavegen(self, volts: float) -> None:
@@ -240,8 +309,10 @@ class Bench:
         limit = min(self.cfg.dut.vin_max, AD2_WAVEGEN_MAX_V)
         if not 0 <= volts <= limit:
             raise InstrumentError(f"refusing to drive VIN to {volts} V from the wavegen (limit {limit} V)")
+        self._vref_allows_vin(volts)
         self.awg.set_dc(self.cfg.ad2.wavegen_channel, volts)
         self._awg_on = True
+        self._vin_level, self._vin_from = volts, "wavegen"
 
     def vin_sine_from_wavegen(self, *, dc: float, amplitude: float, frequency: float) -> None:
         """Wavegen sine (dc +/- amplitude) onto VIN through the BUF634 (PSRR). Its peak obeys dut.vin_max.
@@ -254,8 +325,10 @@ class Bench:
             raise InstrumentError(
                 f"refusing to drive VIN with a {lo:.3f}..{hi:.3f} V sine from the wavegen (limit 0..{limit} V)"
             )
+        self._vref_allows_vin(lo)
         self.awg.set_sine(self.cfg.ad2.wavegen_channel, frequency=frequency, low=lo, high=hi)
         self._awg_on = True
+        self._vin_level, self._vin_from = lo, "wavegen"
 
     def enable_logic(self, on: bool) -> None:
         """AD2 V+ on V_33 (the enable level shifters' 3.3 V side), if the config says the AD2 supplies it.
@@ -289,9 +362,129 @@ class Bench:
         self._awg_on = True
 
     def wavegen_off(self, channel: int | None = None) -> None:
-        """Turn off a wavegen channel (default ad2.wavegen_channel)."""
-        self.awg.off(self.cfg.ad2.wavegen_channel if channel is None else channel)
+        """Turn off a wavegen channel (default ad2.wavegen_channel).
+
+        If that channel drives VIN (through the buffer), the external reference goes to 0 V first.
+        """
+        ch = self.cfg.ad2.wavegen_channel if channel is None else channel
+        drives_vin = ch == self.cfg.ad2.wavegen_channel and self._vin_from == "wavegen"
+        if drives_vin:
+            self.reference_off()
+        self.awg.off(ch)
         self._awg_on = False
+        if drives_vin:
+            self._vin_level, self._vin_from = 0.0, None
+
+    # --- External reference (--vref ext) -----------------------------------
+    def _no_reference(self, what: str) -> None:
+        if self._vref_on:
+            raise InstrumentError(f"refusing {what} while the external reference is on (reference_off first)")
+
+    def _vref_allows_vin(self, vin: float) -> None:
+        """Refuse a VIN (V) more than vref.above_vin below the external reference while it's on."""
+        if not self._vref_on:
+            return
+        vr = self.cfg.vref
+        if vin < vr.external_v - vr.above_vin - 1e-9:
+            raise InstrumentError(
+                f"refusing VIN = {vin:.3f} V with the external reference at {vr.external_v} V on VREF_IN "
+                f"(VIN may be at most {vr.above_vin} V below it)"
+            )
+
+    def _vref_ramp(self, target: float) -> None:
+        """Ramp the reference output to `target` (V) in psu.ramp_step steps, at most vref.v_max."""
+        vr = self.cfg.vref
+        if not 0 <= target <= vr.v_max + 1e-9:
+            raise InstrumentError(f"refusing to program VREF_IN to {target} V (limit {vr.v_max} V)")
+        out = self.vref_out
+        v = out.get_voltage_setpoint()
+        step = self.cfg.psu.ramp_step
+        while abs(target - v) > 1e-9:
+            v = min(target, v + step) if target > v else max(target, v - step)
+            out.set_voltage(v)
+        got = out.get_voltage_setpoint()
+        if abs(got - target) > SETPOINT_TOLERANCE:
+            raise InstrumentError(
+                f"the reference output (OUT{out.channel}) reads {got:.4f} V after programming {target:.4f} V"
+            )
+        self.sleep(vr.settle_time)
+
+    def reference_on(self) -> None:
+        """External reference mode: ramp VREF_IN to vref.external_v and prove VOUT follows it.
+
+        Call with VIN up and the LDO enabled. Does nothing in BGR mode, or if it's already on.
+        The proof steps the reference down by vref.proof_step and back; VOUT (AD2 scope on VOUT)
+        must move by at least vref.proof_follow of it. If it doesn't, the reference goes back to
+        0 V and the run stops: JP2 is probably still fitted (the BGR holding VREF_IN), or the
+        reference isn't wired to VREF_IN.
+        """
+        if not self.vref_external or self._vref_on:
+            return
+        vr = self.cfg.vref
+        if self._vin_level is None or self.vref_out is None or not self._psu_on:
+            raise InstrumentError(
+                "the external reference needs VIN up first (it would drive an unpowered chip)"
+            )
+        if vr.external_v > self._vin_level + vr.above_vin + 1e-9:
+            raise InstrumentError(
+                f"refusing the external reference at {vr.external_v} V with VIN at {self._vin_level:.3f} V "
+                f"(at most vref.above_vin = {vr.above_vin} V above VIN)"
+            )
+        log.info("External reference: OUT%d -> %.4f V on VREF_IN ...", self.vref_out.channel, vr.external_v)
+        self._vref_ramp(vr.external_v)
+        self._vref_on = True
+        v_hi = self._vout_now()
+        self._vref_ramp(vr.external_v - vr.proof_step)
+        v_lo = self._vout_now()
+        self._vref_ramp(vr.external_v)
+        moved = v_hi - v_lo
+        self.vref_proof = {
+            "vout_at_external_v": v_hi,
+            "vout_at_step_v": v_lo,
+            "step_v": vr.proof_step,
+            "vout_moved_v": moved,
+        }
+        if moved < vr.proof_follow * vr.proof_step:
+            self.reference_off()
+            raise InstrumentError(
+                f"VOUT moved {moved * 1e3:.1f} mV when the external reference stepped {vr.proof_step * 1e3:.0f} mV "
+                f"(needs {vr.proof_follow:.0%}): the reference isn't setting VOUT. Stopping: is JP2 still "
+                f"fitted (then OUT{self.vref_out.channel} is back-driving the BGR), is OUT{self.vref_out.channel} "
+                "on VREF_IN, and is the LDO enabled?"
+            )
+        log.info(
+            "External reference proven: VOUT moved %.1f mV for a %.0f mV step",
+            moved * 1e3,
+            vr.proof_step * 1e3,
+        )
+
+    def reference_off(self) -> None:
+        """Ramp the external reference to 0 V (it stays connected, held at 0 V). Safe in any mode."""
+        if self.vref_out is None:
+            return
+        if self._psu_on:
+            self._vref_ramp(0.0)
+        else:
+            self.vref_out.set_voltage(0.0)
+        self._vref_on = False
+
+    def _vout_now(self) -> float:
+        """VOUT (V) on the AD2's VOUT channel, averaged over 0.1 s."""
+        vout, _ = self.measure_dc(0.1)
+        return vout.mean
+
+    def vref_info(self) -> dict:
+        """What drove VREF_IN in this run, for summary.json / meta.json."""
+        vr = self.cfg.vref
+        info: dict = {"source": "external" if self.vref_external else "bgr"}
+        if vr is not None and vr.bgr_measured is not None:
+            info["bgr_measured_v"] = vr.bgr_measured
+        if self.vref_external:
+            info["external_v"] = vr.external_v
+            info["psu_channel"] = vr.psu_channel
+            if self.vref_proof is not None:
+                info["proof"] = self.vref_proof
+        return info
 
     # --- Measurements -------------------------------------------------------
     def scope_setups(self) -> dict[int, ChannelSetup]:
@@ -365,9 +558,10 @@ class Bench:
 
     # --- Shutdown -----------------------------------------------------------
     def shutdown(self) -> None:
-        """Wavegen off, AD2 V+ off, load off, DIO released, PSU off, close. Each step runs even if an
+        """Reference 0 V, wavegen off, AD2 V+ off, load off, DIO released, PSU off, close. Each step runs even if an
         earlier one fails (failures are logged). Safe to call more than once."""
         steps: list[tuple[str, Callable[[], None]]] = [
+            ("external reference 0 V", lambda: self.vref_out.set_voltage(0.0) if self.vref_out else None),
             ("wavegen off", lambda: self.awg.off(self.cfg.ad2.wavegen_channel)),
             ("wavegen 2 off", lambda: self.awg.off(2 if self.cfg.ad2.wavegen_channel == 1 else 1)),
             ("AD2 V+ off", lambda: self.scope.set_vplus(None) if hasattr(self.scope, "set_vplus") else None),
@@ -386,7 +580,8 @@ class Bench:
             except Exception as e:  # keep going: the remaining steps matter more
                 log.error("shutdown: %s failed: %s", name, e)
                 self.shutdown_errors.append(f"{name}: {e}")
-        self._psu_on = self._awg_on = self._psu_ready = False
+        self._psu_on = self._awg_on = self._psu_ready = self._vref_on = False
+        self._vin_level, self._vin_from = None, None
 
 
 def open_bench(
@@ -399,6 +594,7 @@ def open_bench(
     confirm: ConfirmFn | None = None,
     use_dmm: bool = True,
     use_xscope: bool = False,
+    vref_external: bool = False,
 ) -> Bench:
     """Open every instrument the config asks for and return a Bench (use it in a `with` block).
 
@@ -407,9 +603,12 @@ def open_bench(
     use_dmm: open the [dmm] if it's enabled (False for --no-dmm and tests that don't use it).
     use_xscope: also open the [xscope] cross-check scope (only the transient tests use it). If it
     can't be opened, the run continues without it and Bench.xscope_issue says why.
+    vref_external: drive VREF_IN from the PSU's other output ([vref]) instead of the BGR.
     If any required instrument fails to open, the ones already opened are closed and the error
     is re-raised.
     """
+    if vref_external and cfg.vref is None:  # before anything is opened
+        raise InstrumentError("an external reference needs a [vref] section in the config")
     want_dmm = use_dmm and cfg.dmm is not None and cfg.dmm.enabled
     want_xscope = use_xscope and cfg.xscope is not None and cfg.xscope.enabled
     if sim:
@@ -428,6 +627,7 @@ def open_bench(
             xscope=SimXScope(sim_ad2) if want_xscope else None,
             sim_model=model,
             assume_yes=True,
+            vref_external=vref_external,
         )
 
     from ldo_bench.instruments.discovery import Finder, open_ad2, open_dmm, open_psu, open_xscope
@@ -471,6 +671,15 @@ def open_bench(
                 log.debug("close after failed open: %s", e)
         raise
     log.info("Instruments ready (%.1f s)", time.monotonic() - t0)
-    bench = Bench(cfg, psu, ad2, dmm=dmm, xscope=xscope, assume_yes=assume_yes, confirm=confirm)
+    bench = Bench(
+        cfg,
+        psu,
+        ad2,
+        dmm=dmm,
+        xscope=xscope,
+        assume_yes=assume_yes,
+        confirm=confirm,
+        vref_external=vref_external,
+    )
     bench.xscope_issue = xscope_issue
     return bench

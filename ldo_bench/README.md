@@ -13,6 +13,7 @@ Bench automation for characterizing our LDO (the JAFWAK board) and the TPS7A7001
 | Enable thresholds | `enable-sine` | enable comparator VT+, VT-, hysteresis (JAFWAK) |
 | Startup | `enable-startup` | VOUT / VREF / current after the enable edge (JAFWAK) |
 | Bench checks | `discover`, `psu-check`, `loadbank-check`, `smoke` | instruments found, supply accuracy, load bank wiring, quick power-up |
+| BGR vs external reference | any DC, transient, psrr or iq test with `--vref ext`, then `compare` | the same test with 1.204 V on VREF_IN in place of the BGR (JP2 removed), side by side with the BGR run |
 
 **Docs:**
 - [docs/tests.md](docs/tests.md): each test's wiring, what it does, what it computes, its options.
@@ -36,7 +37,7 @@ Bench automation for characterizing our LDO (the JAFWAK board) and the TPS7A7001
    ```
    cd ldo_bench
    uv sync
-   uv run poe verify         # the gate: lint, both configs and 263 tests, no hardware needed
+   uv run poe verify         # the gate: lint, both configs and 297 tests, no hardware needed
    ```
 3. **Try it on the simulator** (no hardware; prints a SIMULATED report and saves nothing):
    ```
@@ -70,6 +71,8 @@ uv run ldo-bench psrr           -c configs/jafwak.toml       # --fstart 100 --fs
 uv run ldo-bench iq             -c configs/jafwak.toml       # --method series --rail bgr
 uv run ldo-bench enable-sine    -c configs/jafwak.toml       # --freq 1e3
 uv run ldo-bench enable-startup -c configs/jafwak.toml       # --ch2 iin
+uv run ldo-bench load-reg -c configs/jafwak.toml --vref ext  # JP2 removed: PSU OUT2 on VREF_IN
+uv run ldo-bench compare results/load-reg/<bgr run> results/load-reg/<extref run>
 ```
 
 Every command also takes:
@@ -78,6 +81,8 @@ Every command also takes:
 - `--yes`: skip the wiring prompt
 - `-v`: debug log
 - `--psu` / `--ad-serial`: pick an instrument when several are connected
+
+The DC, transient, psrr and iq tests also take `--vref ext`. It drives VREF_IN from the supply's second output in place of the BGR; see [tests.md](docs/tests.md#external-reference-bgr-vs---vref-ext-jafwak).
 
 ## Configs
 
@@ -99,7 +104,11 @@ Command-line options go through the same checks.
 - **VIN margin:** with VIN driven through the buffer, every limit check keeps the AD2's measurement error (about 20 mV at 1.9 V, an unverified datasheet figure) below `dut.vin_max`.
 - **OVP:** if the supply rejects the OVP setting, the run stops.
 - **psrr peak:** psrr stops if the measured VIN peak goes over that margin.
-- **Shutdown:** however a run ends (finished, error, Ctrl-C), everything is switched off in order: wavegen, AD2 V+, load bank, DIO, supply.
+- **External reference (`--vref ext`):**
+  - **Prompt:** it asks every run whether JP2 is removed, even with `--yes`, since the BGR mustn't be back-driven.
+  - **Turn-on:** the reference comes on only after VIN, then the run proves VOUT follows a 20 mV step (it stops if not: JP2 is still in).
+  - **Limits:** it's never more than 0.3 V above VIN, and it goes to 0 V before VIN does.
+- **Shutdown:** however a run ends (finished, error, Ctrl-C), everything is switched off in order: external reference, wavegen, AD2 V+, load bank, DIO, supply.
 
 ## Results: real data only
 
@@ -129,6 +138,7 @@ Each run writes a folder under `results/<test>/`, e.g. `results/load-tran/202611
 | psu-check, loadbank-check, load-reg, line-reg, load-tran (demo board) | yes, valid results in [bench-log.md](docs/bench-log.md) |
 | E3648A over GPIB (UsbGpib), 34401A over RS-232, AD2 DC / DIO / triggered capture | yes |
 | line-tran, psrr, iq, enable-sine, enable-startup | simulator only |
+| `--vref ext` (PSU OUT2 on VREF_IN) and `compare` | simulator only |
 | 54621A, supply over RS-232, Prologix adapters | simulator / fake instruments only |
 | any JAFWAK measurement | not yet |
 

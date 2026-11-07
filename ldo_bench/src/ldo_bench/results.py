@@ -2,7 +2,7 @@
 
 Layout (the root is --out, default `results`):
 
-results/<test>/<stamp>_<dut>_<test>[_SIM][_INVALID]/
+results/<test>/<stamp>_<dut>_<test>[_extref][_SIM][_INVALID]/
     e.g. results/load-reg/20261106-143012_JAFWAK_load-reg/
     data.csv      one row per measurement point
     *.csv         extra tables some tests write
@@ -13,7 +13,9 @@ results/latest.png, results/<test>/latest.png, results/<test>/latest_full.png, r
     copies of the newest run's plots (see RunDir.publish_latest)
 
 <stamp> is the local start time YYYYmmdd-HHMMSS; <dut> is dut.name made filename-safe.
+_extref: run with --vref ext (external reference on VREF_IN, not the BGR).
 _SIM: made with --sim --save-sim. _INVALID: the test found a setup problem.
+results/compare/<stamp>_<dut>_<test>_compare/ holds `ldo-bench compare` output (see compare.py).
 """
 
 from __future__ import annotations
@@ -71,8 +73,8 @@ class RunDir:
     """One run's folder, created on construction (see the module docstring for the layout).
 
     root: the results folder; test: the test name (subfolder and suffix); cfg: the validated
-    config (copied into meta.json); config_path: the TOML file it came from; simulated / invalid
-    add _SIM / _INVALID to the folder name.
+    config (copied into meta.json); config_path: the TOML file it came from; tag (e.g. 'extref')
+    adds _<tag>; simulated / invalid add _SIM / _INVALID to the folder name.
     """
 
     def __init__(
@@ -84,6 +86,7 @@ class RunDir:
         config_path: Path | None = None,
         simulated: bool = False,
         invalid: bool = False,
+        tag: str = "",
     ) -> None:
         self.started = datetime.now()
         self.root = Path(root)
@@ -92,7 +95,11 @@ class RunDir:
         self.config_path = config_path
         stamp = self.started.strftime("%Y%m%d-%H%M%S")
         # never mistake a simulated run, or one with setup problems, for a valid measurement
-        suffix = ("_SIM" if simulated else "") + ("_INVALID" if invalid else "")
+        suffix = (
+            (f"_{_slug(tag)}" if tag else "")
+            + ("_SIM" if simulated else "")
+            + ("_INVALID" if invalid else "")
+        )
         # one folder per test: results/load-reg/..., results/line-tran/...
         # never overwrite an earlier run: a second run in the same second gets <stamp>-2, -3, ...
         k = 1

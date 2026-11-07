@@ -2,7 +2,7 @@
 
 | Instrument | Role | How we connect it | Hardware-tested |
 |---|---|---|---|
-| Agilent E3648A (or E3638A) | VIN, or the BUF634 rail in line-tran / psrr | GPIB through a XyphroLabs UsbGpib adapter | yes (GPIB) |
+| Agilent E3648A (or E3638A) | VIN, or the BUF634 rail in line-tran / psrr; OUT2 on VREF_IN with `--vref ext` | GPIB through a XyphroLabs UsbGpib adapter | yes (GPIB); OUT2 as the reference: not yet |
 | Digilent Analog Discovery 2 | scope (VOUT, VIN / trigger), W1 stimulus, DIO load bank and enable, V+ | USB (WaveForms runtime) | DC, DIO, triggered capture: yes. Digital trigger, sine, V+: not yet |
 | Agilent 34401A | VOUT in the DC tests; Iq | RS-232 through an FTDI USB-serial adapter | yes (RS-232, DC volts) |
 | Agilent 54621A | optional cross-check of every transient edge | RS-232 or GPIB | not yet |
@@ -53,7 +53,7 @@ Each scan runs once per run, and a port that one instrument has claimed is never
   - **On:** connected to the instrument and visible on USB.
   - **Blinking:** the supply is off or its GPIB port is disabled. Invisible on USB.
   - **Off:** no USB power.
-- **E3648A outputs:** it's a dual-output supply. `psu.channel` picks OUT1 or OUT2, and the other output is held at 0 V.
+- **E3648A outputs:** it's a dual-output supply. `psu.channel` picks OUT1 or OUT2, and the other output is held at 0 V. With `--vref ext` the other output drives JAFWAK's VREF_IN (`[vref]`), with its own 5 mA limit and OVP. `OUTP` switches both outputs together, so it sits at 0 V until the Bench turns the reference on.
 - **Before the output turns on:** the current limit (`psu.current_limit`) and OVP (`psu.ovp`, which must be above `psu.v_max`) are set first.
 - **Accuracy** (measured with `psu-check` on 2026-11-06):
   - **Output:** within 1.2 mV of the setpoint over 0.5–5 V.

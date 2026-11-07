@@ -20,6 +20,9 @@ matching field instead:
   dmm_probe  what the DMM is on: "vout", "psu" (supply terminals), "shunt" (across R13),
              "series" (in series with a rail, current mode) or "open"
   en_pin     the AD2 DIO driving the enable path, None if EN is tied on
+  vref_wired the PSU's second output is wired to VREF_IN (external reference run)
+  jp2_fitted JP2 joins the BGR to VREF_IN; with it fitted the BGR sets the reference (and a
+             wired second output back-drives it: bgr_backdriven records that it happened)
 Fake instruments (SimPowerSupply, SimAnalogDiscovery, SimDmm, SimXScope) read and
 write this shared state, so e.g. a DIO write changes the load the PSU sees.
 """
@@ -103,6 +106,11 @@ class LdoModel:
     dmm_offset_v: float = 2e-6  # V, thermal EMF / offset on the 100 mV range (the iq zero removes it)
     dmm_noise_v: float = 0.15e-6  # V rms, DMM noise on the shunt / open readings
     dmm_noise_a: float = 5e-9  # A rms, DMM noise in current mode
+    # external reference (JAFWAK JP2 / VREF_IN)
+    vref_out_v: float = 0.0  # V, setpoint of the PSU's second output
+    vref_wired: bool = False
+    jp2_fitted: bool = True
+    bgr_backdriven: bool = False
     # PSRR: VOUT/VIN = h_dc (1 + j f/fz) / (1 + j f/fp)
     psrr_h_dc: float = 1e-3  # -60 dB at low frequency
     psrr_fz: float = 5e3  # Hz, zero: rejection worsens above here as loop gain falls
@@ -165,6 +173,13 @@ class LdoModel:
         )
 
     @property
+    def reference(self) -> float:
+        """What the regulator follows (V): the BGR (vout_nominal), or the external reference with JP2 out."""
+        if self.vref_wired and not self.jp2_fitted:
+            return self.vref_out_v if self.psu_on else 0.0
+        return self.vout_nominal
+
+    @property
     def enabled(self) -> bool:
         """LDO enabled: EN tied on (en_pin None) or its DIO driven high."""
         return self.en_pin is None or bool(self.dio.get(self.en_pin, False))
@@ -178,11 +193,12 @@ class LdoModel:
         g = self.conductance() if g is None else g
         if vin <= 0 or not self.enabled:
             return 0.0
-        v = self.vout_nominal
+        ref = self.reference
+        v = ref
         for _ in range(4):  # load current depends on vout; iterate to a fixed point
             i = v * g
             # line regulation referenced to VIN = VOUT + 0.5 V
-            vreg = self.vout_nominal + self.line_reg * (vin - self.vout_nominal - 0.5) - self.r_out * i
+            vreg = ref + self.line_reg * (vin - ref - 0.5) - self.r_out * i
             vdrop = vin - self.dropout - self.r_dropout * i
             v = max(0.0, min(vreg, vdrop))
         return v
@@ -289,8 +305,38 @@ class SimPowerSupply:
         buffer_iq = 1.5e-3 if self.m.awg_v else 0.0  # A, the BUF634's own supply current
         return self.m.load_current() + self.m.iq + buffer_iq
 
+    def aux(self, channel: int) -> SimSupplyOutput:
+        return SimSupplyOutput(self.m, channel)
+
     def close(self) -> None:
         pass
+
+
+class SimSupplyOutput:
+    """SupplyOutput stand-in: the sim E3648A's second output, wired to VREF_IN when m.vref_wired."""
+
+    def __init__(self, model: LdoModel, channel: int) -> None:
+        self.m = model
+        self.channel = channel
+        self.current_limit = 0.0
+
+    def setup(self, *, current_limit: float, ovp: float | None) -> None:
+        self.current_limit = current_limit
+        self.set_voltage(0.0)
+
+    def set_voltage(self, volts: float) -> None:
+        self.m.vref_out_v = volts
+        if self.m.vref_wired and self.m.jp2_fitted and volts > 0:
+            self.m.bgr_backdriven = True
+
+    def get_voltage_setpoint(self) -> float:
+        return self.m.vref_out_v
+
+    def measure_voltage(self) -> float:
+        return self.m.vref_out_v * (1 + self.m.psu_readback_gain) if self.m.psu_on else 0.0
+
+    def measure_current(self) -> float:
+        return 0.0
 
 
 class SimAnalogDiscovery:

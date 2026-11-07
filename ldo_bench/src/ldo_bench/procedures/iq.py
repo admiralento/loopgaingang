@@ -293,6 +293,12 @@ def run(bench: Bench, iq: IqConfig) -> IqResult:
         bench.enable_logic(True)
         bench.set_enable(True)
 
+    if bench.vref_external:
+        # --vref ext: the reference comes on (and is proven) with VIN up and the LDO enabled, before
+        # the load check and the sweep
+        bench.vin_from_psu(iq.vin_stop)
+        bench.reference_on()
+
     # shunt: prove the meter sees the current through R13 by adding a known load once
     check = None
     if shunt and iq.check_code and "enabled" in iq.states:
@@ -332,6 +338,11 @@ def run(bench: Bench, iq: IqConfig) -> IqResult:
     # Leads the other way round read negative. The data stays as measured (no sign flip): it's a
     # setup problem to fix, then run again.
     notes: list[str] = []
+    if bench.vref_external:
+        notes.append(
+            "external reference: the current into VREF_IN comes from the reference output, not VIN, so "
+            "it isn't included; the BGR is still powered from VIN and is"
+        )
     ref = (
         check["measured"]
         if check

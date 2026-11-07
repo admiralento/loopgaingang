@@ -106,6 +106,7 @@ def run(bench: Bench, lr: LoadRegConfig) -> LoadRegResult:
 
     bank.off()
     bench.vin_from_psu(lr.vin)
+    bench.reference_on()  # --vref ext only: external reference on VREF_IN, proven to set VOUT
     rows = []
     for k, code in enumerate(codes):
         bank.set(code)

@@ -118,6 +118,37 @@ class PowerSupply(Protocol):
 
 
 @runtime_checkable
+class SupplyOutput(Protocol):
+    """A second output of the same supply (E3648A OUT2), e.g. the external reference on VREF_IN.
+
+    It switches on and off with the main output (OUTP is global on the E3648A), so it has no
+    output() of its own: it is held at 0 V whenever it shouldn't be driving.
+    """
+
+    channel: int  # 1-based output number
+
+    def setup(self, *, current_limit: float, ovp: float | None) -> None:
+        """Current limit (A) and OVP (V, None for none) on this output, then 0 V. Raises if refused."""
+        ...
+
+    def set_voltage(self, volts: float) -> None:
+        """Program this output's setpoint (V)."""
+        ...
+
+    def get_voltage_setpoint(self) -> float:
+        """This output's programmed setpoint (V), read back."""
+        ...
+
+    def measure_voltage(self) -> float:
+        """The supply's readback of this output (V)."""
+        ...
+
+    def measure_current(self) -> float:
+        """The supply's readback of this output's current (A)."""
+        ...
+
+
+@runtime_checkable
 class Oscilloscope(Protocol):
     """Two-channel scope (the AD2's analog inputs). Channels are 1 and 2."""
 

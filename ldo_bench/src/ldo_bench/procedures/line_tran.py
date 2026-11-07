@@ -352,6 +352,7 @@ def run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig) -> LineTranResult:
     w_hi, v_hi, cal_hi = _calibrate(bench, lt.vin_high)
     log.info("VIN levels %.4f / %.4f V (W1 %.4f / %.4f V)", v_lo, v_hi, w_lo, w_hi)
     bench.vin_from_wavegen(w_lo)
+    bench.reference_on()  # --vref ext only: after the interlock and calibration, with VIN up
     vout_dc, _ = bench.measure_dc(0.05)
     setup_issues = [
         i for i in (cal_lo, cal_hi, bench.vout_issue(vout_dc.mean, source=f"scope {a.vout_channel}")) if i

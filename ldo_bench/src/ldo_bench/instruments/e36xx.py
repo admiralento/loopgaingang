@@ -151,9 +151,63 @@ class AgilentE36xx:
         self._select()
         return float(self.t.query("MEAS:CURR?"))
 
+    def aux(self, channel: int) -> E36xxOutput:
+        """Another output of this supply (SupplyOutput), e.g. OUT2 for an external reference."""
+        if channel == self.channel or not 1 <= channel <= self.n_outputs:
+            raise InstrumentError(
+                f"{self.model} has no spare output {channel} (outputs 1..{self.n_outputs}, "
+                f"OUT{self.channel} drives the DUT)"
+            )
+        return E36xxOutput(self, channel)
+
     def close(self) -> None:
         try:
             if self.serial:
                 self.t.write("SYST:LOC")  # hand the front panel back
         finally:
             self.t.close()
+
+
+class E36xxOutput:
+    """SupplyOutput: one more output of an E3648A, sharing the supply's connection.
+
+    Every command selects this output first (INST:SEL), and the supply's own methods select theirs,
+    so the two can be used in any order. OUTP ON / OFF stays with the main supply object.
+    """
+
+    def __init__(self, supply: AgilentE36xx, channel: int) -> None:
+        self.supply = supply
+        self.channel = channel
+
+    def setup(self, *, current_limit: float, ovp: float | None) -> None:
+        s = self.supply
+        s._select(self.channel)
+        s.t.write("VOLT 0")
+        s.t.write(f"CURR {current_limit:.4f}")
+        s._check(f"setting the OUT{self.channel} current limit")
+        if ovp is not None:
+            s.t.write(f"VOLT:PROT {ovp:.3f}")
+            s.t.write("VOLT:PROT:STAT ON")
+            errs = s._errors()
+            if errs:
+                raise InstrumentError(
+                    f"{s.model} did not accept OVP {ovp:.3f} V on OUT{self.channel} ({'; '.join(errs)}). "
+                    "Stopping: set vref.ovp to a level the supply accepts, or remove it"
+                )
+        log.info("PSU %s OUT%d set up: I limit %.4f A, OVP %s", s.model, self.channel, current_limit, ovp)
+
+    def set_voltage(self, volts: float) -> None:
+        self.supply._select(self.channel)
+        self.supply.t.write(f"VOLT {volts:.4f}")
+
+    def get_voltage_setpoint(self) -> float:
+        self.supply._select(self.channel)
+        return float(self.supply.t.query("VOLT?"))
+
+    def measure_voltage(self) -> float:
+        self.supply._select(self.channel)
+        return float(self.supply.t.query("MEAS:VOLT?"))
+
+    def measure_current(self) -> float:
+        self.supply._select(self.channel)
+        return float(self.supply.t.query("MEAS:CURR?"))

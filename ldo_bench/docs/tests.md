@@ -12,6 +12,7 @@ Every command also takes:
 - `-v`: debug log.
 - `-o <folder>`: results folder (default `results/`).
 - `--psu` / `--ad-serial`: pick an instrument when there are several.
+- `--vref bgr|ext`: the reference VOUT follows. `ext` uses the supply's second output in place of the BGR (JAFWAK, JP2 removed). Not on the enable or bench-check tests; see [External reference](#external-reference-bgr-vs---vref-ext-jafwak).
 
 Before powering anything up, each command prints the wiring it expects and asks you to confirm it. The wiring lists below are exactly what the commands print. Option values in the examples are just examples; defaults come from the board's config section, which is named under each test.
 
@@ -302,3 +303,75 @@ Powers VIN up (default `load_reg.vin`), then reads VOUT, VIN and the supply's V 
   - `--load`
 - **Config:** `[startup]`, `[enable]`.
 - **First hardware run:** the AD2's digital trigger needs checking.
+
+## External reference: BGR vs `--vref ext` (JAFWAK)
+
+The BGR on the board measures 1.17 V; in simulation it was 1.204 V. JP2 joins the BGR's output (VREF_OUT) to the reference the regulator follows (VREF_IN). Removing JP2 and driving VREF_IN from the supply's second output repeats a test with the reference at its intended value. Comparing that run with the BGR run separates what the BGR contributes from what the rest of the regulator does.
+
+**Which tests:** `smoke`, `load-reg`, `line-reg`, `load-tran`, `line-tran`, `psrr` and `iq` take `--vref ext`. The enable tests don't. Without the option (or `--vref bgr`) nothing changes.
+
+**Wiring** (added to each test's own wiring):
+- JP2 (VREF) **removed**
+- PSU OUT2 + → VREF_IN (JP2's VREF_IN pin), OUT2 − → GND
+
+Pin roles come from the schematic (JP2 between the VREF_OUT and VREF_IN nets) and are unconfirmed until someone checks the board. TP3 is labelled VREF, but which side of JP2 it's on isn't confirmed either.
+
+**What the run does:**
+1. **JP2 question:** after the wiring prompt it asks, separately, whether JP2 is removed. This is asked **every run, even with `--yes`**. If JP2 were still fitted, OUT2 would back-drive the BGR's output, and nothing can measure that beforehand.
+2. **Hold at 0 V:** OUT2 is set up with the supply (5 mA limit, OVP at `vref.ovp`) and held at 0 V while VIN comes up. The E3648A switches both outputs on together.
+3. **Reference on:** with VIN up and the LDO enabled, OUT2 ramps to `vref.external_v` (1.204 V).
+4. **Proof:** the reference drops by 20 mV and comes back, and VOUT (AD2 scope 1) must follow by at least 10 mV. If it doesn't, the reference goes to 0 V and the run **stops**. JP2 is probably still in (the BGR holding VREF_IN), or OUT2 isn't on VREF_IN.
+5. **The test:** it runs as usual. line-reg and iq turn the reference on at the top of their sweep, then sweep down.
+6. **VIN window:** while the reference is on, VIN never goes more than `vref.above_vin` (0.3 V) below it. Before VIN is removed (the supply off, or the wavegen that drives VIN off, and at shutdown), the reference goes to 0 V first.
+
+Even so, the BGR is unprotected from one mistake. With JP2 fitted, OUT2 sits on the BGR's output at 0 V from the moment VIN comes up, until the proof fails and the run stops. A bench supply can't sink much current at 0 V, but that hasn't been checked. Remove JP2 before switching anything on.
+
+**Results:**
+- the folder name ends in `_extref`
+- `summary.json` and `meta.json` gain a `vref` entry: the source, the applied voltage, `bgr_measured` from the config, and the proof readings
+- a BGR run records `"source": "bgr"`
+
+**Checks:** the usual ones. VOUT must be within 20 % of `vout_nominal`, so both 1.17 V and 1.204 V pass.
+
+**`iq` note:** VREF_IN's own current comes from OUT2, so it isn't counted. The BGR is still powered from VIN, so its current is counted.
+
+**Config:** `[vref]` in `jafwak.toml`:
+- `external_v`, `bgr_measured`
+- `psu_channel`
+- `v_max` (1.3 V)
+- `current_limit`, `ovp`
+- `above_vin`
+- `proof_step`
+
+### `compare`: two runs side by side
+
+```
+uv run ldo-bench load-reg -c configs/jafwak.toml                 # JP2 fitted: the BGR
+uv run ldo-bench load-reg -c configs/jafwak.toml --vref ext      # JP2 removed: 1.204 V on VREF_IN
+uv run ldo-bench compare results/load-reg/<bgr run> results/load-reg/<extref run>
+```
+
+- **Reads:** the two run folders. It touches no instrument and recomputes nothing.
+- **Prints:**
+  - every number in both summaries, with A, B and B − A
+  - which reference each run used
+- **Writes:** `results/compare/<stamp>_<dut>_compare_<test>/`, holding `compare.csv`, `summary.json` and `plot.png`.
+- **Plots** (both runs overlaid):
+
+  | Test | Plotted |
+  |---|---|
+  | load-reg | ΔVOUT from no load |
+  | line-reg | ΔVOUT from the top VIN |
+  | load-tran, line-tran | each edge minus its pre-step level |
+  | psrr | dB vs frequency |
+  | iq | current vs VIN |
+
+  The reference's DC offset (about 34 mV) is in the legend and the table, not the curves.
+- **Refused (exit 2):** runs of different tests or different boards.
+- **Invalid (`_INVALID`, exit 3):**
+  - either run was invalid
+  - the runs differ in anything but the reference: the test's config section, `[dut]`, `[loadbank]`, or a text field such as where VOUT was measured
+
+  Change only JP2 and `--vref` between the two runs.
+- **Same reference twice:** works, as a repeatability check, and says so.
+- **Supported:** load-reg, line-reg, load-tran, line-tran, psrr, iq.

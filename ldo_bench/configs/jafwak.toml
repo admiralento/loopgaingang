@@ -153,3 +153,13 @@ points_per_decade = 3
 load_code = 4                # 19.2 mA
 averages = 4                 # captures per frequency, averaged coherently
 cycles = 20                  # min sine cycles per capture (8192 samples, up to 100 MS/s)
+
+[vref]                       # --vref ext: PSU OUT2 on VREF_IN in place of the BGR (JP2 removed)
+external_v = 1.204           # V on VREF_IN: the BGR's simulated output
+bgr_measured = 1.17          # V, the BGR as measured on the board (for the record)
+psu_channel = 2              # E3648A OUT2 + -> VREF_IN (JP2's VREF_IN pin), OUT2 - -> GND
+v_max = 1.3                  # VREF_IN is never programmed above this
+current_limit = 0.005        # A; VREF_IN is a high-impedance input
+ovp = 1.5                    # OUT2 OVP; if the supply refuses it the run stops (raise it, or remove the line)
+above_vin = 0.3              # VREF never more than this above VIN
+proof_step = 0.02            # after turn-on VREF drops 20 mV: VOUT must follow, else JP2 is still in

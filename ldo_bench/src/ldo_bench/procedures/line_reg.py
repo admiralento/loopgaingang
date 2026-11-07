@@ -147,6 +147,10 @@ def run(bench: Bench, lr: LineRegConfig) -> LineRegResult:
     v_check = min(bench.cfg.dut.vout_nominal + 0.5, float(vins[-1]))
     bad = []  # (VIN, VOUT, source) where VOUT should be regulated but isn't near nominal
     vin_bad: list[str] = []  # VIN measured off its setpoint
+    if bench.vref_external:
+        # --vref ext: turn the reference on (and prove it) with full headroom, then sweep
+        bench.vin_from_psu(float(max(vins)))
+        bench.reference_on()
     for k, v in enumerate(vins):
         bench.vin_from_psu(float(v))
         p = bench.measure_point(lr.dc_window, vin_source=lr.vin_source)

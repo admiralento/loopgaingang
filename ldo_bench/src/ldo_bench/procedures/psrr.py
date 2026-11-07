@@ -352,6 +352,9 @@ def run(bench: Bench, ps: PsrrConfig, meter: PsrrMeter | None = None) -> PsrrRes
     _interlock(bench, ps.psu_voltage, ps.proof_levels)
     bench.buffer_rail(ps.psu_voltage)
     w_dc, v_dc, cal = _calibrate(bench, ps.vin)
+    if bench.vref_external:  # after the interlock and calibration, with VIN at its DC level
+        bench.vin_from_wavegen(w_dc)
+        bench.reference_on()
     vout_dc, _ = bench.measure_dc(0.05)
     setup_issues = [i for i in (cal, bench.vout_issue(vout_dc.mean, source=f"scope {a.vout_channel}")) if i]
     for i in setup_issues:

@@ -636,6 +636,57 @@ class LineTranConfig(TransientCaptureConfig, BufferProofConfig):
         return self
 
 
+class VrefConfig(_Model):
+    """[vref]: an external reference on VREF_IN in place of the on-chip BGR (`--vref ext`).
+
+    On JAFWAK, JP2 joins VREF_OUT (the BGR) to VREF_IN (what the regulator follows). For an
+    external-reference run JP2 is removed and the PSU's other output drives VREF_IN, so a test can
+    be repeated with the reference at its simulated value and compared against the BGR run
+    (`ldo-bench compare`). Without `--vref ext` this section changes nothing.
+
+    The BGR must not be back-driven, and no reading can tell whether JP2 is out before the source
+    is connected, so a person confirms it every run (--yes doesn't skip that question). After the
+    reference turns on, the Bench steps it by `proof_step` and stops unless VOUT follows: with JP2
+    still fitted, the BGR would hold VOUT still.
+    """
+
+    external_v: float = Field(
+        1.204, gt=0, description="Reference applied to VREF_IN (V); default = the BGR's simulated output"
+    )
+    bgr_measured: float | None = Field(
+        None, gt=0, description="The BGR's measured output (V), for the record only (e.g. 1.17)"
+    )
+    psu_channel: int = Field(2, ge=1, le=2, description="PSU output wired to VREF_IN (not psu.channel)")
+    v_max: float = Field(gt=0, description="VREF_IN is never programmed above this (V)")
+    current_limit: float = Field(
+        0.005, gt=0, description="Current limit on the reference output (A); VREF_IN draws almost none"
+    )
+    ovp: float | None = Field(None, gt=0, description="OVP on the reference output (V), above v_max")
+    above_vin: float = Field(
+        0.3,
+        ge=0,
+        description=(
+            "VREF may sit at most this far above VIN (V): the usual input clamp limit, so the reference "
+            "never drives the chip through its input protection while VIN is lower"
+        ),
+    )
+    proof_step: float = Field(0.02, gt=0, description="Step used to prove VOUT follows the reference (V)")
+    proof_follow: float = Field(
+        0.5, gt=0, lt=1, description="VOUT must move by at least this fraction of proof_step"
+    )
+    settle_time: float = Field(0.3, ge=0, description="Wait after each reference change (s)")
+
+    @model_validator(mode="after")
+    def _check(self) -> VrefConfig:
+        if self.external_v > self.v_max:
+            raise ValueError(f"vref.external_v ({self.external_v} V) exceeds vref.v_max ({self.v_max} V)")
+        if self.ovp is not None and self.ovp <= self.v_max:
+            raise ValueError(f"vref.ovp ({self.ovp} V) must be above vref.v_max ({self.v_max} V)")
+        if self.proof_step >= self.external_v:
+            raise ValueError("vref.proof_step must be below external_v")
+        return self
+
+
 class BenchConfig(_Model):
     """The whole TOML file. [dut], [psu] and [loadbank] are required; a test's section is required
     only to run that test (the CLI says so if it's missing)."""
@@ -658,6 +709,28 @@ class BenchConfig(_Model):
     startup: StartupConfig | None = None
     iq: IqConfig | None = None
     psrr: PsrrConfig | None = None
+    vref: VrefConfig | None = None
+
+    def lowest_vin(self) -> dict[str, float]:
+        """The lowest VIN (V) each configured test puts on the LDO while it runs, by test name.
+
+        Used for the external reference: VREF must stay within vref.above_vin of VIN throughout.
+        (enable-sine and enable-startup aren't run with an external reference.)
+        """
+        out: dict[str, float] = {}
+        if self.load_reg:
+            out["load-reg"] = self.load_reg.vin
+        if self.line_reg:
+            out["line-reg"] = min(self.line_reg.vin_start, self.line_reg.vin_stop)
+        if self.load_tran:
+            out["load-tran"] = self.load_tran.vin
+        if self.line_tran:
+            out["line-tran"] = min(self.line_tran.vin_low, self.line_tran.vin_high)
+        if self.iq:
+            out["iq"] = self.iq.vin_start
+        if self.psrr:
+            out["psrr"] = self.psrr.vin - self.psrr.amplitude
+        return out
 
     @model_validator(mode="after")
     def _cross_checks(self) -> BenchConfig:
@@ -673,6 +746,8 @@ class BenchConfig(_Model):
           load the DUT can't supply.
         - buffer headroom (in LineTranConfig / PsrrConfig): the buffer rail must sit at least
           buffer_headroom above VIN's peak, or the BUF634 clips and the step / sine on VIN is wrong.
+        - vref (only if [vref] is present): its own PSU output, v_max within dut.vin_max, and the
+          external reference within vref.above_vin of every test's lowest VIN.
         - enable-pin clashes: tests that drive the enable line (en_sine, startup, iq 'disabled')
           would fight the load bank if an enable DIO pin were also a load bank pin.
         """
@@ -769,6 +844,20 @@ class BenchConfig(_Model):
                     f"(~{self.ad2.vin_margin(lt.vin_high) * 1e3:.0f} mV) of dut.vin_max ({self.dut.vin_max} V)"
                 )
             code_ok("line_tran.load_code", lt.load_code)
+        if self.vref:
+            vr = self.vref
+            if vr.psu_channel == self.psu.channel:
+                raise ValueError(
+                    f"vref.psu_channel ({vr.psu_channel}) is psu.channel: the reference needs the other output"
+                )
+            if vr.v_max > self.dut.vin_max:
+                raise ValueError(f"vref.v_max ({vr.v_max} V) exceeds dut.vin_max ({self.dut.vin_max} V)")
+            for test, vin in self.lowest_vin().items():
+                if vr.external_v > vin + vr.above_vin:
+                    raise ValueError(
+                        f"vref.external_v ({vr.external_v} V) is more than vref.above_vin ({vr.above_vin} V) "
+                        f"above {test}'s lowest VIN ({vin} V)"
+                    )
         return self
 
 

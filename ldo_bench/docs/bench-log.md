@@ -2,6 +2,22 @@
 
 What was built, what was measured, and what went wrong along the way. Newest session first.
 
+## 2026-11-07: external reference (BGR vs 1.204 V)
+
+The BGR on JAFWAK measures 1.17 V against 1.204 V in simulation. JP2 lets VREF_IN be driven from outside, so every test except the enable ones can now run with PSU OUT2 on VREF_IN (`--vref ext`). `ldo-bench compare` then lines that run up against the BGR run. See [tests.md](tests.md#external-reference-bgr-vs---vref-ext-jafwak). Simulator only so far.
+
+**Decisions from the team:**
+- **Source:** PSU OUT2.
+- **Tests:** all but the two enable tests.
+- **Gain:** VOUT = VREF.
+- **Protection:** the BGR mustn't be back-driven, and the team chose no series resistor. So JP2 is confirmed by a person every run (`--yes` doesn't skip it), and the proof step stops the run if VOUT doesn't follow the reference.
+
+**To check on the bench:**
+- **JP2 pins:** which pin is VREF_IN and which is VREF_OUT, and which side TP3 is on. These were read from the schematic.
+- **OUT2 limits:** whether the E3648A accepts a 5 mA limit and 1.5 V OVP on OUT2. If it refuses, the run stops; adjust `[vref]`.
+- **Back-drive risk:** whether OUT2 at 0 V can sink current from the BGR. That matters only if JP2 is left in by mistake.
+- **VREF_IN:** what else is on it (an RC filter?). It sets how long `vref.settle_time` must be.
+
 ## 2026-11-07: review panel and fixes
 
 The five-reviewer panel (`.claude/reviewer-panel/`: manager, critic, algorithms, domain, test engineer) plus a refuter went over the whole branch. 58 of its 68 findings stood; all were fixed, with a test for each that failed before the fix. No hardware was run.

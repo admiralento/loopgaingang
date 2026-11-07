@@ -212,6 +212,7 @@ def run(bench: Bench, lt: LoadTranConfig, an: AnalysisConfig) -> LoadTranResult:
     }
     bank.set(lt.code_low)
     bench.vin_from_psu(lt.vin)
+    bench.reference_on()  # --vref ext only
     vout_est, _ = bench.measure_dc(0.05)
     setup_issues = [i for i in [bench.vout_issue(vout_est.mean, source=f"scope {a.vout_channel}")] if i]
     for i in setup_issues:

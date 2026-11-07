@@ -1,7 +1,8 @@
 """Command-line interface: `uv run ldo-bench --help`.
 
 One command per test (load-tran, line-tran, load-reg, line-reg, iq, psrr, enable-sine,
-enable-startup, psu-check, loadbank-check), plus check-config, discover and smoke. Every test
+enable-startup, psu-check, loadbank-check), plus check-config, discover, smoke and compare (two
+saved runs side by side, e.g. the BGR against `--vref ext`). Every test
 command follows the same pattern:
 
   1. Load and validate the config (`_load`). Nothing is touched if it's invalid.
@@ -70,6 +71,14 @@ PlotUsOpt = Annotated[
     ),
 ]
 YesOpt = Annotated[bool, typer.Option("--yes", "-y", help="Don't ask to confirm wiring")]
+VrefOpt = Annotated[
+    str,
+    typer.Option(
+        "--vref",
+        help="Reference on VREF_IN: 'bgr' (the on-chip BGR, JP2 fitted) or 'ext' ([vref]: PSU output on "
+        "VREF_IN, JP2 removed; asks you to confirm JP2 every run)",
+    ),
+]
 VerboseOpt = Annotated[bool, typer.Option("--verbose", "-v", help="Debug logging")]
 
 
@@ -121,8 +130,11 @@ def _bench(
     yes: bool,
     use_dmm: bool = True,
     use_xscope: bool = False,
+    vref: str = "bgr",
 ):
     """Open the bench and turn instrument errors and Ctrl-C into clean exits.
+
+    vref: 'bgr' or 'ext' (already checked by _vref_mode).
 
     InstrumentError -> exit 1; KeyboardInterrupt (Ctrl-C or wiring not confirmed) -> exit 130.
     Bench.shutdown has already run by the time either is reported.
@@ -138,6 +150,7 @@ def _bench(
             confirm=typer.confirm,
             use_dmm=use_dmm,
             use_xscope=use_xscope,
+            vref_external=vref == "ext",
         ) as bench:
             yield bench
     except InstrumentError as e:
@@ -164,6 +177,17 @@ def _shutdown_failed(bench: Bench | None) -> bool:
         for e in errors:
             typer.secho(f"  - {e}", fg="red", err=True)
     return bool(errors)
+
+
+def _vref_mode(cfg: BenchConfig, vref: str) -> str:
+    """Check --vref: 'bgr' or 'ext', and 'ext' needs a [vref] section. Exit 2 otherwise."""
+    if vref not in ("bgr", "ext"):
+        typer.secho("--vref must be 'bgr' or 'ext'", fg="red", err=True)
+        raise typer.Exit(2)
+    if vref == "ext" and cfg.vref is None:
+        typer.secho("--vref ext needs a [vref] section in the config", fg="red", err=True)
+        raise typer.Exit(2)
+    return vref
 
 
 @app.command("check-config")
@@ -206,15 +230,17 @@ def smoke(
     sim: SimOpt = False,
     psu: PsuOpt = None,
     ad_serial: AdOpt = None,
+    vref: VrefOpt = "bgr",
     yes: YesOpt = False,
     verbose: VerboseOpt = False,
 ) -> None:
     """Quick sanity check: power up, read VOUT at no load and full load, power down."""
     _logging(verbose)
     cfg = _load(config)
+    vref = _vref_mode(cfg, vref)
     # --vin isn't re-validated here; Bench.vin_from_psu still refuses anything above the ceilings.
     vin = vin if vin is not None else (cfg.load_reg.vin if cfg.load_reg else cfg.dut.vout_nominal + 0.6)
-    with _bench(cfg, sim, psu, ad_serial, yes) as bench:
+    with _bench(cfg, sim, psu, ad_serial, yes, vref=vref) as bench:
         _smoke(bench, vin)
 
 
@@ -234,6 +260,7 @@ def _smoke(bench: Bench, vin: float) -> None:
     )
     bench.loadbank.off()
     bench.vin_from_psu(vin)
+    bench.reference_on()  # --vref ext only
     typer.echo(f"{'code':>4} {'I_est mA':>9} {'VOUT V':>9} {'VIN V':>8} {'V_psu V':>8} {'I_psu mA':>9}")
     for code in (0, bench.loadbank.max_allowed_code):
         bench.loadbank.set(code)
@@ -291,13 +318,22 @@ def _save(
     if bench.is_sim and not save_sim:
         return None
     invalid = bool(getattr(res, "issues", []))
-    run = RunDir(out, module.NAME, cfg, config_path=config_path, simulated=bench.is_sim, invalid=invalid)
+    run = RunDir(
+        out,
+        module.NAME,
+        cfg,
+        config_path=config_path,
+        simulated=bench.is_sim,
+        invalid=invalid,
+        tag="extref" if bench.vref_external else "",
+    )
     try:
         run.write_csv("data.csv", res.rows)
         for name, rows in getattr(res, "extra_csvs", dict)().items():
             run.write_csv(name, rows)
-        run.write_json("summary.json", res.summary())
-        run.write_meta(idns=bench.idns(), sim=bench.is_sim)
+        # which reference VOUT followed: the BGR, or the external one and its proof (compare uses it)
+        run.write_json("summary.json", {**res.summary(), "vref": bench.vref_info()})
+        run.write_meta(idns=bench.idns(), sim=bench.is_sim, extra={"vref": bench.vref_info()})
         figs = {"plot.png": module.plot(res, cfg.dut.name)}
         figs.update(getattr(module, "extra_plots", lambda r, d: {})(res, cfg.dut.name))
         for name, fig in figs.items():
@@ -364,6 +400,7 @@ def load_tran(
     psu: PsuOpt = None,
     ad_serial: AdOpt = None,
     no_xscope: NoXScopeOpt = False,
+    vref: VrefOpt = "bgr",
     yes: YesOpt = False,
     verbose: VerboseOpt = False,
 ) -> None:
@@ -373,6 +410,7 @@ def load_tran(
 
     _logging(verbose)
     cfg = _load(config)
+    vref = _vref_mode(cfg, vref)
     lt = _section(cfg, "load-tran")
     update = {}
     try:
@@ -399,7 +437,7 @@ def load_tran(
     if update:
         cfg = _load_with(cfg, load_tran=lt.model_copy(update=update))
         lt = cfg.load_tran
-    with _bench(cfg, sim, psu, ad_serial, yes, use_dmm=False, use_xscope=not no_xscope) as bench:
+    with _bench(cfg, sim, psu, ad_serial, yes, use_dmm=False, use_xscope=not no_xscope, vref=vref) as bench:
         res = proc.run(bench, lt, cfg.analysis)
         path = _save(bench, cfg, config, out, proc, res, save_sim)
     _echo_report(bench, res)
@@ -421,6 +459,7 @@ def line_tran(
     psu: PsuOpt = None,
     ad_serial: AdOpt = None,
     no_xscope: NoXScopeOpt = False,
+    vref: VrefOpt = "bgr",
     yes: YesOpt = False,
     verbose: VerboseOpt = False,
 ) -> None:
@@ -430,6 +469,7 @@ def line_tran(
 
     _logging(verbose)
     cfg = _load(config)
+    vref = _vref_mode(cfg, vref)
     lt = _section(cfg, "line-tran")
     update: dict = {}
     if low is not None:
@@ -457,7 +497,7 @@ def line_tran(
     if update:
         cfg = _load_with(cfg, line_tran=lt.model_copy(update=update))
         lt = cfg.line_tran
-    with _bench(cfg, sim, psu, ad_serial, yes, use_dmm=False, use_xscope=not no_xscope) as bench:
+    with _bench(cfg, sim, psu, ad_serial, yes, use_dmm=False, use_xscope=not no_xscope, vref=vref) as bench:
         res = proc.run(bench, lt, cfg.analysis)
         path = _save(bench, cfg, config, out, proc, res, save_sim)
     _echo_report(bench, res)
@@ -572,6 +612,7 @@ def iq(
     save_sim: SaveSimOpt = False,
     psu: PsuOpt = None,
     ad_serial: AdOpt = None,
+    vref: VrefOpt = "bgr",
     yes: YesOpt = False,
     verbose: VerboseOpt = False,
 ) -> None:
@@ -580,6 +621,7 @@ def iq(
 
     _logging(verbose)
     cfg = _load(config)
+    vref = _vref_mode(cfg, vref)
     sec = _section(cfg, "iq")
     update: dict = {}
     if method is not None:
@@ -601,7 +643,7 @@ def iq(
             raise typer.Exit(2) from e
         cfg = _load_with(cfg, iq=sec)
         sec = cfg.iq
-    with _bench(cfg, sim, psu, ad_serial, yes) as bench:
+    with _bench(cfg, sim, psu, ad_serial, yes, vref=vref) as bench:
         res = proc.run(bench, sec)
         path = _save(bench, cfg, config, out, proc, res, save_sim)
     _echo_report(bench, res)
@@ -623,6 +665,7 @@ def psrr(
     save_sim: SaveSimOpt = False,
     psu: PsuOpt = None,
     ad_serial: AdOpt = None,
+    vref: VrefOpt = "bgr",
     yes: YesOpt = False,
     verbose: VerboseOpt = False,
 ) -> None:
@@ -632,6 +675,7 @@ def psrr(
 
     _logging(verbose)
     cfg = _load(config)
+    vref = _vref_mode(cfg, vref)
     sec = _section(cfg, "psrr")
     update: dict = {}
     for key, val in (("f_start", fstart), ("f_stop", fstop), ("points_per_decade", ppd), ("vin", vin)):
@@ -655,7 +699,7 @@ def psrr(
             raise typer.Exit(2) from e
         cfg = _load_with(cfg, psrr=sec)
         sec = cfg.psrr
-    with _bench(cfg, sim, psu, ad_serial, yes, use_dmm=False) as bench:
+    with _bench(cfg, sim, psu, ad_serial, yes, use_dmm=False, vref=vref) as bench:
         res = proc.run(bench, sec)
         path = _save(bench, cfg, config, out, proc, res, save_sim)
     _echo_report(bench, res)
@@ -724,6 +768,7 @@ def line_reg(
     psu: PsuOpt = None,
     ad_serial: AdOpt = None,
     no_dmm: NoDmmOpt = False,
+    vref: VrefOpt = "bgr",
     yes: YesOpt = False,
     verbose: VerboseOpt = False,
 ) -> None:
@@ -733,6 +778,7 @@ def line_reg(
 
     _logging(verbose)
     cfg = _load(config)
+    vref = _vref_mode(cfg, vref)
     lr = _section(cfg, "line-reg")
     if load is not None:
         try:
@@ -748,7 +794,7 @@ def line_reg(
             raise typer.Exit(2)
         cfg = _load_with(cfg, line_reg=lr.model_copy(update={"vin_source": vin_from}))
         lr = cfg.line_reg
-    with _bench(cfg, sim, psu, ad_serial, yes, use_dmm=not no_dmm) as bench:
+    with _bench(cfg, sim, psu, ad_serial, yes, use_dmm=not no_dmm, vref=vref) as bench:
         res = proc.run(bench, lr)
         path = _save(bench, cfg, config, out, proc, res, save_sim)
     _echo_report(bench, res)
@@ -765,6 +811,7 @@ def load_reg(
     psu: PsuOpt = None,
     ad_serial: AdOpt = None,
     no_dmm: NoDmmOpt = False,
+    vref: VrefOpt = "bgr",
     yes: YesOpt = False,
     verbose: VerboseOpt = False,
 ) -> None:
@@ -773,15 +820,60 @@ def load_reg(
 
     _logging(verbose)
     cfg = _load(config)
+    vref = _vref_mode(cfg, vref)
     lr = _section(cfg, "load-reg")
     if vin is not None:
         cfg = _load_with(cfg, load_reg=lr.model_copy(update={"vin": vin}))
         lr = cfg.load_reg
-    with _bench(cfg, sim, psu, ad_serial, yes, use_dmm=not no_dmm) as bench:
+    with _bench(cfg, sim, psu, ad_serial, yes, use_dmm=not no_dmm, vref=vref) as bench:
         res = proc.run(bench, lr)
         path = _save(bench, cfg, config, out, proc, res, save_sim)
     _echo_report(bench, res)
     _saved(path, fg="green", res=res)
+
+
+@app.command("compare")
+def compare_runs(
+    run_a: Annotated[
+        Path, typer.Argument(exists=True, file_okay=False, help="First run folder (e.g. the BGR run)")
+    ],
+    run_b: Annotated[
+        Path, typer.Argument(exists=True, file_okay=False, help="Second run folder (e.g. the --vref ext run)")
+    ],
+    out: OutOpt = Path("results"),
+    verbose: VerboseOpt = False,
+) -> None:
+    """Compare two saved runs of the same test (e.g. BGR vs --vref ext). Touches no instrument."""
+    from ldo_bench import compare as proc
+    from ldo_bench import plotting
+    from ldo_bench.results import RunDir
+
+    _logging(verbose)
+    try:
+        a, b = proc.load_run(run_a), proc.load_run(run_b)
+        res = proc.compare(a, b)
+    except ValueError as e:
+        typer.secho(str(e), fg="red", err=True)
+        raise typer.Exit(2) from e
+    try:
+        cfg = BenchConfig.model_validate(a.config)
+    except ValidationError as e:
+        typer.secho(
+            f"run A's saved config doesn't load with this version of ldo-bench:\n{e}", fg="red", err=True
+        )
+        raise typer.Exit(2) from e
+    run = RunDir(out, proc.NAME, cfg, simulated=a.sim or b.sim, invalid=bool(res.issues), tag=a.test)
+    run.write_csv("compare.csv", res.rows)
+    run.write_json("summary.json", res.summary())
+    run.write_meta(idns={}, sim=a.sim or b.sim, extra={"runs": [str(a.path), str(b.path)]})
+    fig = proc.plot(res, a.dut)
+    if a.sim or b.sim:
+        plotting.mark_simulated(fig)
+    run.save_fig(fig)
+    plotting.close(fig)
+    run.publish_latest()
+    typer.echo(res.report())
+    _saved(run.path, res=res)
 
 
 def main() -> None:
