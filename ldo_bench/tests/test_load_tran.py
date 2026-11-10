@@ -58,8 +58,9 @@ def test_trigger_pin_must_change(cfg):
 
 def test_report_hints_post_when_dc_shift_exceeds_band(cfg):
     lt = cfg.load_tran.model_copy(update={"averages": 2})
+    an = cfg.analysis.model_copy(update={"settle_reference": "pre"})  # the hint is for 'pre' only
     with open_bench(cfg, sim=True) as b:
-        res = load_tran.run(b, lt, cfg.analysis)  # 'pre' reference
+        res = load_tran.run(b, lt, an)
     assert 'settle_reference = "post"' in res.report()
 
 

@@ -18,9 +18,10 @@ class FakeScope:
 
     name = "serial:FAKE"
 
-    def __init__(self, opc_after_extra: int = 0):
+    def __init__(self, opc_after_extra: int = 0, opc_reply: str = "1"):
         self.sent: list[str] = []
         self.opc_after_extra = opc_after_extra  # extra steps needed before *OPC? answers
+        self.opc_reply = opc_reply  # what *OPC? answers once done (the bench 54624A says '+1')
         self.extra = 0
         self.source = 1
         self.timeout = 5.0
@@ -46,7 +47,7 @@ class FakeScope:
     def read_line(self):
         if self.sent[-1] == "*OPC?" and self.extra < self.opc_after_extra:
             return ""  # not done yet: the driver should ask for another step
-        return "1"
+        return self.opc_reply
 
     def read_block(self, cmd):
         self.sent.append(cmd)
@@ -120,6 +121,26 @@ def test_collect_decodes_word_blocks():
     np.testing.assert_allclose(tr[1].t, [-1e-6, 0, 1e-6, 2e-6])
     np.testing.assert_allclose(tr[2].v, [0.0, 2.3, 2.3, 2.3])
     assert tr[1].averages == 16
+
+
+@pytest.mark.parametrize("reply", ["1", "+1", "+1.0E+00"])
+def test_collect_accepts_any_numeric_one_from_opc(reply):
+    # the bench 54624A (firmware A.02.20) answers *OPC? with '+1', not '1' (2026-11-10)
+    t = FakeScope(opc_reply=reply)
+    s = Agilent54621A(t)
+    arm(s)
+    steps = []
+    tr = s.collect(lambda: steps.append(1), 10, 10)
+    assert not s.busy and not steps and set(tr) == {1, 2}
+
+
+def test_collect_rejects_an_unexpected_opc_reply_and_says_what_it_was():
+    t = FakeScope(opc_reply="-113")
+    s = Agilent54621A(t)
+    arm(s)
+    with pytest.raises(InstrumentError, match="'-113'"):
+        s.collect(lambda: None, 10, 10)
+    assert s.busy
 
 
 def test_collect_steps_again_until_average_completes():

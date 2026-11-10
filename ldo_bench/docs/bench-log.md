@@ -16,7 +16,14 @@ First contact with the scope on the bench, an **Agilent 54624A** (4-channel; the
 - **Supply missing at first:** the E3648A didn't appear because the UsbGpib wasn't on USB at all (its LED wasn't solid). Once the LED went solid, `discover` found all four instruments: the E3648A at `USB0::1003::8293::...::INSTR`, the 34401A, the 54624A and the AD2. It doesn't matter whether the adapter is plugged into the hub or straight into USB-C.
 - **Config:** `xscope.baud` set to 9600 in both configs to match the scope (57600 on the scope would read back about 6x faster).
 
-**Not yet tried on hardware:** `arm()` / `collect()` (averaged `:DIGitize`, `*OPC?`) and a full load-tran with the cross-check.
+**First load-tran with both scopes** (demo board, VIN 2.0 V, codes 1 → 17 = 4 → 69 mA, 16 averages; `results/load-tran/20261110-105258_TPS7A7001-demo-board_load-tran`):
+- **AD2: valid.**
+  - **Step up:** peak −24.50 mV from 0.98632 V.
+  - **Step down:** peak +21.13 mV from 0.97864 V.
+  - **Noise:** 0.16–0.20 mV rms.
+- **Settling: not measured.** VOUT moves ~7.7 mV between the two loads (load regulation), so it can't return to the ±10 % band around the pre-step level. `analysis.settle_reference` is now `"post"` in `demo_board.toml`.
+- **54624A: no data.** It answers `*OPC?` with `+1` (checked scope-only: idle, after `:DIGitize`, and after a 4-average `:DIGitize`), and the driver accepted only `1`. Its first, correct "done" reply was rejected, the scope was marked busy, and the falling edge skipped it. The driver now accepts any numeric 1, and a reply it doesn't recognise gets its own error quoting what the scope said.
+- **Not yet run on hardware after the fix:** a load-tran with the cross-check.
 
 ## 2026-11-07: external reference (BGR vs 1.204 V)
 

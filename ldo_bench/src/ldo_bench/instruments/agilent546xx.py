@@ -17,6 +17,7 @@ Command syntax from the Agilent 54620-Series Programmer's Guide (pub. 54622-9703
   :ACQuire:TYPE AVERage + :COUNt n: :DIGitize runs until n triggers are averaged, then stops
   :WAVeform:FORMat WORD, :BYTeorder MSBFirst, :UNSigned, :POINts {100..2000}
   :WAVeform:PREamble? format,type,points,count,xinc,xorigin,xref,yinc,yorigin,yref
+  *OPC?       '1' per the guide; the bench 54624A (A.02.20) answers '+1', so any numeric 1 is accepted
   :WAVeform:DATA? IEEE block #8nnnnnnnn<data>; V = (code - yref) * yinc + yorigin,
               t = (i - xref) * xinc + xorigin (s from the trigger)
 
@@ -41,6 +42,14 @@ RS232_HINT = (
     'match xscope.baud (57600 is fastest) and the handshake to DTR (xscope.flow = "dsrdtr") or '
     'XON/XOFF ("xonxoff"); the port is 8 data bits, no parity, 1 stop bit, on a null-modem cable.'
 )
+
+
+def _is_opc_done(reply: str) -> bool:
+    """True if an *OPC? reply means 'complete'. The 54624A (firmware A.02.20) answers '+1', not '1'."""
+    try:
+        return float(reply) == 1.0
+    except ValueError:
+        return False
 
 
 @dataclass
@@ -175,7 +184,13 @@ class Agilent54621A:
                 extra += 1
         finally:
             self.t.set_timeout(old)
-        if done != "1":
+        if done and not _is_opc_done(done):
+            self.busy = True  # state unknown: don't send it more commands this run
+            raise InstrumentError(
+                f"{self.model} answered '{done}' to *OPC? (expected 1): its acquisition state is unknown; "
+                "press Run/Stop on it before the next run"
+            )
+        if not done:
             self.busy = True
             raise InstrumentError(
                 f"{self.model} never finished its averaged acquisition ({extra} extra steps, "

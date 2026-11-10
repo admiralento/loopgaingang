@@ -66,7 +66,7 @@ settle_fraction = 0.1
 smooth_time = 1e-6
 peak_window = 20e-6
 blank_time = 0.5e-6
-settle_reference = "pre"
+settle_reference = "post"           # settle to the final level: VOUT shifts ~7.7 mV across the 4 -> 69 mA step (2026-11-10)
 
 [load_reg]
 vin = 2.0

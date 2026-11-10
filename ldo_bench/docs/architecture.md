@@ -190,7 +190,7 @@ results/
 ## Tests and tooling
 
 ```
-uv run poe verify         # the gate: format check, lint, both configs validated, 297 tests (~10 s, no hardware)
+uv run poe verify         # the gate: format check, lint, both configs validated, 301 tests (~10 s, no hardware)
 uv run poe test           # just the tests
 uv run poe format         # format the code
 ```
