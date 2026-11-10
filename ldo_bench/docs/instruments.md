@@ -105,7 +105,9 @@ Optional: configure `[xscope]`, or skip it for a run with `--no-xscope`. If it's
 **How a capture works:**
 - **Arming:** for each edge the scope is armed first. Its timebase matches the AD2 window, ch1 is at `vout_range` centred on the nominal VOUT, it edge-triggers on ch2, and it averages as many triggers as the AD2 takes captures.
 - **Collection:** the AD2 steps the load as usual, and every step also triggers the scope. If the scope missed triggers, the step is repeated until its average completes. Both channels are then read back as 16-bit WORD data.
-- **Results:** overlaid on the VOUT plot as "54621A", with its peak and settling time compared in the report, and `waveform_xcheck_*.csv`.
+- **Results:** on the VOUT plot as "54621A" (the model it found), with its peak and settling time compared in the report, and `waveform_xcheck_*.csv`.
+  - **Own axis:** it's drawn against a right-hand axis at the same V/div as the AD2. That axis is offset by the difference between the two scopes' pre-step VOUT, so the traces line up. Neither scope is DC-accurate to a few mV at 20 mV/div (on the bench the 54624A read ~14 mV above the AD2, and both differed from the DMM), so take absolute VOUT from the DMM. The CSVs hold each scope's readings unchanged.
+  - **Time window:** `:TIMebase:REFerence LEFT` is one division in from the left edge on this series; the driver allows for it so the scope's window starts `pre_trigger` before the step, like the AD2's.
 
 **When the scope has a problem:**
 - **It never affects the AD2 result's validity**, whether the scope is missing, on the wrong signal, or never completes its average. The problem is listed under the cross-check only.

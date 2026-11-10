@@ -11,7 +11,7 @@ Command syntax from the Agilent 54620-Series Programmer's Guide (pub. 54622-9703
               DTR or XON/XOFF handshake (Utility > I/O on the scope)
   *IDN?       AGILENT TECHNOLOGIES,<model>,<serial>,X.XX.XX
   :TIMebase:RANGe <full scale>, :REFerence {LEFT|CENTer|RIGHt},
-  :POSition   "time from the trigger event to the display reference point"
+  :POSition   "time from the trigger event to the display reference point"; LEFT is 1 div in from the edge
   :TIMebase:MODE must be normal (MAIN) for :DIGitize and :WAVeform queries
   :TRIGger[:EDGE]:SOURce / :SLOPe {POSitive|NEGative} / :LEVel, :TRIGger:SWEep NORMal
   :ACQuire:TYPE AVERage + :COUNt n: :DIGitize runs until n triggers are averaged, then stops
@@ -36,6 +36,7 @@ from ldo_bench.instruments.base import Edge, InstrumentError
 log = logging.getLogger(__name__)
 
 MODELS = ("54621A", "54622A", "54624A", "54641A", "54642A")  # same 54620/54640 command set
+LEFT_REFERENCE = 0.1  # :TIMebase:REFerence LEFT is this fraction of the screen in from the left edge
 
 RS232_HINT = (
     "On the 54621A (Utility > I/O): on GPIB, note its GPIB address. On RS-232, set the baud rate to "
@@ -134,8 +135,10 @@ class Agilent54621A:
         self._send(
             f":TIMebase:RANGe {window:.6g}",
             ":TIMebase:REFerence LEFT",
-            # left edge of the screen is pre_trigger * window before the trigger
-            f":TIMebase:POSition {-pre_trigger * window:.6g}",
+            # LEFT puts the reference 1 of the 10 divisions in from the left edge (bench 54624A: the
+            # preamble's xorigin was window / 10 earlier than POSition), so offset by that to put
+            # the left edge pre_trigger * window before the trigger
+            f":TIMebase:POSition {-(pre_trigger - LEFT_REFERENCE) * window:.6g}",
             ":TRIGger:MODE EDGE",
             f":TRIGger:EDGE:SOURce CHANnel{ref_channel}",
             f":TRIGger:EDGE:SLOPe {'POSitive' if edge == 'rising' else 'NEGative'}",

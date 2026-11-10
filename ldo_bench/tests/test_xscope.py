@@ -1,5 +1,7 @@
 """54621A cross-check scope: driver protocol (fake serial) and integration with the transients."""
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
@@ -98,7 +100,9 @@ def test_arm_sends_the_guides_commands():
         ":CHANnel1:RANGe 0.16",
         ":CHANnel1:OFFSet 1",
         ":TIMebase:REFerence LEFT",
-        ":TIMebase:POSition -0.00016384",  # left edge is 20 % of the window before the trigger
+        # LEFT is 1 division (10 %) in from the left edge, so the reference sits 10 % of the window
+        # before the trigger to put the left edge 20 % before it (bench 54624A, 2026-11-10)
+        ":TIMebase:POSition -8.192e-05",
         ":TRIGger:EDGE:SOURce CHANnel2",
         ":TRIGger:EDGE:SLOPe NEGative",
         ":TRIGger:EDGE:LEVel 1.65",
@@ -256,3 +260,27 @@ def test_busy_scope_skipped_and_ad2_unaffected(jafwak):
         res = load_tran.run(b, jafwak.load_tran.model_copy(update={"averages": 2}), an)
     assert all("still busy" in e.xcheck.issues[0] for e in res.edges)
     assert not res.issues
+
+
+def test_xcheck_plotted_on_its_own_axis_at_the_same_scale(jafwak):
+    """The two scopes' DC levels differ by mV (bench: ~14 mV), so the 54621A gets its own right-hand
+    axis, offset by the difference in pre-step levels but at the same V/div, and nothing is shifted."""
+    an = jafwak.analysis.model_copy(update={"settle_reference": "post"})
+    with open_bench(jafwak, sim=True, use_xscope=True) as b:
+        res = load_tran.run(b, jafwak.load_tran.model_copy(update={"averages": 2}), an)
+    off = 0.014
+    for e in res.edges:
+        e.xcheck.vout = e.xcheck.vout + off  # a scope reading 14 mV high, as on the bench
+        e.xcheck.vout_smoothed = e.xcheck.vout_smoothed + off
+        e.xcheck.metrics = replace(e.xcheck.metrics, nominal=e.xcheck.metrics.nominal + off)
+    fig = load_tran.plot(res, "x")
+    vout_axes = [a for a in fig.axes if a.get_ylabel().startswith("VOUT, scope")]
+    twins = [a for a in fig.axes if a.get_ylabel().startswith("VOUT, 54621A")]
+    assert len(twins) == len(vout_axes) == len(res.edges)
+    for e, ax, twin in zip(res.edges, vout_axes, twins, strict=True):
+        (lo, hi), (tlo, thi) = ax.get_ylim(), twin.get_ylim()
+        assert thi - tlo == pytest.approx(hi - lo)  # same V/div
+        assert tlo - lo == pytest.approx(e.xcheck.metrics.nominal - e.metrics.nominal)
+        (line,) = twin.get_lines()
+        assert line.get_ydata().min() >= e.xcheck.vout.min()  # the scope's own readings, unshifted
+        assert line.get_ydata().max() > e.metrics.nominal + off / 2

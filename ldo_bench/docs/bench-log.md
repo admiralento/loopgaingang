@@ -36,6 +36,10 @@ First contact with the scope on the bench, an **Agilent 54624A** (4-channel; the
 - **Nominal VOUT:** 0.9862 V at 4 mA, 0.9784 V at 69 mA.
 - **Slow step down:** it settles ~10× slower than step up. A guess: on unloading the LDO can't sink current, and only the 4 mA load discharges the output capacitor. Not checked against the board.
 - **Wiring:** 54624A on plain BNC (1:1 probe setting, DC coupled), ch1 VOUT, ch2 DIO 4.
+- **DC levels disagree, and with the DMM:**
+  - **Pre-step VOUT:** 0.9862 V on the AD2 against 0.9996 V on the 54624A, while `load-reg` on 2026-11-06 had 0.9949 V on the DMM. With this offset the 54624A trace was mostly off the plot; it now has its own same-scale axis.
+  - **Load shift:** both scopes see VOUT drop ~7 mV from 4 to 69 mA, where the DMM's 2.7 mΩ predicts ~0.2 mV. A guess: the scope grounds share the load-bank return path (about 0.1 Ω). If so, the "post" settling reference is hiding a wiring problem. To check: scope grounds at the GND pin by VOUT, or the DMM on VOUT at codes 1 and 17.
+- **Window shift:** the 54624A's window started 82 µs (10 %) early. `REFerence LEFT` is 1 division in from the edge; the driver now allows for it.
 
 ## 2026-11-07: external reference (BGR vs 1.204 V)
 

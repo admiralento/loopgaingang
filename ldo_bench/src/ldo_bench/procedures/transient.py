@@ -245,6 +245,18 @@ def averaged_step(
     return StepCapture(align_average(caps), [], xs_traces, xs_issue)
 
 
+def _pre_step_offset(e, x: XCheck) -> float:
+    """Cross-check scope's pre-step VOUT minus the AD2's (V), from each one's settling analysis.
+
+    NaN when either has no pre-step level (no step found, or no analysis), so the caller can
+    overlay the traces on one axis instead.
+    """
+    xm = x.metrics
+    if xm is None or xm.step_index < 0 or e.metrics.step_index < 0:
+        return float("nan")
+    return float(xm.nominal - e.metrics.nominal)
+
+
 def analyse_xcheck(
     bench: Bench,
     sc: StepCapture,
@@ -398,7 +410,9 @@ def plot_edges(
     Valid edges also get the analysis (smoothed trace, settling band, peak, settling time).
     Edges with setup issues show only the measured data, the expected VOUT as a dashed line and
     the issues in a red box, so a wrong setup is obvious and nothing looks like a result.
-    Separate panels rather than two y-axes on one plot (V and mV scales are easy to misread).
+    Separate panels rather than two y-axes on one plot (V and mV scales are easy to misread). The one
+    exception is the cross-check scope's VOUT: it gets a right-hand axis at the same V/div as the
+    AD2's, offset by the two scopes' difference in pre-step level (their DC offsets differ by mV).
     Each edge needs .title, .metrics, .t, .vout, .vout_smoothed, .ref, .trigger_level, .issues.
 
     ref_label: y label of the top panel. vout_nominal: drawn as the expected VOUT on invalid edges.
@@ -466,17 +480,10 @@ def plot_edges(
         # Bottom: VOUT, measured, absolute volts.
         ax.axvline(0, color=plotting.AXIS, lw=0.8, zorder=1)
         v, vs = e.vout[view], e.vout_smoothed[view]
-        if xok:
-            xlabel = f"{x.model} ({x.averages} avg)" + (": see report" if x.issues else "")
-            ax.plot(
-                x.t[xv] * xs_scale,
-                x.vout[xv],
-                color=plotting.SERIES[2],
-                lw=1.2,
-                alpha=0.9,
-                zorder=2,
-                label=xlabel,
-            )
+        # The two scopes' DC levels differ by several mV (each is offset at 20 mV/div), so the
+        # cross-check goes on its own right-hand axis at the same V/div, shifted by the difference
+        # in pre-step levels. Both traces keep their measured values; only the axes differ.
+        x_offset = _pre_step_offset(e, x) if xok else float("nan")
         if valid:
             ax.axhspan(m.lower, m.upper, color=plotting.GRID, alpha=0.8, lw=0, zorder=0)
             ax.plot(us[view], v, color=plotting.SERIES[0], lw=0.8, alpha=0.35, zorder=2, label="Averaged")
@@ -527,7 +534,7 @@ def plot_edges(
             )
             # Scale to the response and band; the 1-sample switching glitch would squash it.
             lo, hi = min(vs.min(), m.lower), max(vs.max(), m.upper)
-            ax.legend(loc="lower right" if m.deviation > 0 else "upper right")
+            legend_loc = "lower right" if m.deviation > 0 else "upper right"
         else:
             ax.plot(us[view], v, color=plotting.SERIES[0], lw=1.0, zorder=3, label="Measured (averaged)")
             lo, hi = float(np.percentile(v, 0.5)), float(np.percentile(v, 99.5))
@@ -541,11 +548,30 @@ def plot_edges(
                     label=f"Expected VOUT {vout_nominal:.3f} V",
                 )
                 lo, hi = min(lo, vout_nominal), max(hi, vout_nominal)
-            ax.legend(loc="center right")
+            legend_loc = "center right"
             plotting.issue_box(ax, issues)
         pad = 0.15 * (hi - lo or 1e-3)
         ax.set_ylim(lo - pad, hi + pad)
         ax.yaxis.set_major_formatter(FormatStrFormatter("%.4f"))
+        handles, labels = ax.get_legend_handles_labels()
+        if xok:
+            xlabel = f"{x.model} ({x.averages} avg)" + (": see report" if x.issues else "")
+            if np.isfinite(x_offset):
+                ax_x = ax.twinx()
+                ax_x.set_ylim(lo - pad + x_offset, hi + pad + x_offset)  # same span as the AD2's
+                ax_x.yaxis.set_major_formatter(FormatStrFormatter("%.4f"))
+                ax_x.set_ylabel(f"VOUT, {x.model} (V)", color=plotting.SERIES[2])
+                ax_x.tick_params(axis="y", colors=plotting.SERIES[2])
+                ax.set_zorder(ax_x.get_zorder() + 1)  # AD2 traces and markers drawn on top
+                ax.patch.set_visible(False)
+                xlabel += ", right axis"
+            else:  # no pre-step level to align on: overlay on the AD2's axis
+                ax_x = ax
+            (xl,) = ax_x.plot(
+                x.t[xv] * xs_scale, x.vout[xv], color=plotting.SERIES[2], lw=1.2, alpha=0.9, zorder=2
+            )
+            handles, labels = [xl, *handles], [xlabel, *labels]
+        ax.legend(handles, labels, loc=legend_loc)
         ax.set_xlim(us[view][0], us[view][-1])  # exactly the chosen span, the same for every edge
         ax.set_xlabel(
             f"Time from step ({unit})" if e.metrics.step_index >= 0 else f"Time from scope trigger ({unit})"
