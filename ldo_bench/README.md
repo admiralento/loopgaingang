@@ -37,7 +37,7 @@ Bench automation for characterizing our LDO (the JAFWAK board) and the TPS7A7001
    ```
    cd ldo_bench
    uv sync
-   uv run poe verify         # the gate: lint, both configs and 319 tests, no hardware needed
+   uv run poe verify         # the gate: lint, both configs and 321 tests, no hardware needed
    ```
 3. **Try it on the simulator** (no hardware; prints a SIMULATED report and saves nothing):
    ```
@@ -127,7 +127,7 @@ Each run writes a folder under `results/<test>/`, e.g. `results/load-tran/202611
 - `data.csv`: every point
 - `summary.json`: the headline numbers
 - `meta.json`: config, instrument IDs, git commit, package versions
-- `plot.png`: plus `plot_full.png` and `waveform_*.csv` for transients
+- `plot.png`: plus `plot_zoom.png` (each edge on its own span), `plot_full.png` and `waveform_*.csv` for transients
 
 `results/latest.png` is always the newest plot: keep it open in VS Code and it updates after each run. `results/` isn't in git, so runs stay on the machine that made them.
 

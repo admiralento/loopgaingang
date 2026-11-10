@@ -128,3 +128,34 @@ def test_edges_share_one_time_span(cfg):
     for ax in (ax for ax in fig.axes if "VOUT" in ax.get_ylabel()):
         lo, hi = ax.get_xlim()
         assert hi == pytest.approx(100, abs=0.2) and lo == pytest.approx(-15, abs=0.2)
+
+
+@pytest.mark.parametrize("proc", ["load_tran", "line_tran"])
+def test_zoom_plot_gives_each_edge_its_own_span(jafwak, proc):
+    """plot.png shares one span (the slowest edge); plot_zoom.png sizes each edge to its own
+    settling time, so a 20 us edge isn't squeezed next to a 200 us one (bench, 2026-11-10)."""
+    from dataclasses import replace
+
+    import matplotlib.pyplot as plt
+
+    from ldo_bench.procedures import line_tran
+
+    mod = load_tran if proc == "load_tran" else line_tran
+    sec = jafwak.load_tran if proc == "load_tran" else jafwak.line_tran
+    an = jafwak.analysis.model_copy(update={"settle_reference": "post"})
+    with open_bench(jafwak, sim=True) as b:
+        res = mod.run(b, sec.model_copy(update={"averages": 2}), an)
+    assert not res.issues
+    settle = (20e-6, 200e-6)
+    for e, ts in zip(res.edges, settle, strict=True):
+        e.metrics = replace(e.metrics, settling_time=ts)
+
+    def right_ends(fig):
+        return [a.get_xlim()[1] for a in fig.axes if a.get_ylabel().startswith("VOUT, scope")]
+
+    # the axis ends at the last sample inside the span (0.1 us apart at 10 MS/s)
+    assert right_ends(mod.plot(res, "x")) == pytest.approx([2.5 * 200 + 10] * 2, abs=0.5)  # shared span
+    figs = mod.extra_plots(res, "x")
+    assert set(figs) == {"plot_full.png", "plot_zoom.png"}
+    assert right_ends(figs["plot_zoom.png"]) == pytest.approx([2.5 * ts * 1e6 + 10 for ts in settle], abs=0.5)
+    plt.close("all")  # three figures per case: don't hold them for the rest of the suite

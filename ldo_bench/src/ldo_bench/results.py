@@ -9,7 +9,7 @@ results/<test>/<stamp>_<dut>_<test>[_extref][_SIM][_INVALID]/
     summary.json  headline numbers (valid = false for an _INVALID run)
     meta.json     config, instrument IDs, git commit, package versions
     plot.png      main plot; some tests add more plot*.png (e.g. plot_full.png)
-results/latest.png, results/<test>/latest.png, results/<test>/latest_full.png, results/latest_run.txt
+results/latest.png, results/<test>/latest.png, results/<test>/latest_full.png, latest_zoom.png, results/latest_run.txt
     copies of the newest run's plots (see RunDir.publish_latest)
 
 <stamp> is the local start time YYYYmmdd-HHMMSS; <dut> is dut.name made filename-safe.
@@ -162,6 +162,7 @@ class RunDir:
         results/latest.png                    plot.png of the most recent run of any test
         results/<test>/latest.png             plot.png of the most recent run of this test
         results/<test>/latest_full.png        plot_full.png, for tests that make one
+        results/<test>/latest_zoom.png        plot_zoom.png, for tests that make one
         results/latest_run.txt                which run folder those came from
 
         Copies, not symlinks (Windows needs admin rights for symlinks); each is written to a
@@ -170,6 +171,7 @@ class RunDir:
         targets = {
             "plot.png": [self.root / "latest.png", self.path.parent / "latest.png"],
             "plot_full.png": [self.path.parent / "latest_full.png"],
+            "plot_zoom.png": [self.path.parent / "latest_zoom.png"],
         }
         written = []
         for src_name, dests in targets.items():

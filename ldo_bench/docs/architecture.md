@@ -127,7 +127,7 @@ NAME = "load-reg"                       # results/<NAME>/ folder
 def wiring(bench, cfg_section) -> list[str]: ...   # shown before anything powers up
 def run(bench, cfg_section) -> Result: ...         # the measurement
 def plot(result, dut_name) -> Figure: ...          # plot.png
-def extra_plots(result, dut_name) -> dict: ...     # optional: more figures (plot_full.png)
+def extra_plots(result, dut_name) -> dict: ...     # optional: more figures (plot_full.png, plot_zoom.png)
 
 @dataclass
 class Result:
@@ -177,12 +177,12 @@ results/
 ├── latest.png                 newest run of any test (keep it open in VS Code: it updates)
 ├── latest_run.txt             which run folder latest.png came from
 └── <test>/
-    ├── latest.png, latest_full.png
+    ├── latest.png, latest_full.png, latest_zoom.png
     └── <YYYYMMDD-HHMMSS>_<dut>_<test>[_extref][_SIM][_INVALID][_PARTIAL]/
         ├── data.csv           every measured point
         ├── summary.json       headline numbers, "valid", "issues"
         ├── meta.json          config used, instrument IDNs, git commit, package versions
-        ├── plot.png           (+ plot_full.png, waveform_*.csv for transients)
+        ├── plot.png           (+ plot_zoom.png, plot_full.png, waveform_*.csv for transients)
 ```
 
 `_extref` marks a `--vref ext` run. `ldo-bench compare` writes to `results/compare/<stamp>_<dut>_compare_<test>/` (`compare.csv`, `summary.json`, `plot.png`). A second run in the same second gets `<stamp>-2`, so nothing is overwritten. `_PARTIAL` means saving stopped part way (the error is printed): the folder is incomplete. `meta.json`'s `dirty` is `null` when git wasn't available. `results/` is in `.gitignore`: runs stay on the machine that made them.
@@ -190,7 +190,7 @@ results/
 ## Tests and tooling
 
 ```
-uv run poe verify         # the gate: format check, lint, both configs validated, 319 tests (~10 s, no hardware)
+uv run poe verify         # the gate: format check, lint, both configs validated, 321 tests (~10 s, no hardware)
 uv run poe test           # just the tests
 uv run poe format         # format the code
 ```

@@ -441,19 +441,23 @@ def run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig) -> LineTranResult:
     )
 
 
-def plot(res: LineTranResult, dut: str, full: bool = False):
+def plot(res: LineTranResult, dut: str, full: bool = False, per_edge: bool = False):
     """plot.png: one column per edge (VIN on top, VOUT below), zoomed on the step.
 
-    full=True shows the whole capture instead (plot_full.png).
+    full=True shows the whole capture instead (plot_full.png); per_edge=True sizes each edge's span to
+    its own settling time (plot_zoom.png).
     """
     span = ""
     if full and res.edges:
         t = res.edges[0].t * 1e3
         span = f"\nFull capture: {t[0]:.2f} to {t[-1]:.2f} ms around the step"
+    elif per_edge:
+        span = "\nZoom: each edge's span set by its own settling time (time scales differ)"
     return plot_edges(
         res.edges,
         full=full,
         window=res.plot_window,
+        per_edge=per_edge,
         vout_nominal=res.vout_nominal,
         ref_label="VIN, scope 2 (V)",
         suptitle=f"Line transient: {dut}  ·  {res.i_load * 1e3:.1f} mA load  ·  {res.averages} averages  ·  "
@@ -462,5 +466,5 @@ def plot(res: LineTranResult, dut: str, full: bool = False):
 
 
 def extra_plots(res, dut: str) -> dict:
-    """Saved next to plot.png: the same edges over the whole capture window."""
-    return {"plot_full.png": plot(res, dut, full=True)}
+    """Saved next to plot.png: the whole capture window, and each edge zoomed to its own settling time."""
+    return {"plot_full.png": plot(res, dut, full=True), "plot_zoom.png": plot(res, dut, per_edge=True)}

@@ -403,6 +403,7 @@ def plot_edges(
     vout_nominal: float | None = None,
     full: bool = False,
     window: float | None = None,
+    per_edge: bool = False,
 ):
     """One column per edge: the scope 2 (trigger) trace on a small panel on top, sharing the time
     axis with VOUT below, both in absolute volts.
@@ -417,7 +418,8 @@ def plot_edges(
 
     ref_label: y label of the top panel. vout_nominal: drawn as the expected VOUT on invalid edges.
     full: show the whole capture instead of zooming on the step (plot_full.png). window: time after
-    the step to show (s); None picks it from the settling times. The cross-check scope's traces,
+    the step to show (s); None picks it from the settling times. per_edge: size each valid edge's
+    span to its own settling time instead of the slowest edge's (plot_zoom.png; ignores `window`). The cross-check scope's traces,
     if any, are overlaid in another colour. Returns the matplotlib Figure.
     """
     from matplotlib.ticker import FormatStrFormatter
@@ -435,6 +437,13 @@ def plot_edges(
             if not getattr(e, "issues", []) and np.isfinite(e.metrics.settling_time)
         ]
         t_end_us = max(spans) if spans else None
+
+    def edge_span_us(e) -> float | None:
+        """plot_zoom.png: this edge's own span (2.5 x its settling time + 10 us), else the shared one."""
+        if per_edge and not getattr(e, "issues", []) and np.isfinite(e.metrics.settling_time):
+            return e.metrics.settling_time * 1e6 * 2.5 + 10
+        return t_end_us
+
     fig, axes = plotting.figure(
         2, n, size=(5.4 * n, 5.8), squeeze=False, sharex="col", height_ratios=[1, 3.2]
     )
@@ -447,8 +456,9 @@ def plot_edges(
         # long full-capture windows read better in ms; settling times stay labelled in µs
         scale, unit = (1e3, "ms") if full and (e.t[-1] - e.t[0]) > 2e-3 else (1e6, "µs")
         us = e.t * scale
-        if not full and t_end_us is not None and (valid or window is not None):  # zoom on the step
-            view = (us >= -0.15 * t_end_us) & (us <= t_end_us)
+        span_us = edge_span_us(e)
+        if not full and span_us is not None and (valid or window is not None):  # zoom on the step
+            view = (us >= -0.15 * span_us) & (us <= span_us)
         else:
             view = np.ones_like(us, dtype=bool)  # whole capture: nothing hidden
 

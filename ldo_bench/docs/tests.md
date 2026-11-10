@@ -174,8 +174,9 @@ Powers VIN up (default `load_reg.vin`), then reads VOUT, VIN and the supply's V 
   - if the scope never triggers, one untriggered capture is saved to show what's on the channels
 - **Plots:**
   - `plot.png` zooms in on the step, with every edge on the same time span. The default is 2.5 × the slowest settling time + 10 µs, or `--plot-us 100` for a scope at 10 µs/div.
+  - `plot_zoom.png` zooms each edge on its own span (2.5 × its own settling time + 10 µs), so a fast edge isn't squeezed next to a slow one. The time scales differ between panels, and the title says so.
   - `plot_full.png` shows the whole capture.
-  - Both have VOUT on top and the scope 2 (trigger) trace in a panel underneath.
+  - All three have the scope 2 (trigger) trace in a small panel on top and VOUT below. The 54621A, if used, is on a right-hand VOUT axis.
 - **Longer window:** `--window-ms 5` lowers the sample rate to fit 5 ms into the same 8192 samples. Fast details get coarser at lower rates.
 - **54621A cross-check:** optional `[xscope]`. Every edge is also captured on the 54621A, overlaid as "54621A", and its peak and settling time are compared. `--no-xscope` skips it. See [instruments.md](instruments.md#agilent-54621a-cross-check-scope).
 - **Extra files:** `waveform_rising.csv` / `waveform_falling.csv`.
