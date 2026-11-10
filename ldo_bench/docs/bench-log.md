@@ -87,6 +87,22 @@ First contact with the scope on the bench, an **Agilent 54624A** (4-channel; the
   - **Peaks:** they agree within 0.34 mV, and match 2026-11-06 (−16.4 / +14.6 mV).
   - **Settling:** the two scopes differ by one ring period. On the step down the ringing near 180–205 µs is about as large as the ±1.35 mV band, so a 0.1 mV difference moves which ring is "last outside" by ~30 µs. Quote it as ~180–210 µs to ±10 %. A wider band or more averages would make it steadier.
 
+**`load-tran --avg 64` at TP4** (`results/load-tran/20261110-114729_TPS7A7001-demo-board_load-tran`): valid.
+- **Peaks:** −17.30 / +13.45 mV on the AD2 (54624A within 0.38 mV).
+- **Noise:** 0.038 mV rms.
+- **DMM beep fixed:** the DMM's port was reserved before the scope search, so the scope's 8N1 probe never reached it.
+- **Settling at different bands**, re-analysed offline from this run's saved waveforms. At 10 % it reproduces the run's own numbers; nothing was saved.
+
+| | 10 % | 15 % | 20 % |
+|---|---|---|---|
+| step up, AD2 / 54624A | 20.0 / 16.4 µs | 15.6 / 15.6 µs | 12.3 / 12.3 µs |
+| step down, AD2 / 54624A | 205.8 / 203.5 µs | 149.7 / 148.6 µs | 146.2 / 119.6 µs |
+
+- **64 averages** bring the step down into agreement at 10 % (2.3 µs, from 28 µs at 16 averages). The AD2's own values match the 16-average run.
+- **A wider band isn't a general fix.** At 20 % a different ring sits on the band edge and the scopes disagree again.
+- **Kept:** 10 % (the WaveForms definition). Use `--avg 64` when settling matters.
+- **Step up gap:** 3.6 µs at 10 %. A guess: the 54624A's 410 ns/pt and 1 µs smoothing miss a narrow last excursion.
+
 ## 2026-11-07: external reference (BGR vs 1.204 V)
 
 The BGR on JAFWAK measures 1.17 V against 1.204 V in simulation. JP2 lets VREF_IN be driven from outside, so every test except the enable ones can now run with PSU OUT2 on VREF_IN (`--vref ext`). `ldo-bench compare` then lines that run up against the BGR run. See [tests.md](tests.md#external-reference-bgr-vs---vref-ext-jafwak). Simulator only so far.
