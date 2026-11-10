@@ -111,7 +111,7 @@ A driver sits on a **transport** (`transports.py`) with `write`, `query`, `read_
 - `PrologixTransport`: Prologix-style USB-GPIB adapters (a serial port speaking `++` commands).
 - `SerialTransport`: an instrument's own RS-232 port. It handles HP's DTR/DSR pacing, 7-bit parity, and IEEE 488.2 binary blocks (scope waveforms).
 
-`discovery.py` finds each instrument by its `*IDN?` model, not by address, so the same config works on any machine. The `Finder` searches once per run, in order: VISA, then RS-232 ports with that instrument's serial settings (and the other parity settings, reporting which one worked), then Prologix adapters at every address. A port one instrument claimed is never probed for another.
+`discovery.py` finds each instrument by its `*IDN?` model, not by address, so the same config works on any machine. The `Finder` searches once per run, in order: VISA, then RS-232 ports with that instrument's serial settings (and the other parity settings, reporting which one worked), then Prologix adapters at every address. A port one instrument claimed is never probed for another. A test that doesn't use the DMM but searches RS-232 for the 54621A first finds the DMM's port with the DMM's own settings and claims it (`reserve_dmm_port`). Otherwise the scope's 8N1 probe would reach a 34401A set to 7E2 as garbage, which it logs as an error and beeps at.
 
 The AD2 (`ad2.py`) is one object implementing Oscilloscope, DigitalOut and Wavegen. It needs the Digilent WaveForms runtime, and only one program can open it, so the WaveForms GUI must be closed.
 
@@ -190,7 +190,7 @@ results/
 ## Tests and tooling
 
 ```
-uv run poe verify         # the gate: format check, lint, both configs validated, 314 tests (~10 s, no hardware)
+uv run poe verify         # the gate: format check, lint, both configs validated, 319 tests (~10 s, no hardware)
 uv run poe test           # just the tests
 uv run poe format         # format the code
 ```

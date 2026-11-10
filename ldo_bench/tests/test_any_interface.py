@@ -117,6 +117,35 @@ def test_one_search_shared_and_claimed_ports_not_reprobed(bus):
     assert "COM3" not in scope_probes and "COM4" not in scope_probes
 
 
+def test_unused_dmm_port_reserved_so_the_scope_search_never_garbles_it(bus):
+    """Bench, 2026-11-10: load-tran doesn't use the DMM, so its port was unclaimed and the scope
+    search sent it *IDN? at 9600 8N1. The 34401A (7E2) logged an error and beeped every run."""
+    dmm_s = SerialSettings(9600, "even", 2, "dsr-pacing")
+    bus["serial"][("COM3", (9600, "even"))] = DMM
+    bus["serial"][("COM4", (9600, "none"))] = SCOPE
+    f = Finder()
+    assert discovery.reserve_dmm_port(finder=f, serial=dmm_s) == "serial:COM3"
+    discovery.open_xscope(serial=SerialSettings(9600, "none", 1, "dsrdtr"), finder=f)
+    assert bus["opened"][-1][0] == "serial:COM4"
+    # the DMM's port heard only its own framing: no other parity, no scope probe
+    assert [(pa, b) for p, pa, b in bus["probes"] if p == "COM3"] == [("even", 9600)]
+    assert all(r != "serial:COM3" for r, _ in bus["opened"])  # found, not opened
+
+
+def test_reserving_a_dmm_that_isnt_there_is_harmless(bus):
+    bus["serial"][("COM4", (9600, "none"))] = SCOPE
+    f = Finder()
+    assert discovery.reserve_dmm_port(finder=f, serial=SerialSettings(9600, "even", 2, "dsr-pacing")) is None
+    discovery.open_xscope(serial=SerialSettings(9600, "none", 1, "dsrdtr"), finder=f)
+    assert bus["opened"][-1][0] == "serial:COM4"
+
+
+def test_reserving_a_configured_dmm_resource_probes_nothing(bus):
+    f = Finder()
+    assert discovery.reserve_dmm_port("serial:COM3", finder=f, serial=SerialSettings()) == "serial:COM3"
+    assert bus["probes"] == [] and "COM3" in f.claimed
+
+
 def test_explicit_resource_any_form(bus):
     for res in ("GPIB0::5::INSTR", "USB0::1003::8293::X::0::INSTR", "prologix:COM5:5", "serial:COM3"):
         bus["visa"] = [Found(res, PSU)] if not res.startswith("serial:") else []

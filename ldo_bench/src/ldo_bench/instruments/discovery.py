@@ -365,6 +365,30 @@ def open_dmm(
     return HP34401A(open_transport(f.resource, serial=f.serial or serial))
 
 
+def reserve_dmm_port(resource: str = "", *, serial: SerialSettings, finder: Finder) -> str | None:
+    """Find the 34401A without opening it, and claim its port so later searches skip it.
+
+    For tests that don't use the DMM but search RS-232 for the scope: the scope probe's framing
+    (8N1) garbles on a 34401A set to 7E2, which logs an error and beeps. Here the DMM hears only its
+    own settings (`serial`, no other parities). Returns the claimed resource, or None if no DMM
+    answered (then nothing is claimed and the search goes on as before).
+    """
+    if resource:
+        finder.claim(resource)
+        return resource
+    hits = [f for f in finder.visa() if _is_dmm(f)]
+    if not hits:
+        with _step(
+            f"Looking for the {DMM_MODEL} DMM's port (not used by this test), so nothing else probes it"
+        ):
+            hits = [f for f in finder.serial([serial], remote=True) if _is_dmm(f)]
+    if len(hits) != 1:  # none, or ambiguous: claim nothing
+        return None
+    finder.claim(hits[0])
+    log.info("  %s is the DMM: skipped by the other searches", hits[0].resource)
+    return hits[0].resource
+
+
 def open_xscope(
     resource: str = "",
     *,

@@ -284,3 +284,27 @@ def test_xcheck_plotted_on_its_own_axis_at_the_same_scale(jafwak):
         (line,) = twin.get_lines()
         assert line.get_ydata().min() >= e.xcheck.vout.min()  # the scope's own readings, unshifted
         assert line.get_ydata().max() > e.metrics.nominal + off / 2
+
+
+@pytest.mark.parametrize("use_dmm", [False, True])
+def test_unused_dmm_port_reserved_before_the_scope_search(jafwak, monkeypatch, use_dmm):
+    """A test without the DMM (load-tran) reserves its port first, so the scope probe never hits it."""
+
+    class Inst:
+        idn = "fake"
+
+        def close(self):
+            pass
+
+        def configure_dcv(self, **k):
+            pass
+
+    calls = []
+    monkeypatch.setattr(discovery, "open_psu", lambda *a, **k: Inst())
+    monkeypatch.setattr(discovery, "open_ad2", lambda *a, **k: Inst())
+    monkeypatch.setattr(discovery, "open_dmm", lambda *a, **k: calls.append("open_dmm") or Inst())
+    monkeypatch.setattr(discovery, "reserve_dmm_port", lambda *a, **k: calls.append("reserve") or None)
+    monkeypatch.setattr(discovery, "open_xscope", lambda *a, **k: calls.append("open_xscope") or Inst())
+    open_bench(jafwak, use_dmm=use_dmm, use_xscope=True)
+    # with the DMM in use, opening it claims its port; without, it is reserved; either way first
+    assert calls == (["open_dmm", "open_xscope"] if use_dmm else ["reserve", "open_xscope"])

@@ -650,6 +650,7 @@ def open_bench(
             vref_external=vref_external,
         )
 
+    from ldo_bench.instruments import discovery
     from ldo_bench.instruments.discovery import Finder, open_ad2, open_dmm, open_psu, open_xscope
 
     t0 = time.monotonic()
@@ -677,6 +678,10 @@ def open_bench(
         xscope_issue = None
         if want_xscope:
             xs = cfg.xscope
+            if dmm is None and cfg.dmm is not None and not xs.resource:
+                # The scope search probes every free serial port at 8N1; a 34401A set to 7E2 hears
+                # garbage, logs an error and beeps. Find its port first, with its own settings.
+                discovery.reserve_dmm_port(cfg.dmm.resource, serial=cfg.dmm.serial_settings(), finder=finder)
             try:
                 xscope = open_xscope(xs.resource, serial=xs.serial_settings(), finder=finder)
                 opened.append(xscope)
