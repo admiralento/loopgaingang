@@ -140,7 +140,7 @@ Each run writes a folder under `results/<test>/`, e.g. `results/load-tran/202611
 | line-tran, psrr, iq, enable-sine, enable-startup | simulator only |
 | `--vref ext` (PSU OUT2 on VREF_IN) and `compare` | simulator only |
 | 54624A over RS-232: load-tran cross-check (averaged capture, readback, time window), demo board | yes (2026-11-10), peaks within 0.8 mV of the AD2 |
-| load-tran supply current check (VIN reaching the board) | yes (2026-11-10), passing case; the failing case is simulator only |
+| load-tran supply current check (VIN reaching the board), 54621A/54624A clipping check | yes (2026-11-10): passing, and failing with the supply leads unplugged |
 | supply over RS-232, Prologix adapters | simulator / fake instruments only |
 | any JAFWAK measurement | not yet |
 

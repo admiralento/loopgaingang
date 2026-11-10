@@ -125,6 +125,12 @@ First contact with the scope on the bench, an **Agilent 54624A** (4-channel; the
 - **Supply current:** 4.94 mA at code 1 and 68.06 mA at code 17, a 63.1 mA rise against 64.9 mA expected. The check passed on hardware.
 - **AD2:** −17.38 mV / 19.9 µs (step up), +13.49 mV / 205.6 µs (step down). 54624A peaks within 0.42 mV.
 - **Repeatability:** five TP4 runs give AD2 settling of 19.9–20.0 µs and 205.5–205.8 µs.
+
+**`load-tran` with the supply leads unplugged on purpose** (`results/load-tran/20261110-122446_TPS7A7001-demo-board_load-tran_INVALID`, exit 3):
+- **Supply current check:** flagged it. 0.18 mA at code 1 and 0.20 mA at code 17, a 0.0 mA rise against 64.9 mA expected: "Is VIN reaching the board…".
+- **VOUT check:** flagged it, at 0.2 mV.
+- **54624A clipping check:** flagged both edges (2000 of 2000 points at 0.920 V), so no cross-check peak was reported.
+- **Result:** both new checks are now tested on hardware, in the passing and the failing case.
 - **Gap found:** the 54624A cross-check reported "peak −0.00 mV" with no issue, because the clipped 0.92 V is within the ±20 % VOUT tolerance. Now a VOUT trace touching its screen edge is flagged as clipped. This flags the run above and none of the six valid runs today.
 
 **AD2 vs 54624A DC offset** (pre-step VOUT from the saved waveforms):
