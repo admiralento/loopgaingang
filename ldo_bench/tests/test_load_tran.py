@@ -181,3 +181,38 @@ def test_legend_is_outside_the_data(jafwak):
         leg_top = fig.legends[0].get_window_extent().transformed(fig.transFigure.inverted()).y1
         assert leg_top <= min(a.get_position().y0 for a in fig.axes) + 1e-6, name
     plt.close("all")
+
+
+def test_supply_current_shows_vin_not_reaching_the_board(cfg, monkeypatch):
+    """Bench, 2026-11-10: with the supply unplugged load-tran could only say VOUT was missing. The
+    supply's current must rise by what the load bank draws between code_low and code_high."""
+    from ldo_bench.instruments.base import DcReading
+
+    lt = cfg.load_tran.model_copy(update={"averages": 2})
+    with open_bench(cfg, sim=True) as b:
+        monkeypatch.setattr(b.psu, "measure_current", lambda: 0.0)  # leads off: nothing flows
+        real = b.scope.measure_dc
+        ch = cfg.ad2.vout_channel
+
+        def no_vout(*a, **k):
+            r = dict(real(*a, **k))
+            r[ch] = DcReading(0.0002, 1e-4, r[ch].n)
+            return r
+
+        monkeypatch.setattr(b.scope, "measure_dc", no_vout)
+        res = load_tran.run(b, lt, cfg.analysis)
+    msg = next(i for i in res.setup_issues if "supply current" in i)
+    assert "VIN" in msg and "0.0 mA" in msg
+    assert res.summary()["valid"] is False
+    sc = res.summary()["supply_current"]
+    assert sc["i_low_a"] == 0.0 and sc["i_high_a"] == 0.0 and sc["expected_rise_a"] > 0.01
+
+
+def test_supply_current_recorded_and_clean_on_a_good_run(cfg):
+    lt = cfg.load_tran.model_copy(update={"averages": 2})
+    an = cfg.analysis.model_copy(update={"settle_reference": "post"})
+    with open_bench(cfg, sim=True) as b:
+        res = load_tran.run(b, lt, an)
+    assert not any("supply current" in i for i in res.issues)
+    sc = res.summary()["supply_current"]
+    assert sc["i_high_a"] - sc["i_low_a"] == pytest.approx(sc["expected_rise_a"], rel=0.1)

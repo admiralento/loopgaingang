@@ -192,6 +192,7 @@ Powers VIN up (default `load_reg.vin`), then reads VOUT, VIN and the supply's V 
   - Scope 2+ -> DIO 4 (load bank bit B4, trigger), 2- -> GND. On JAFWAK, the trigger is DIO 2 (B2).
   - DIO [0, 1, 2, 3, 4] -> load bank bits B0..B4, AD2 GND -> board GND
 - **Does:** steps the load bank between `code_low` and `code_high` at fixed VIN. It triggers on a DIO pin that changes between the two codes (`trigger_pin`, default: the highest bit that changes).
+- **Supply current check:** before the captures it reads the supply's current at `code_low` and `code_high` (0.6 s). The rise must match what the bank should draw between them at nominal VOUT, within `loadbank_check`'s tolerances (10 % or 1.5 mA). If it doesn't, VIN isn't reaching the board or the load bank isn't wired. That's a setup problem, so the run is `_INVALID`. The readings go into `summary.json` as `supply_current`. On the bench (2026-11-10) the rise was 63.1–63.2 mA against 64.9 mA expected.
 - **Options:**
   - `--from 4mA --to 67mA` (codes or currents)
   - `--avg 32`

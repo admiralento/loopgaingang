@@ -97,6 +97,7 @@ class LoadTranResult:
     vout_nominal: float = 1.0  # V, dut.vout_nominal (drawn on invalid plots)
     setup_issues: list[str] = field(default_factory=list)  # found before any capture
     plot_window: float | None = None  # s after the step shown in plot.png (None = automatic)
+    supply_current: dict | None = None  # supply readback at code_low / code_high (A), see _supply_current
 
     @property
     def issues(self) -> list[str]:
@@ -154,6 +155,7 @@ class LoadTranResult:
             "vin": self.vin,
             "trigger_pin": self.trigger_pin,
             "averages": self.averages,
+            "supply_current": self.supply_current,
             "edges": {
                 e.edge: {**e.metrics.as_dict(), "i_from": e.i_from, "i_to": e.i_to} for e in self.edges
             },
@@ -164,6 +166,34 @@ class LoadTranResult:
         for e in self.edges:
             lines += edge_report(e)
         return "\n".join(lines)
+
+
+def _supply_current(bench: Bench, lt: LoadTranConfig) -> tuple[dict, str | None]:
+    """Supply current at code_low and code_high, and a setup problem if it doesn't rise as it should.
+
+    The rise must match what the bank draws between the two codes at the nominal VOUT, within
+    loadbank_check's tolerances (the difference cancels the readback offset and the LDO's own
+    current). With VIN not reaching the board, or the load bank not connected, it barely moves:
+    otherwise a missing VIN only shows up as "VOUT missing" (bench, 2026-11-10). Leaves the bank
+    at code_low. Returns ({i_low_a, i_high_a, expected_rise_a} in A, issue or None).
+    """
+    bank, lc, v_nom = bench.loadbank, bench.cfg.loadbank_check, bench.cfg.dut.vout_nominal
+    readings = {}
+    for name, code in (("i_high_a", lt.code_high), ("i_low_a", lt.code_low)):
+        bank.set(code)
+        bench.sleep(bench.cfg.psu.settle_time)
+        readings[name] = float(bench.psu.measure_current())
+    expected = bank.current(lt.code_high, v_nom) - bank.current(lt.code_low, v_nom)
+    out = {"i_low_a": readings["i_low_a"], "i_high_a": readings["i_high_a"], "expected_rise_a": expected}
+    seen = readings["i_high_a"] - readings["i_low_a"]
+    if abs(seen - expected) <= max(lc.tolerance * abs(expected), lc.abs_tolerance):
+        return out, None
+    return out, (
+        f"supply current {readings['i_low_a'] * 1e3:.1f} mA at code {lt.code_low} and "
+        f"{readings['i_high_a'] * 1e3:.1f} mA at code {lt.code_high}: it rose {seen * 1e3:.1f} mA, but "
+        f"the load bank should draw {expected * 1e3:.1f} mA more. Is VIN reaching the board (supply "
+        "leads, output on) and the load bank wired (DIO pins, AD2 GND)?"
+    )
 
 
 def trigger_setup(bench: Bench, lt: LoadTranConfig) -> tuple[int, bool]:
@@ -215,6 +245,9 @@ def run(bench: Bench, lt: LoadTranConfig, an: AnalysisConfig) -> LoadTranResult:
     bench.reference_on()  # --vref ext only
     vout_est, _ = bench.measure_dc(0.05)
     setup_issues = [i for i in [bench.vout_issue(vout_est.mean, source=f"scope {a.vout_channel}")] if i]
+    supply, supply_issue = _supply_current(bench, lt)
+    if supply_issue:
+        setup_issues.append(supply_issue)
     for i in setup_issues:
         log.warning("load transient: %s (running anyway; the data will show it)", i)
     v_nom = bench.cfg.dut.vout_nominal  # step currents are labelled at the nominal VOUT
@@ -287,7 +320,7 @@ def run(bench: Bench, lt: LoadTranConfig, an: AnalysisConfig) -> LoadTranResult:
             log.info("%s: peak %+.2f mV, settling %.2f us", edge, m.deviation * 1e3, m.settling_time * 1e6)
     bank.off()
     return LoadTranResult(
-        lt.vin, pin, lt.averages, results, bench.cfg.dut.vout_nominal, setup_issues, lt.plot_window
+        lt.vin, pin, lt.averages, results, bench.cfg.dut.vout_nominal, setup_issues, lt.plot_window, supply
     )
 
 
