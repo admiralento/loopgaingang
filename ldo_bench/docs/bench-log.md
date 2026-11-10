@@ -41,6 +41,22 @@ First contact with the scope on the bench, an **Agilent 54624A** (4-channel; the
   - **Load shift:** both scopes see VOUT drop ~7 mV from 4 to 69 mA, where the DMM's 2.7 mΩ predicts ~0.2 mV. A guess: the scope grounds share the load-bank return path (about 0.1 Ω). If so, the "post" settling reference is hiding a wiring problem. To check: scope grounds at the GND pin by VOUT, or the DMM on VOUT at codes 1 and 17.
 - **Window shift:** the 54624A's window started 82 µs (10 %) early. `REFerence LEFT` is 1 division in from the edge; the driver now allows for it.
 
+**Load-tran with the VOUT grounds moved** to the GND next to VOUT (AD2 1− and the 54624A ch1 shield; `results/load-tran/20261110-111829_TPS7A7001-demo-board_load-tran`): valid.
+
+| | AD2 | 54624A |
+|---|---|---|
+| step up 4 → 69 mA: peak / settling | −23.46 mV / 16.00 µs | −23.70 mV / 15.97 µs |
+| step down 69 → 4 mA: peak / settling | +19.96 mV / 163.70 µs | +19.20 mV / 165.03 µs |
+| VOUT at 4 mA / 69 mA | 0.99369 / 0.98705 V | 0.99946 / 0.99281 V |
+
+- **What improved:**
+  - **Noise:** halved (0.072 mV rms).
+  - **Peaks:** the scopes now agree within 0.8 mV.
+  - **AD2 DC level:** rose 7.5 mV, to within ~1 mV of the DMM's 0.9949 V.
+- **Load shift still there:** both scopes see the same 6.6 mV between the two loads, so it's real at the probe points, not mainly the ground leads. It still disagrees with the DMM's 2.7 mΩ from 2026-11-06. Perhaps the DMM was on a different point. Next: `load-reg` with the DMM at the scope probe points.
+- **Window fix confirmed:** the 54624A capture now starts at −163.8 µs, like the AD2.
+- **Plot fix confirmed:** its trace overlays the AD2's on its own axis.
+
 ## 2026-11-07: external reference (BGR vs 1.204 V)
 
 The BGR on JAFWAK measures 1.17 V against 1.204 V in simulation. JP2 lets VREF_IN be driven from outside, so every test except the enable ones can now run with PSU OUT2 on VREF_IN (`--vref ext`). `ldo-bench compare` then lines that run up against the BGR run. See [tests.md](tests.md#external-reference-bgr-vs---vref-ext-jafwak). Simulator only so far.
