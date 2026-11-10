@@ -87,7 +87,7 @@ code_high = 4                # 19.2 mA; trigger on the MSB that changes: DIO 2 (
 sample_rate = 10e6
 n_samples = 8192
 pre_trigger = 0.2
-averages = 16
+averages = 64                # as on the demo board: 16 left the scopes a ring period apart on settling (2026-11-10)
 edges = ["rising", "falling"]
 
 [line_tran]                  # W1 -> VIN_FG SMA -> BUF634 -> VIN (JP4 to the buffer), PSU on VS_BUFF

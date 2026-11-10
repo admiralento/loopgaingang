@@ -89,7 +89,7 @@ trigger_pin = 4              # Scope 2+ on DIO 4 / J4, as in the WaveForms works
 sample_rate = 10e6
 n_samples = 8192
 pre_trigger = 0.2
-averages = 16
+averages = 64                # 64: both scopes agree on settling within ~2 us (16 left them a ring period apart, 2026-11-10)
 edges = ["rising", "falling"]
 
 [line_tran]
