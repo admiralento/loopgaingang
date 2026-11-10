@@ -102,6 +102,15 @@ First contact with the scope on the bench, an **Agilent 54624A** (4-channel; the
 - **A wider band isn't a general fix.** At 20 % a different ring sits on the band edge and the scopes disagree again.
 - **Kept:** 10 % (the WaveForms definition). Use `--avg 64` when settling matters.
 - **Step up gap:** 3.6 µs at 10 %. A guess: the 54624A's 410 ns/pt and 1 µs smoothing miss a narrow last excursion.
+- **Default:** `load_tran.averages` is now 64 in both configs.
+
+**AD2 vs 54624A DC offset** (pre-step VOUT from the saved waveforms):
+- **Readings:** the 54624A reads +5.8 mV above the AD2 on `/VOUT`, and +7.1 / +7.2 mV at TP4 (16 / 64 averages). At TP4 the DMM read 0.99487 V at 4 mA and the AD2 0.4–0.7 mV below it, so the 54624A is the one off, by about +6.7 mV.
+- **Fixed offset:** the same at 4 and 69 mA (7.13 / 7.26 mV), so it isn't a ground drop carrying load current.
+- **Probable cause:** offset accuracy with ch1 offset at 1.0 V for 20 mV/div. From memory the 54620 spec is about ±(2 % of offset + 1 % of full scale), ~±20 mV; not checked against the datasheet.
+- **Peak difference:** the 0.3–0.4 mV between the scopes fits the 54624A's ~±2 % gain accuracy (also from memory).
+- **Effect:** peaks and settling are measured from each scope's own pre-step level, so the offset doesn't touch them. Absolute VOUT comes from the DMM.
+- **To try:** Self Cal on the 54624A after warm-up.
 
 ## 2026-11-07: external reference (BGR vs 1.204 V)
 
