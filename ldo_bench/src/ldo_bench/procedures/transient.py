@@ -257,6 +257,32 @@ def _pre_step_offset(e, x: XCheck) -> float:
     return float(xm.nominal - e.metrics.nominal)
 
 
+CLIP_MARGIN = 0.01  # a sample within 1 % of full scale of a screen edge counts as clipped
+
+
+def _clip_issue(v: np.ndarray, centre: float, full_range: float, channel: str) -> str | None:
+    """A cross-check problem if VOUT touches the top or bottom of the scope's screen.
+
+    The 54621A screen spans centre +/- full_range / 2 (V; arm() sets ch offset and range). A clipped
+    sample isn't a measurement of VOUT, so neither a flat trace on the edge (VOUT off screen, e.g.
+    ~0 V: bench, 2026-11-10) nor a peak that runs off it may be analysed as if it were.
+    """
+    lo, hi = centre - full_range / 2, centre + full_range / 2
+    margin = CLIP_MARGIN * full_range
+    n_lo, n_hi = int(np.sum(v <= lo + margin)), int(np.sum(v >= hi - margin))
+    if not (n_lo or n_hi):
+        return None
+    where = " and ".join(
+        f"the {side} ({n} of {len(v)} points at {edge:.3f} V)"
+        for side, n, edge in (("bottom", n_lo, lo), ("top", n_hi, hi))
+        if n
+    )
+    return (
+        f"its {channel} VOUT is clipped at {where} of its {lo:.3f} to {hi:.3f} V screen: is it on VOUT, "
+        "with VOUT near nominal, or is the response bigger than xscope.vout_range?"
+    )
+
+
 def analyse_xcheck(
     bench: Bench,
     sc: StepCapture,
@@ -271,7 +297,7 @@ def analyse_xcheck(
     Returns None when no cross-check scope was wanted. When it was wanted but has no data, returns
     an XCheck with empty arrays and the reason in issues. Otherwise the checks are the same as
     capture_issues (step found, ref swing within SWING_TOLERANCE, VOUT near nominal before t = 0),
-    and the time axis is shifted so 0 is the step the analysis found.
+    plus VOUT not clipped at the screen's edges, and the time axis is shifted so 0 is the step the analysis found.
     """
     if bench.xscope is None:
         if bench.xscope_issue:  # wanted but couldn't be opened: say so on every edge
@@ -304,6 +330,9 @@ def analyse_xcheck(
         issues.append(
             f"its ch{xc.ref_channel} swings {swing:.3f} V, {ref_desc} should swing {expected_swing:.3f} V"
         )
+    clipped = _clip_issue(tv.v, bench.cfg.dut.vout_nominal, xc.vout_range, f"ch{xc.vout_channel}")
+    if clipped:
+        issues.append(clipped)
     pre = tv.v[tv.t < 0]
     vi = bench.vout_issue(
         float(pre.mean()) if len(pre) else float(tv.v.mean()), source=f"{model} ch{xc.vout_channel}"

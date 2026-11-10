@@ -308,3 +308,49 @@ def test_unused_dmm_port_reserved_before_the_scope_search(jafwak, monkeypatch, u
     open_bench(jafwak, use_dmm=use_dmm, use_xscope=True)
     # with the DMM in use, opening it claims its port; without, it is reserved; either way first
     assert calls == (["open_dmm", "open_xscope"] if use_dmm else ["reserve", "open_xscope"])
+
+
+def _clip_xscope(b, monkeypatch, how):
+    """Make the sim 54621A return a VOUT trace changed by `how(v, lo, hi)` (lo/hi: screen edges, V)."""
+    real = b.xscope.collect
+    xc = b.cfg.xscope
+    lo, hi = b.cfg.dut.vout_nominal - xc.vout_range / 2, b.cfg.dut.vout_nominal + xc.vout_range / 2
+
+    def collect(*a, **k):
+        tr = real(*a, **k)
+        v = tr[xc.vout_channel]
+        tr[xc.vout_channel] = type(v)(v.t, how(v.v, lo, hi), v.averages)
+        return tr
+
+    monkeypatch.setattr(b.xscope, "collect", collect)
+
+
+def test_xcheck_flat_on_the_screen_edge_is_flagged_not_analysed(jafwak, monkeypatch):
+    """Bench, 2026-11-10: VOUT was ~0 V, the 54624A trace sat flat at the bottom of its screen
+    (0.92 V, inside the +/-20 % VOUT tolerance) and was reported as a 'peak -0.00 mV' cross-check."""
+    an = jafwak.analysis.model_copy(update={"settle_reference": "post"})
+    with open_bench(jafwak, sim=True, use_xscope=True) as b:
+        _clip_xscope(b, monkeypatch, lambda v, lo, hi: np.full_like(v, lo))
+        res = load_tran.run(b, jafwak.load_tran.model_copy(update={"averages": 2}), an)
+    for e in res.edges:
+        assert any("clipped at the bottom" in i for i in e.xcheck.issues), e.xcheck.issues
+    assert "peak -0.00" not in res.report()
+    assert not any("clipped" in i for i in res.issues)  # the AD2 result's validity is its own
+
+
+def test_xcheck_peak_running_off_the_screen_is_flagged(jafwak, monkeypatch):
+    an = jafwak.analysis.model_copy(update={"settle_reference": "post"})
+    with open_bench(jafwak, sim=True, use_xscope=True) as b:
+        nom = b.cfg.dut.vout_nominal
+        # a screen only 4 mV either side of nominal: the sim's ~20 mV peaks run off it
+        _clip_xscope(b, monkeypatch, lambda v, lo, hi: np.clip(v, nom - 0.004, nom + 0.004))
+        b.cfg.xscope.vout_range = 0.008
+        res = load_tran.run(b, jafwak.load_tran.model_copy(update={"averages": 2}), an)
+    assert all(any("clipped" in i for i in e.xcheck.issues) for e in res.edges)
+
+
+def test_valid_xcheck_is_not_flagged_as_clipped(jafwak):
+    an = jafwak.analysis.model_copy(update={"settle_reference": "post"})
+    with open_bench(jafwak, sim=True, use_xscope=True) as b:
+        res = load_tran.run(b, jafwak.load_tran.model_copy(update={"averages": 2}), an)
+    assert not any(e.xcheck.issues for e in res.edges)

@@ -116,6 +116,11 @@ First contact with the scope on the bench, an **Agilent 54624A** (4-channel; the
 - **54624A:** peaks within 0.44 mV. Its step-down settling was 204.3 µs this time, on the later ring.
 - **Over the four TP4 runs:** the AD2 settles in 19.9–20.0 µs and 205.5–205.8 µs, with peaks within 0.1 mV.
 
+**`load-tran`, VOUT missing** (`results/load-tran/20261110-121546_TPS7A7001-demo-board_load-tran_INVALID`, exit 3):
+- **What both scopes saw:** AD2 scope 1 read −0.3 to +0.1 mV. The 54624A read a flat 0.9206 V, the bottom of its 0.92–1.08 V screen. DIO 4 swung 0 → 3.27 V on both, so the trigger and load bank were working.
+- **Cause unknown:** `load-tran` doesn't read VIN or the supply current, so it can't say. Candidates: the TP4 clip, VIN to the board, the enable, or a short on the output.
+- **Gap found:** the 54624A cross-check reported "peak −0.00 mV" with no issue, because the clipped 0.92 V is within the ±20 % VOUT tolerance. Now a VOUT trace touching its screen edge is flagged as clipped. This flags the run above and none of the six valid runs today.
+
 **AD2 vs 54624A DC offset** (pre-step VOUT from the saved waveforms):
 - **Readings:** the 54624A reads +5.8 mV above the AD2 on `/VOUT`, and +7.1 / +7.2 mV at TP4 (16 / 64 averages). At TP4 the DMM read 0.99487 V at 4 mA and the AD2 0.4–0.7 mV below it, so the 54624A is the one off, by about +6.7 mV.
 - **Fixed offset:** the same at 4 and 69 mA (7.13 / 7.26 mV), so it isn't a ground drop carrying load current.

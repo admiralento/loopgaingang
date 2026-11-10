@@ -111,6 +111,7 @@ Optional: configure `[xscope]`, or skip it for a run with `--no-xscope`. If it's
 
 **When the scope has a problem:**
 - **It never affects the AD2 result's validity**, whether the scope is missing, on the wrong signal, or never completes its average. The problem is listed under the cross-check only.
+- **Clipped VOUT:** if any VOUT sample is within 1 % of full scale of the top or bottom of its screen (`vout_nominal ± xscope.vout_range / 2`), the cross-check is flagged as clipped and gives no peak or settling time. This covers VOUT being off screen (flat on the edge; on the bench, VOUT at 0 V read as a flat 0.92 V, inside the ±20 % VOUT tolerance) and a response bigger than the screen.
 - **If it never completes,** it's left waiting for triggers. Press **Run/Stop** to free it.
 
 The driver follows the Agilent 54620-Series Programmer's Guide (pub. 54622-97038), but hasn't been run against a real scope yet.
