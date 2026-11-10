@@ -2,6 +2,21 @@
 
 What was built, what was measured, and what went wrong along the way. Newest session first.
 
+## 2026-11-10: 54624A comms
+
+First contact with the scope on the bench, an **Agilent 54624A** (4-channel; the driver covers it). It's on RS-232 at `/dev/cu.usbserial-ABB83HZJ`, alongside the 34401A (`/dev/cu.usbserial-ABB83W3S`, 9600 7E2) and the AD2. Nothing was powered and no DUT was connected.
+
+**Measured:**
+- **`discover`:** it found `AGILENT TECHNOLOGIES,54624A,MY40003464,A.02.20` at **9600 baud** 8N1. The config expects 57600.
+- **Read-only check** (repo transport, `dsrdtr` flow): `:SYSTem:ERRor?`, timebase, channel and trigger queries all answered.
+- **Waveform:** a 2000-point WORD `:WAVeform:DATA?` block came back whole, 4000 bytes as the preamble said. It took **5.1 s at 9600 baud**, so with two channels each transient edge spends about 10 s reading back.
+
+**Problems:**
+- **Leftover error:** the HP-style discovery probe sends `SYST:REM` / `SYST:LOC`, which the scope rejects with -113 "Undefined header". The driver's `*CLS` on open clears it, so it does no harm.
+- **Supply missing:** the E3648A didn't appear. No UsbGpib on USB, which means the supply was off or not in GPIB (HP-IB) mode.
+
+**Not yet tried on hardware:** `arm()` / `collect()` (averaged `:DIGitize`, `*OPC?`) and a full load-tran with the cross-check.
+
 ## 2026-11-07: external reference (BGR vs 1.204 V)
 
 The BGR on JAFWAK measures 1.17 V against 1.204 V in simulation. JP2 lets VREF_IN be driven from outside, so every test except the enable ones can now run with PSU OUT2 on VREF_IN (`--vref ext`). `ldo-bench compare` then lines that run up against the BGR run. See [tests.md](tests.md#external-reference-bgr-vs---vref-ext-jafwak). Simulator only so far.
