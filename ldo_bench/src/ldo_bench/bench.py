@@ -34,6 +34,9 @@ log = logging.getLogger(__name__)
 
 SETPOINT_TOLERANCE = 1e-3  # V: the supply's setpoint readback must match what was programmed
 VIN_SET_REL, VIN_SET_ABS = 0.02, 0.020  # measured VIN may be off its setpoint by 2 % + 20 mV
+# AD2 VOUT may differ from the DMM's by 2 % + 50 mV: well above the AD2's DC error and a few mm of
+# probe separation (1-8 mV on the bench), well below a probe that has come off VOUT (~1 V)
+VOUT_AGREE_REL, VOUT_AGREE_ABS = 0.02, 0.050
 
 # What the AD2 ref channel is wired to, for the simulator: (signal, DIO pin if signal is "dio" else 0).
 RefProbe = tuple[Literal["vin", "dio", "vref", "iin", "iout", "en_ain"], int]
@@ -512,6 +515,23 @@ class Bench:
         return (
             f"VOUT reads {vout:.4f} V on the {source}, but {self.cfg.dut.name} should be at {nom} V "
             f"(+/-{tol:.0%}): is the {source} on VOUT / GND, the LDO enabled and VIN applied?"
+        )
+
+    def vout_agreement_issue(self, p: DcPoint) -> str | None:
+        """A setup problem if the AD2's VOUT and the DMM's disagree by more than 2 % + 50 mV.
+
+        Only when VOUT came from the DMM and the AD2 also read it (p.vout_ad2 finite). The DMM's own
+        reading is checked by vout_issue; this catches AD2 scope 1 off VOUT while the DMM is on it
+        (bench, 2026-11-10), which would leave the scope wiring the transient tests rely on unchecked.
+        """
+        if p.source != "dmm" or not np.isfinite(p.vout_ad2):
+            return None
+        if abs(p.vout_ad2 - p.vout) <= VOUT_AGREE_REL * abs(p.vout) + VOUT_AGREE_ABS:
+            return None
+        ch = self.cfg.ad2.vout_channel
+        return (
+            f"VOUT on AD2 scope {ch} ({p.vout_ad2:.4f} V) disagrees with the DMM ({p.vout:.4f} V) by more "
+            f"than {VOUT_AGREE_REL:.0%} + {VOUT_AGREE_ABS * 1e3:.0f} mV: is scope {ch} on VOUT / GND?"
         )
 
     def vin_issue(self, vin: float, setpoint: float, *, source: str) -> str | None:

@@ -147,6 +147,7 @@ def run(bench: Bench, lr: LineRegConfig) -> LineRegResult:
     v_check = min(bench.cfg.dut.vout_nominal + 0.5, float(vins[-1]))
     bad = []  # (VIN, VOUT, source) where VOUT should be regulated but isn't near nominal
     vin_bad: list[str] = []  # VIN measured off its setpoint
+    agree_bad: list[str] = []  # AD2 VOUT disagrees with the DMM (scope 1 off VOUT)
     if bench.vref_external:
         # --vref ext: turn the reference on (and prove it) with full headroom, then sweep
         bench.vin_from_psu(float(max(vins)))
@@ -159,6 +160,8 @@ def run(bench: Bench, lr: LineRegConfig) -> LineRegResult:
         vin_src = f"scope {bench.cfg.ad2.ref_channel}" if lr.vin_source == "ad2" else "PSU readback"
         if (vi := bench.vin_issue(p.vin, float(v), source=vin_src)) is not None:
             vin_bad.append(vi)
+        if (ai := bench.vout_agreement_issue(p)) is not None:
+            agree_bad.append(f"at VIN {float(v):.2f} V: {ai}")
         row = {
             "vin_set_v": float(v),
             "vin_v": p.vin,
@@ -200,6 +203,8 @@ def run(bench: Bench, lr: LineRegConfig) -> LineRegResult:
         log.warning("line regulation: %s", issues[0])
     if vin_bad:
         issues.append(f"{vin_bad[0]} ({len(vin_bad)} of {len(rows)} points)")
+    if agree_bad:
+        issues.append(f"{agree_bad[0]} ({len(agree_bad)} of {len(rows)} points)")
     strays = dropout_strays(x, y, lr.dropout_fraction)
     if strays:
         issues.append(

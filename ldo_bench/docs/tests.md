@@ -92,6 +92,7 @@ Powers VIN up (default `load_reg.vin`), then reads VOUT, VIN and the supply's V 
 - **Setup checks:**
   - VOUT within `dut.vout_tolerance` (20 %) of nominal at every point
   - VIN at the board within 2 % + 20 mV of the setpoint (probe on the wrong node, supply in current limit)
+  - with the DMM: AD2 scope 1 within 2 % + 50 mV of the DMM at every point (scope 1 off VOUT; it read 16 mV on the bench while the DMM read 0.99 V)
   - with `psu_readback` on: the supply's current must rise by what each code should draw, within `loadbank_check`'s tolerances. A dead bit or a missing ground would otherwise look like perfect regulation. With it off, the report notes that the load current is only the bank estimate.
 - **Options:**
   - `--vin 2.0`
@@ -113,6 +114,7 @@ Powers VIN up (default `load_reg.vin`), then reads VOUT, VIN and the supply's V 
 - **Setup checks:**
   - VOUT near nominal wherever there's headroom
   - measured VIN within 2 % + 20 mV of the setpoint
+  - with the DMM and `vin_source = "ad2"`: AD2 scope 1 within 2 % + 50 mV of the DMM (with `"psu"` the AD2 isn't read)
   - a VOUT reading below the dropout threshold *above* the knee (a bad reading: the knee is taken from the bottom of the sweep, so it doesn't move)
   - fewer than 2 points to fit, or `fit_vin_min` below the dropout point
 - **Options:**

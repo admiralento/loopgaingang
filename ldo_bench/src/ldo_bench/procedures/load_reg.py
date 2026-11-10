@@ -115,12 +115,14 @@ def run(bench: Bench, lr: LoadRegConfig) -> LoadRegResult:
         # every point: catches a probe that comes loose mid-sweep
         issue = bench.vout_issue(p.vout, source=p.source.upper())
         vin_issue = bench.vin_issue(p.vin, lr.vin, source=f"scope {bench.cfg.ad2.ref_channel}")
+        agree_issue = bench.vout_agreement_issue(p)
         row = {
             "code": code,
             "i_est_a": bank.current(code, p.vout),  # used for the fit
             "i_expected_a": bank.current(code, bench.cfg.dut.vout_nominal),  # what the code should draw
             "vout_ok": issue is None,
             "vin_issue": vin_issue or "",
+            "vout_agree_issue": agree_issue or "",
             "vout_v": p.vout,
             "vout_std_v": p.vout_std,
             "vout_source": p.source,
@@ -157,6 +159,11 @@ def run(bench: Bench, lr: LoadRegConfig) -> LoadRegResult:
     vin_bad = [r for r in rows if r["vin_issue"]]
     if vin_bad:
         issues.append(f"{vin_bad[0]['vin_issue']} ({len(vin_bad)} of {len(rows)} points)")
+    agree_bad = [r for r in rows if r["vout_agree_issue"]]
+    if agree_bad:
+        issues.append(
+            f"code {agree_bad[0]['code']}: {agree_bad[0]['vout_agree_issue']} ({len(agree_bad)} of {len(rows)} points)"
+        )
     notes = []
     ranges = sorted({r["dmm_range_v"] for r in rows if np.isfinite(r["dmm_range_v"])})
     if len(ranges) > 1:

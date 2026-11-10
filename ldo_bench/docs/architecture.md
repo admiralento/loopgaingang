@@ -100,7 +100,7 @@ Other things the Bench does:
   - **Records:** `vref_info()` (source, the applied voltage, the proof readings) goes into `summary.json` and `meta.json` as `vref`, and the folder name gets `_extref`.
 - **Shutdown:** leaving the `with` block for any reason (end of test, exception, Ctrl-C) runs `shutdown()`. It turns off, in order: external reference (0 V), wavegen, AD2 V+, load bank, DIO, PSU output (then the setpoint goes to 0 V), and closes every instrument. Each step runs even if an earlier one fails. A failed step is printed in red as SHUTDOWN FAILED and the command exits 1, since the bench may still be powered.
 - **Commands are confirmed:** after every ramp the supply's setpoint is read back, and `OUTP OFF` is confirmed with `OUTP?`. A serial reply that ends at the timeout instead of its line feed is rejected, not parsed.
-- **Measurements:** `measure_dc()` averages both AD2 channels, `measure_point()` takes VOUT from the DMM when there is one, and `vout_issue()` is the standard "is VOUT where it should be?" check.
+- **Measurements:** `measure_dc()` averages both AD2 channels, `measure_point()` takes VOUT from the DMM when there is one, and `vout_issue()` is the standard "is VOUT where it should be?" check. With a DMM, `vout_agreement_issue()` also checks the AD2 reads the same VOUT (2 % + 50 mV), so a loose scope 1 is caught in the DC tests too.
 
 ## Instruments (`instruments/`)
 
@@ -190,7 +190,7 @@ results/
 ## Tests and tooling
 
 ```
-uv run poe verify         # the gate: format check, lint, both configs validated, 302 tests (~10 s, no hardware)
+uv run poe verify         # the gate: format check, lint, both configs validated, 314 tests (~10 s, no hardware)
 uv run poe test           # just the tests
 uv run poe format         # format the code
 ```

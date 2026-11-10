@@ -61,7 +61,7 @@ First contact with the scope on the bench, an **Agilent 54624A** (4-channel; the
 - **Readings:** VOUT 0.99488 V at no load to 0.98222 V at 122.4 mA. The slope is **103.0 mΩ** (R² 1.0000), 6.7 mV across 4 → 69 mA.
 - **Shift explained:** this matches the 6.6 mV both scopes saw in load-tran, so the load shift is real at these points. No-load VOUT matches 2026-11-06 (0.99487 V) to 10 µV, but the slope there was 2.7 mΩ. So ~100 mΩ sits between where the regulator holds VOUT and today's probe points. A guess: the wiring to the load bank, with the probes on the load side of it.
 - **Next:** probe at the demo board's output pins, before the load-bank wiring. Expect ~0.2 mV of shift, then `settle_reference = "pre"` again. The transient peaks so far include the ~0.1 Ω.
-- **AD2 scope 1 off VOUT:** it read ~16 mV at every code, so it wasn't on VOUT this run (possibly disturbed when scope 2 was moved). The run is still valid because VOUT came from the DMM, but nothing flagged the 0.98 V disagreement between the AD2 and the DMM.
+- **AD2 scope 1 off VOUT:** it read ~16 mV at every code, so it wasn't on VOUT this run (possibly disturbed when scope 2 was moved). The run is still valid because VOUT came from the DMM, but nothing flagged the 0.98 V disagreement between the AD2 and the DMM. Now caught: load-reg and line-reg mark a run invalid when the AD2's VOUT is more than 2 % + 50 mV from the DMM's.
 
 ## 2026-11-07: external reference (BGR vs 1.204 V)
 
