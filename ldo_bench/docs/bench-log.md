@@ -109,7 +109,12 @@ First contact with the scope on the bench, an **Agilent 54624A** (4-channel; the
 - **Correction:** 64 averages did *not* fix the step-down disagreement. The 54624A gave 178.5 µs this time (203.5 µs at 11:47, 177.7 µs at 11:43). The AD2 gave 205.7–205.8 µs on all three runs and 19.9–20.0 µs for the step up.
 - **Why:** on each edge one ring sits right at the ±10 % band edge, and `plot_zoom.png` shows it for the step up. The trough at ~20 µs just reaches the band's lower edge: the AD2 counts it as outside, the 54624A (a fraction of a mV shallower) as inside.
 - **Result:** settling ≈ 20 µs up and ≈ 206 µs down to ±10 %, from the AD2. The 54624A's settling times on these edges aren't repeatable. Its peaks are.
-- **Plot flaw:** the legend overlaps the step-up "settled" label.
+- **Plot flaw:** the legend overlapped the step-up "settled" label. Fixed: there is now one figure legend below the panels.
+
+**`load-tran` again, at TP4 with 64 averages** (`results/load-tran/20261110-121414_TPS7A7001-demo-board_load-tran`; first with the legend below the panels): valid.
+- **AD2:** −17.38 mV / 19.9 µs (step up), +13.54 mV / 205.5 µs (step down). Noise 0.028–0.036 mV rms.
+- **54624A:** peaks within 0.44 mV. Its step-down settling was 204.3 µs this time, on the later ring.
+- **Over the four TP4 runs:** the AD2 settles in 19.9–20.0 µs and 205.5–205.8 µs, with peaks within 0.1 mV.
 
 **AD2 vs 54624A DC offset** (pre-step VOUT from the saved waveforms):
 - **Readings:** the 54624A reads +5.8 mV above the AD2 on `/VOUT`, and +7.1 / +7.2 mV at TP4 (16 / 64 averages). At TP4 the DMM read 0.99487 V at 4 mA and the AD2 0.4–0.7 mV below it, so the 54624A is the one off, by about +6.7 mV.
