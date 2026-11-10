@@ -68,6 +68,9 @@ First contact with the scope on the bench, an **Agilent 54624A** (4-channel; the
 - **AD2 scope 1:** within 0.5–0.9 mV of the DMM at every code, slope 99.9 mΩ. The new agreement check passed on real data. It has been seen to flag a loose probe only on the simulator.
 - **VIN at the board:** 1.985–1.991 V.
 - **Conclusion:** ~0.1 Ω sits between the regulator's output and the probe points, and all three instruments agree on it. The regulator itself measured 2.7 mΩ on 2026-11-06.
+- **Explained:** R5 is a 100 mΩ sense resistor in series between `/LDO_VOUT` and `/VOUT`. 100 + 2.7 mΩ = 102.7 mΩ against the 102.9 mΩ measured, and 65 mA × 0.103 Ω = 6.7 mV against the 6.6 mV load-tran shift. So today's probes were on `/VOUT` and the 2026-11-06 DMM was on `/LDO_VOUT`.
+- **Probe points:** TP4 "OUT_S2" is on `/LDO_VOUT` (the regulator); TP3, J8 and J2 are on `/VOUT`. Read from the PCB file; to be confirmed on the board.
+- **Transient peaks:** today's load-tran peaks include R5's 6.7 mV IR step. Probe TP4 to measure the regulator's own response, with `settle_reference = "pre"`.
 
 ## 2026-11-07: external reference (BGR vs 1.204 V)
 
