@@ -46,7 +46,7 @@ samples = 1                  # readings averaged per point
 [xscope]                     # Agilent 54621A on RS-232: cross-check of every transient edge (optional)
 enabled = true               # false, or --no-xscope, to use the AD2 only
 resource = ""                # "" = search GPIB/USB/RS-232. Or GPIB0::7::INSTR, prologix:COM5:7, serial:COM4
-baud = 57600                 # RS-232 only: Utility > I/O on the scope (9600 / 19200 / 38400 / 57600)
+baud = 9600                  # RS-232 only: Utility > I/O on the scope (9600 / 19200 / 38400 / 57600; 57600 reads back ~6x faster)
 flow = "dsrdtr"              # scope handshake DTR = "dsrdtr", XON/XOFF = "xonxoff"
 vout_channel = 1             # scope ch1 on VOUT, ch2 on the same trigger signal as AD2 scope 2
 ref_channel = 2
