@@ -72,6 +72,21 @@ First contact with the scope on the bench, an **Agilent 54624A** (4-channel; the
 - **Probe points:** TP4 "OUT_S2" is on `/LDO_VOUT` (the regulator); TP3, J8 and J2 are on `/VOUT`. Read from the PCB file; to be confirmed on the board.
 - **Transient peaks:** today's load-tran peaks include R5's 6.7 mV IR step. Probe TP4 to measure the regulator's own response, with `settle_reference = "pre"`.
 
+**At TP4** (`/LDO_VOUT`, before R5; AD2 scope 1, 54624A ch1 and the DMM all on TP4; `settle_reference` back to `"pre"`):
+- **`load-reg`** (`results/load-reg/20261110-114145_TPS7A7001-demo-board_load-reg`): valid.
+  - **DMM:** 0.99489 → 0.99459 V over 0–123.9 mA, **2.4 mΩ** (R² 0.997), ΔVOUT 0.30 mV. This matches 2026-11-06 (2.7 mΩ, 0.34 mV).
+  - **AD2:** within 0.4–0.7 mV of the DMM.
+- **`load-tran`** (`results/load-tran/20261110-114323_TPS7A7001-demo-board_load-tran`; AD2 scope 2 back on DIO 4): valid.
+
+| | AD2 | 54624A |
+|---|---|---|
+| step up 4 → 69 mA: peak / settling | **−17.34 mV / 19.9 µs** | −17.00 mV / 16.4 µs |
+| step down 69 → 4 mA: peak / settling | **+13.52 mV / 205.8 µs** | +13.45 mV / 177.7 µs |
+
+  - **Level shift:** VOUT is 0.99444 V at 4 mA and 0.99424 V at 69 mA, 0.2 mV apart, so the R5 shift is gone.
+  - **Peaks:** they agree within 0.34 mV, and match 2026-11-06 (−16.4 / +14.6 mV).
+  - **Settling:** the two scopes differ by one ring period. On the step down the ringing near 180–205 µs is about as large as the ±1.35 mV band, so a 0.1 mV difference moves which ring is "last outside" by ~30 µs. Quote it as ~180–210 µs to ±10 %. A wider band or more averages would make it steadier.
+
 ## 2026-11-07: external reference (BGR vs 1.204 V)
 
 The BGR on JAFWAK measures 1.17 V against 1.204 V in simulation. JP2 lets VREF_IN be driven from outside, so every test except the enable ones can now run with PSU OUT2 on VREF_IN (`--vref ext`). `ldo-bench compare` then lines that run up against the BGR run. See [tests.md](tests.md#external-reference-bgr-vs---vref-ext-jafwak). Simulator only so far.
