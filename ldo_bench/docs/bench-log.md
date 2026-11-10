@@ -13,7 +13,8 @@ First contact with the scope on the bench, an **Agilent 54624A** (4-channel; the
 
 **Problems:**
 - **Leftover error:** the HP-style discovery probe sends `SYST:REM` / `SYST:LOC`, which the scope rejects with -113 "Undefined header". The driver's `*CLS` on open clears it, so it does no harm.
-- **Supply missing:** the E3648A didn't appear. No UsbGpib on USB, which means the supply was off or not in GPIB (HP-IB) mode.
+- **Supply missing at first:** the E3648A didn't appear because the UsbGpib wasn't on USB at all (its LED wasn't solid). Once the LED went solid, `discover` found all four instruments: the E3648A at `USB0::1003::8293::...::INSTR`, the 34401A, the 54624A and the AD2. It doesn't matter whether the adapter is plugged into the hub or straight into USB-C.
+- **Config:** `xscope.baud` set to 9600 in both configs to match the scope (57600 on the scope would read back about 6x faster).
 
 **Not yet tried on hardware:** `arm()` / `collect()` (averaged `:DIGitize`, `*OPC?`) and a full load-tran with the cross-check.
 
