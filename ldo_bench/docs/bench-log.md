@@ -63,6 +63,12 @@ First contact with the scope on the bench, an **Agilent 54624A** (4-channel; the
 - **Next:** probe at the demo board's output pins, before the load-bank wiring. Expect ~0.2 mV of shift, then `settle_reference = "pre"` again. The transient peaks so far include the ~0.1 Ω.
 - **AD2 scope 1 off VOUT:** it read ~16 mV at every code, so it wasn't on VOUT this run (possibly disturbed when scope 2 was moved). The run is still valid because VOUT came from the DMM, but nothing flagged the 0.98 V disagreement between the AD2 and the DMM. Now caught: load-reg and line-reg mark a run invalid when the AD2's VOUT is more than 2 % + 50 mV from the DMM's.
 
+**Load-reg again, scope 1 reconnected** (`results/load-reg/20261110-113126_TPS7A7001-demo-board_load-reg`): valid.
+- **DMM:** 0.99486 → 0.98224 V over 0–122.4 mA, **102.9 mΩ** (R² 1.0000). It matches the previous run.
+- **AD2 scope 1:** within 0.5–0.9 mV of the DMM at every code, slope 99.9 mΩ. The new agreement check passed on real data. It has been seen to flag a loose probe only on the simulator.
+- **VIN at the board:** 1.985–1.991 V.
+- **Conclusion:** ~0.1 Ω sits between the regulator's output and the probe points, and all three instruments agree on it. The regulator itself measured 2.7 mΩ on 2026-11-06.
+
 ## 2026-11-07: external reference (BGR vs 1.204 V)
 
 The BGR on JAFWAK measures 1.17 V against 1.204 V in simulation. JP2 lets VREF_IN be driven from outside, so every test except the enable ones can now run with PSU OUT2 on VREF_IN (`--vref ext`). `ldo-bench compare` then lines that run up against the BGR run. See [tests.md](tests.md#external-reference-bgr-vs---vref-ext-jafwak). Simulator only so far.
