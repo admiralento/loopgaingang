@@ -23,7 +23,19 @@ First contact with the scope on the bench, an **Agilent 54624A** (4-channel; the
   - **Noise:** 0.16–0.20 mV rms.
 - **Settling: not measured.** VOUT moves ~7.7 mV between the two loads (load regulation), so it can't return to the ±10 % band around the pre-step level. `analysis.settle_reference` is now `"post"` in `demo_board.toml`.
 - **54624A: no data.** It answers `*OPC?` with `+1` (checked scope-only: idle, after `:DIGitize`, and after a 4-average `:DIGitize`), and the driver accepted only `1`. Its first, correct "done" reply was rejected, the scope was marked busy, and the falling edge skipped it. The driver now accepts any numeric 1, and a reply it doesn't recognise gets its own error quoting what the scope said.
-- **Not yet run on hardware after the fix:** a load-tran with the cross-check.
+
+**Load-tran again after the fix** (same setup, `settle_reference = "post"`; `results/load-tran/20261110-110331_TPS7A7001-demo-board_load-tran`): valid, and both scopes captured both edges.
+
+| | AD2 | 54624A |
+|---|---|---|
+| step up 4 → 69 mA: peak / settling | −25.17 mV / 15.60 µs | −23.51 mV / 15.97 µs |
+| step down 69 → 4 mA: peak / settling | +21.31 mV / 164.10 µs | +19.34 mV / 164.21 µs |
+
+- **Agreement:** settling times agree within 0.4 µs.
+- **Lower peaks on the 54624A:** about 7–9 % lower. A guess: it has 2000 points across the 819 µs window (~410 ns/pt against the AD2's 100 ns). Not checked yet; a shorter `--window-ms` would test it.
+- **Nominal VOUT:** 0.9862 V at 4 mA, 0.9784 V at 69 mA.
+- **Slow step down:** it settles ~10× slower than step up. A guess: on unloading the LDO can't sink current, and only the 4 mA load discharges the output capacitor. Not checked against the board.
+- **Wiring:** 54624A on plain BNC (1:1 probe setting, DC coupled), ch1 VOUT, ch2 DIO 4.
 
 ## 2026-11-07: external reference (BGR vs 1.204 V)
 

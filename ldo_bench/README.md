@@ -139,8 +139,8 @@ Each run writes a folder under `results/<test>/`, e.g. `results/load-tran/202611
 | E3648A over GPIB (UsbGpib), 34401A over RS-232, AD2 DC / DIO / triggered capture | yes |
 | line-tran, psrr, iq, enable-sine, enable-startup | simulator only |
 | `--vref ext` (PSU OUT2 on VREF_IN) and `compare` | simulator only |
-| 54624A over RS-232: `*IDN?`, queries, 2000-point waveform readback | yes (2026-11-10) |
-| 54621A/54624A averaged capture (`arm` / `collect`), supply over RS-232, Prologix adapters | simulator / fake instruments only |
+| 54624A over RS-232: load-tran cross-check (averaged capture, readback), demo board | yes (2026-11-10), agrees with the AD2 |
+| supply over RS-232, Prologix adapters | simulator / fake instruments only |
 | any JAFWAK measurement | not yet |
 
 ## Development
