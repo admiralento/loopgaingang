@@ -176,7 +176,11 @@ Powers VIN up (default `load_reg.vin`), then reads VOUT, VIN and the supply's V 
   - `plot.png` zooms in on the step, with every edge on the same time span. The default is 2.5 × the slowest settling time + 10 µs, or `--plot-us 100` for a scope at 10 µs/div.
   - `plot_zoom.png` zooms each edge on its own span (2.5 × its own settling time + 10 µs), so a fast edge isn't squeezed next to a slow one. The time scales differ between panels, and the title says so.
   - `plot_full.png` shows the whole capture.
-  - All three have the scope 2 (trigger) trace in a small panel on top and VOUT below. The 54621A, if used, is on a right-hand VOUT axis.
+  - All three have the scope 2 (trigger) trace in a small panel on top and VOUT below. The 54621A, if used, is on a right-hand VOUT axis. One legend for the figure sits below the panels.
+  - **Lines on the VOUT panel:**
+    - **Averaged** (thin, light): the AD2's `averages` captures lined up on the trigger and averaged, as measured.
+    - **Smoothed** (thick): the averaged trace with the switching glitch (±`blank_time` around the step) bridged by a straight line, then a `smooth_time` (1 µs) moving average. The peak, settling band and settling time are all measured on it, as in the WaveForms script.
+    - **54621A:** the cross-check scope's own averaged trace.
 - **Longer window:** `--window-ms 5` lowers the sample rate to fit 5 ms into the same 8192 samples. Fast details get coarser at lower rates.
 - **54621A cross-check:** optional `[xscope]`. Every edge is also captured on the 54621A, overlaid as "54621A", and its peak and settling time are compared. `--no-xscope` skips it. See [instruments.md](instruments.md#agilent-54621a-cross-check-scope).
 - **Extra files:** `waveform_rising.csv` / `waveform_falling.csv`.

@@ -448,6 +448,7 @@ def plot_edges(
         2, n, size=(5.4 * n, 5.8), squeeze=False, sharex="col", height_ratios=[1, 3.2]
     )
     any_invalid = False
+    legend: dict = {}  # label -> handle, over every edge; drawn below the panels, not over the data
     for col, e in enumerate(edges):
         ax_ref, ax = axes[0][col], axes[1][col]
         m, issues = e.metrics, list(getattr(e, "issues", []))
@@ -544,7 +545,6 @@ def plot_edges(
             )
             # Scale to the response and band; the 1-sample switching glitch would squash it.
             lo, hi = min(vs.min(), m.lower), max(vs.max(), m.upper)
-            legend_loc = "lower right" if m.deviation > 0 else "upper right"
         else:
             ax.plot(us[view], v, color=plotting.SERIES[0], lw=1.0, zorder=3, label="Measured (averaged)")
             lo, hi = float(np.percentile(v, 0.5)), float(np.percentile(v, 99.5))
@@ -558,7 +558,6 @@ def plot_edges(
                     label=f"Expected VOUT {vout_nominal:.3f} V",
                 )
                 lo, hi = min(lo, vout_nominal), max(hi, vout_nominal)
-            legend_loc = "center right"
             plotting.issue_box(ax, issues)
         pad = 0.15 * (hi - lo or 1e-3)
         ax.set_ylim(lo - pad, hi + pad)
@@ -581,12 +580,17 @@ def plot_edges(
                 x.t[xv] * xs_scale, x.vout[xv], color=plotting.SERIES[2], lw=1.2, alpha=0.9, zorder=2
             )
             handles, labels = [xl, *handles], [xlabel, *labels]
-        ax.legend(handles, labels, loc=legend_loc)
+        for h, lbl in zip(handles, labels, strict=True):  # one figure legend: each label once
+            legend.setdefault(lbl, h)
         ax.set_xlim(us[view][0], us[view][-1])  # exactly the chosen span, the same for every edge
         ax.set_xlabel(
             f"Time from step ({unit})" if e.metrics.step_index >= 0 else f"Time from scope trigger ({unit})"
         )
         ax.set_ylabel(f"VOUT, scope {getattr(e, 'vout_channel', 1)} (V)")
+    if legend:
+        fig.legend(
+            list(legend.values()), list(legend), loc="outside lower center", ncols=len(legend), fontsize=8
+        )
     if any_invalid:  # two lines so it fits; invalid edges draw no band, so drop its legend note
         suptitle = "SETUP PROBLEM, not a valid measurement\n" + suptitle.replace(
             "  ·  shaded = settling band", ""

@@ -159,3 +159,25 @@ def test_zoom_plot_gives_each_edge_its_own_span(jafwak, proc):
     assert set(figs) == {"plot_full.png", "plot_zoom.png"}
     assert right_ends(figs["plot_zoom.png"]) == pytest.approx([2.5 * ts * 1e6 + 10 for ts in settle], abs=0.5)
     plt.close("all")  # three figures per case: don't hold them for the rest of the suite
+
+
+def test_legend_is_outside_the_data(jafwak):
+    """The per-panel legend covered the VOUT trace and the 'settled' label (bench, 2026-11-10): one
+    figure legend below the panels instead, each label once, with the cross-check scope's too."""
+    import matplotlib.pyplot as plt
+
+    an = jafwak.analysis.model_copy(update={"settle_reference": "post"})
+    with open_bench(jafwak, sim=True, use_xscope=True) as b:
+        res = load_tran.run(b, jafwak.load_tran.model_copy(update={"averages": 2}), an)
+    figs = {"plot.png": load_tran.plot(res, "x"), **load_tran.extra_plots(res, "x")}
+    for name, fig in figs.items():
+        assert all(a.get_legend() is None for a in fig.axes), name  # nothing drawn over the data
+        assert len(fig.legends) == 1, name
+        labels = [t.get_text() for t in fig.legends[0].get_texts()]
+        assert len(labels) == len(set(labels)) and {"Averaged", "Smoothed"} <= set(labels), name
+        assert any(lbl.startswith("54621A") for lbl in labels), name
+        # below every axes: its top is under the lowest axes' bottom (figure coordinates)
+        fig.canvas.draw()
+        leg_top = fig.legends[0].get_window_extent().transformed(fig.transFigure.inverted()).y1
+        assert leg_top <= min(a.get_position().y0 for a in fig.axes) + 1e-6, name
+    plt.close("all")
