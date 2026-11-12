@@ -137,7 +137,8 @@ Each run writes a folder under `results/<test>/`, e.g. `results/load-tran/202611
 |---|---|
 | psu-check, loadbank-check, load-reg, line-reg, load-tran (demo board) | yes, valid results in [bench-log.md](docs/bench-log.md); load-reg's AD2 / DMM agreement check (2026-11-10) has only flagged on the simulator |
 | E3648A over GPIB (UsbGpib), 34401A over RS-232, AD2 DC / DIO / triggered capture | yes |
-| line-tran, psrr, iq, enable-sine, enable-startup | simulator only |
+| enable-sine `--shape triangle` (JAFWAK) | yes (2026-11-12), valid; the 1 kHz sine hit an AD2 arm race, fixed but not yet re-run |
+| line-tran, psrr, iq, enable-startup | simulator only |
 | `--vref ext` (PSU OUT2 on VREF_IN) and `compare` | simulator only |
 | 54624A over RS-232: load-tran cross-check (averaged capture, readback, time window), demo board | yes (2026-11-10), peaks within 0.8 mV of the AD2 |
 | load-tran supply current check (VIN reaching the board), 54621A/54624A clipping check | yes (2026-11-10): passing, and failing with the supply leads unplugged |

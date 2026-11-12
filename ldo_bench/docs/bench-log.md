@@ -2,6 +2,32 @@
 
 What was built, what was measured, and what went wrong along the way. Newest session first.
 
+## 2026-11-12: JAFWAK enable block, first `enable-sine` runs
+
+Run by hand at the bench. W1 straight onto EN_AIN (not through the EN_FG SMA). AD2 scope 2 on TP6 (EN_AIN), scope 1 on J8.2 (EN_OUT). VIN 1.8 V from the PSU on VIN_DC.
+
+**New:** `--shape triangle` (a linear ramp up and down), for a slow sweep through the thresholds.
+
+**Triangle, 0–1.8 V at 1 Hz, 8 captures** (`results/enable-sine/20261112-144341_JAFWAK_enable-sine`): valid.
+
+| | Measured |
+|---|---|
+| VT+ / VT− | 456.3 mV / 456.2 mV (spread under 0.2 mV) |
+| Hysteresis | 0.04 mV, i.e. none |
+| VOH / VOL | 0.756 V / 0.001 V |
+| Duty | 74.5 % |
+| Edges per input cycle | 1.00, no chatter |
+
+- **Notes the run raised:** VOH under 80 % of EN_VDD, and no hysteresis. Neither explained yet. A 0.76 V high level from a block on a 1.8 V EN_VDD, and no hysteresis at all, need checking against the design before they're taken as the block's behaviour (EN_VDD at the block, scope 1's probe point).
+- **Duty check:** 74.5 % is what a 0.456 V threshold on a 0–1.8 V triangle should give: (1.8 − 0.456) / 1.8 = 74.7 %.
+- **Edge times:** 791 µs at a 488 µs sample interval: that's the sampling, not the edge. Now reported as "under 977 µs".
+
+**Sine, 0–1.8 V at 1 kHz** (`..._144708_..._INVALID`, `..._144747_..._INVALID`): **never triggered**.
+- **Not the wiring:** the untriggered captures show EN_AIN swinging −0.003 to 1.798 V at 1 kHz, crossing the 0.90 V trigger level every cycle. EN_OUT switches at 0.457 V / 0.456 V, the same as with the triangle.
+- **Cause:** a race in the AD2 driver. After arming it polled (every 2 ms) for the Armed state before continuing. A free-running 1 kHz sine triggers within a millisecond of arming, and the 4 ms capture finishes about 5 ms after the start. So the driver missed Armed, waited for it until the timeout, and reported "never triggered". The triangle's 4 s capture stays Armed long enough to be seen.
+- **Fixed:** the arm wait accepts Triggered / Done too. A capture marked `free_running` (only enable-sine) carries on. Any other capture that triggers before its stimulus now raises "triggered before the stimulus", since the step isn't in it. Tested on a fake AD2 that skips Armed; **not yet re-run on the board.**
+- **Edge times at 1 kHz:** 0.65–0.77 µs at a 0.49 µs interval, the same 1.3–1.6 intervals as at 1 Hz. So the edge is faster than either rate resolves.
+
 ## 2026-11-10: 54624A comms
 
 First contact with the scope on the bench, an **Agilent 54624A** (4-channel; the driver covers it). It's on RS-232 at `/dev/cu.usbserial-ABB83HZJ`, alongside the 34401A (`/dev/cu.usbserial-ABB83W3S`, 9600 7E2) and the AD2. Nothing was powered and no DUT was connected.

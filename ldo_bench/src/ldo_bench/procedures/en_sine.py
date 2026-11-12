@@ -82,15 +82,16 @@ class EnSineResult:
         return (float(v.mean()), float(v.std())) if len(v) else (float("nan"), float("nan"))
 
     def _edge(self, key: str) -> str:
-        """Mean 10-90 % edge time as text, or a bound when it's within one sample interval.
+        """Mean 10-90 % edge time as text, or a bound when it's within two sample intervals.
 
-        An edge faster than the sampling lands between two samples and measures as ~0.8 of an
-        interval whatever its real speed, so anything up to one interval is reported as "under".
+        An edge faster than the sampling is spread over the samples either side of it (the AD2
+        averages between samples): on the bench (2026-11-12) EN_OUT measured 1.3-1.6 intervals at
+        both 2 MS/s and 2 kS/s. So anything up to two intervals is reported as "under" that.
         """
-        t, dt = self._stat(key)[0], 1 / self.sample_rate
+        t, floor = self._stat(key)[0], 2 / self.sample_rate
         if not np.isfinite(t):
             return "n/a"
-        return f"under {_seconds(dt)}" if t <= dt else _seconds(t)
+        return f"under {_seconds(floor)}" if t <= floor else _seconds(t)
 
     @property
     def rows(self) -> list[dict]:
@@ -214,6 +215,7 @@ def run(bench: Bench, es: EnSineConfig) -> EnSineResult:
             "edge": "rising",
             "pre_trigger": 0.1,
             "stimulus": lambda: None,  # the wave runs continuously: nothing to do once armed
+            "free_running": True,  # so it may trigger before the driver sees "armed" (1 kHz: < 1 ms)
             "timeout": es.timeout + window,  # the AD2 waits for the trigger, then fills the window
         }
         try:
@@ -222,7 +224,8 @@ def run(bench: Bench, es: EnSineConfig) -> EnSineResult:
             log.warning("capture %d: no trigger on EN_AIN (%s); recording an untriggered capture", k + 1, e)
             issues.append(
                 f"the scope never triggered on scope {a.ref_channel} (EN_AIN) rising through {level:.2f} V: "
-                f"is it on TP6, and is W{es.wavegen_channel} on the EN_FG SMA with J6 at 5-6?"
+                f"is it on TP6, and is W{es.wavegen_channel} reaching EN_AIN (EN_FG SMA with J6 at 5-6)? "
+                f"AD2: {e}"
             )
             caps.append(bench.scope.capture(**kw, force=True))
             break

@@ -129,14 +129,14 @@ class AnalogDiscovery2:
             ai.channelOffsetSet(ch - 1, s.offset)
             ai.channelFilterSet(ch - 1, filt)
 
-    def _wait(self, states: tuple, timeout: float, what: str) -> None:
-        """Poll the analog-in state machine until it reaches one of `states`."""
+    def _wait(self, states: tuple, timeout: float, what: str):
+        """Poll the analog-in state machine until it reaches one of `states`; return that state."""
         ai = self.dev.analogIn
         t_end = time.monotonic() + timeout
         while True:
             st = ai.status(False)  # False: state only, don't transfer data
             if st in states:
-                return
+                return st
             if time.monotonic() > t_end:
                 raise InstrumentError(f"AD2 timed out waiting for {what} (state {st.name})")
             time.sleep(POLL)
@@ -176,6 +176,7 @@ class AnalogDiscovery2:
         timeout: float,
         force: bool = False,
         dio_trigger: tuple[int, Edge] | None = None,
+        free_running: bool = False,
     ) -> Capture:
         p, ai = self._p, self.dev.analogIn
         if trigger_channel not in setups:
@@ -226,9 +227,16 @@ class AnalogDiscovery2:
         ai.triggerPositionSet(window * (0.5 - pre_trigger))
 
         self._wrap("arm", ai.configure, False, True)
-        self._wait((p.DwfState.Armed,), timeout, "the scope to arm")
-        stimulus()
+        # A free-running signal (enable-sine) can trigger within one poll, so Armed may never be
+        # seen: Triggered or Done count as armed too. A stepped test must not trigger before its step.
         what = f"DIO {dio_trigger[0]}" if dio_trigger else f"scope channel {trigger_channel}"
+        armed = (p.DwfState.Armed, p.DwfState.Triggered, p.DwfState.Done)
+        state = self._wait(armed, timeout, "the scope to arm")
+        if state != p.DwfState.Armed and not free_running:
+            raise InstrumentError(
+                f"AD2 triggered before the stimulus: {what} crossed the trigger level before the step"
+            )
+        stimulus()
         self._wait((p.DwfState.Done,), timeout, f"a {edge} trigger on {what}")
         data = self._read(setups, n)
         ch1 = data.get(1, np.zeros(n))

@@ -137,6 +137,7 @@ def test_en_sine_triangle_on_sim(jafwak):
 
         def spy(**kw):
             timeouts.append(kw["timeout"])
+            assert kw["free_running"]  # the wave runs on its own: an early trigger is a real one
             return capture(**kw)
 
         b.scope.capture = spy
@@ -183,9 +184,23 @@ def test_cli_enable_sine_shape_option(tmp_path):
 
 
 def test_en_sine_edge_times_under_one_sample_are_a_bound(jafwak):
-    """At 1 Hz the AD2 samples every 488 us: a fast EN_OUT edge is reported as under that, not as a time."""
+    """At 1 Hz the AD2 samples every 488 us: a fast EN_OUT edge is reported as under two samples, not as a time."""
     es = jafwak.en_sine.model_copy(update={"shape": "triangle", "frequency": 1.0, "captures": 1})
     with open_bench(jafwak, sim=True) as b:
         res = en_sine.run(b, es)
     line = next(ln for ln in res.report().splitlines() if "rise / fall" in ln)
-    assert "under 488 us / under 488 us" in line, line
+    assert "under 977 us / under 977 us" in line, line
+
+
+def test_en_sine_edge_of_1p6_samples_is_still_a_bound(jafwak):
+    """On the bench (2026-11-12) a fast EN_OUT edge measured 1.3-1.6 sample intervals at both 1 kHz
+    and 1 Hz: that's the sampling, so it's reported as a bound, not as a time."""
+    import dataclasses
+
+    es = jafwak.en_sine.model_copy(update={"shape": "triangle", "frequency": 1.0, "captures": 1})
+    with open_bench(jafwak, sim=True) as b:
+        res = en_sine.run(b, es)
+    dt = 1 / res.sample_rate
+    res.captures = [dataclasses.replace(c, t_rise=1.6 * dt, t_fall=1.6 * dt) for c in res.captures]
+    line = next(ln for ln in res.report().splitlines() if "rise / fall" in ln)
+    assert "under 977 us / under 977 us" in line, line

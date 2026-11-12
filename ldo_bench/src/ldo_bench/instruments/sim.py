@@ -378,6 +378,7 @@ class SimAnalogDiscovery:
         timeout: float,
         force: bool = False,
         dio_trigger: tuple[int, Edge] | None = None,
+        free_running: bool = False,  # accepted for the protocol; the model has no arm race
     ) -> Capture:
         """Synthesise the capture by evaluating the model before and after stimulus().
 

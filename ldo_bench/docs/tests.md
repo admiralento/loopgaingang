@@ -275,7 +275,7 @@ Powers VIN up (default `load_reg.vin`), then reads VOUT, VIN and the supply's V 
   - Each capture spans `cycles` periods in 8192 samples, so at 1 Hz a capture takes 4 s, one sample every 488 µs, and resolves the threshold to about 2 mV. The trigger wait is `timeout` plus that window.
 - **Computes:**
   - **Thresholds:** the input voltage at each output crossing gives VT+ and VT-, and their difference is the hysteresis.
-  - **Output levels and edges:** VOH / VOL, 10–90 % edge times and duty cycle. An edge within one sample interval is reported as "under" that interval (488 ns at 1 kHz, 488 µs at 1 Hz), not as a time.
+  - **Output levels and edges:** VOH / VOL, 10–90 % edge times and duty cycle. An edge within two sample intervals is reported as "under" that (977 ns at 1 kHz, 977 µs at 1 Hz), not as a time: on the bench a fast edge measured 1.3–1.6 intervals at both rates.
   - **Chatter:** output edges per input cycle. More than 1 means it chatters.
 - **Plot:** input and output against time, and the transfer curve (output against input: the hysteresis loop).
 - **Setup checks**, on every capture (a probe can slip mid-run):

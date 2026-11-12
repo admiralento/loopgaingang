@@ -76,3 +76,73 @@ def test_wavegen_triangle_uses_the_triangle_function():
     assert ao.calls["nodeAmplitudeSet"][2] == 0.9 and ao.calls["nodeOffsetSet"][2] == 0.9
     ad.set_sine(1, frequency=1e3, low=0.0, high=1.8)  # set_sine is still a sine
     assert ao.calls["nodeFunctionSet"][2] == p.DwfAnalogOutFunction.Sine
+
+
+class FakeScopeIn:
+    """analogIn that walks through a given state sequence and returns a rising edge at 10 %."""
+
+    def __init__(self, states, n=1000):
+        self.states, self.n, self.rate = list(states), n, 1e6
+
+    def __getattr__(self, name):  # setters the driver calls that don't matter here
+        return lambda *a, **k: None
+
+    def frequencySet(self, f):
+        self.rate = f
+
+    def frequencyGet(self):
+        return self.rate
+
+    def bufferSizeInfo(self):
+        return (16, 8192)
+
+    def bufferSizeSet(self, n):
+        self.n = n
+
+    def bufferSizeGet(self):
+        return self.n
+
+    def status(self, read):
+        return self.states.pop(0) if len(self.states) > 1 else self.states[0]
+
+    def statusData(self, ch, n):
+        x = np.zeros(n)
+        x[n // 10 :] = 1.8
+        return x
+
+
+def fast_capture(states, **kw):
+    from ldo_bench.instruments.base import ChannelSetup
+
+    ad = AnalogDiscovery2(FakeDevice(), "TEST")
+    s = ad._p.DwfState
+    ad.dev.analogIn = FakeScopeIn([getattr(s, name) for name in states])
+    calls = []
+    args = {
+        "sample_rate": 2e6,
+        "n_samples": 1000,
+        "setups": {1: ChannelSetup(5.0, 0.0), 2: ChannelSetup(5.0, 0.0)},
+        "trigger_channel": 2,
+        "trigger_level": 0.9,
+        "edge": "rising",
+        "pre_trigger": 0.1,
+        "stimulus": lambda: calls.append(1),
+        "timeout": 0.2,
+    }
+    return ad.capture(**args, **kw), calls
+
+
+def test_free_running_capture_that_triggers_before_the_arm_poll_is_kept():
+    """A 1 kHz sine triggers within a poll interval: the driver never sees Armed, only Triggered / Done."""
+    cap, calls = fast_capture(["Prefill", "Triggered", "Done"], free_running=True)
+    assert cap.edge_found and cap.trigger_index == 100 and calls == [1]
+
+
+def test_stepped_capture_that_triggers_before_the_stimulus_is_an_error():
+    """A load step must come after arming: a trigger before it didn't capture the step."""
+    import pytest
+
+    from ldo_bench.instruments.base import InstrumentError
+
+    with pytest.raises(InstrumentError, match="before the stimulus"):
+        fast_capture(["Prefill", "Done"])
