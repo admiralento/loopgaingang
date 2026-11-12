@@ -145,7 +145,7 @@ def test_psrr_levels_w1_when_vin_carries_half_the_sine(jafwak):
             self.b = b
 
         def measure(self, f):
-            _, lo, hi = next(iter(self.b.sim_model.awg_sine.values()))
+            _, _, lo, hi = next(iter(self.b.sim_model.awg_wave.values()))
             return Tone(complex((hi - lo) / 4), complex(1e-5), 1e-6, 1e-6, 1.8)  # VIN = W1 / 2
 
     ps = jafwak.psrr.model_copy(update={"f_start": 1e3, "f_stop": 2e3, "points_per_decade": 1})

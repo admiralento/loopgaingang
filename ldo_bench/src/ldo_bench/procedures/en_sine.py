@@ -1,22 +1,27 @@
-"""enable-sine: drive the enable block's analog input with a sine and watch its output switch.
+"""enable-sine: drive the enable block's analog input with a sine or triangle and watch its output switch.
 
 JAFWAK: AD2 W1 -> EN_FG SMA (J2) -> J6 5-6 -> R23 (1k) -> EN_AIN. The enable block runs from
-EN_VDD (J1 9-11 to INB = VIN through R13). EN_OUT is on J8.2, EN_AIN on TP6. A slow sine
+EN_VDD (J1 9-11 to INB = VIN through R13). EN_OUT is on J8.2, EN_AIN on TP6. A slow wave
 between 0 V and EN_VDD sweeps the input through both thresholds every cycle, so the output's
 crossings give VT+ and VT- (and their difference, the hysteresis), its levels VOH / VOL, its edge
 times and whether it chatters. Several separate captures give the spread of the thresholds.
+
+`shape` is a sine (default) or a triangle. The triangle ramps up and down linearly at
+2 (high - low) frequency V/s, so both thresholds are crossed at the same, known slope; a 1 Hz
+triangle (3.6 V/s for 0-1.8 V) is about 1500x slower than the 1 kHz sine at its midpoint, which
+shows how much the comparator's delay moves the thresholds.
 
 Scope ref channel on TP6 (EN_AIN, also the trigger), scope vout channel on J8.2 (EN_OUT); both on
 the 5 V range. The thresholds are read from EN_AIN as measured at the pin, so R23 and the
 wavegen's own error don't matter.
 
 run() steps:
-1. Confirm the wiring, PSU ramps VIN (EN_VDD comes from it), W1 starts the sine.
-2. `captures` captures, each triggered on EN_AIN rising through the sine's midpoint and spanning
-   `cycles` periods. If one never triggers, a forced capture is recorded with an issue and the
-   loop stops.
+1. Confirm the wiring, PSU ramps VIN (EN_VDD comes from it), W1 starts the wave.
+2. `captures` captures, each triggered on EN_AIN rising through the wave's midpoint and spanning
+   `cycles` periods. Each waits up to `timeout` plus one window for its trigger and data. If one
+   never triggers, a forced capture is recorded with an issue and the loop stops.
 3. W1 off. `analysis.schmitt_analysis` on every capture.
-4. Validity checks on the first capture: the EN_AIN swing within SWING_TOLERANCE of the sine's
+4. Validity checks on every capture: the EN_AIN swing within SWING_TOLERANCE of the wave's
    (scope on TP6, J6 at 5-6), and EN_OUT swinging at least 30 % of VIN with at least one rising
    edge (scope on EN_OUT, EN_VDD powered). These are issues (the run is invalid).
 5. Only on a valid run, findings about the block itself go in `notes` (the run stays valid):
@@ -39,7 +44,15 @@ from ldo_bench.instruments.base import Capture, ChannelSetup, InstrumentError
 log = logging.getLogger(__name__)
 
 NAME = "enable-sine"
-SWING_TOLERANCE = 0.3  # EN_AIN's measured swing must be within 30 % of the sine's peak-to-peak
+SWING_TOLERANCE = 0.3  # EN_AIN's measured swing must be within 30 % of the wave's peak-to-peak
+
+
+def _seconds(t: float) -> str:
+    """A time (s) as text in ns, us or ms, three significant figures."""
+    for scale, unit in ((1e-6, "ns"), (1e-3, "us"), (1.0, "ms")):
+        if t < scale:
+            return f"{t / scale * 1e3:.3g} {unit}"
+    return f"{t:.3g} s"
 
 
 @dataclass
@@ -50,13 +63,15 @@ class EnSineResult:
     """
 
     vin: float  # V, PSU setpoint (EN_VDD is VIN through R13)
-    frequency: float  # Hz, sine frequency
-    low: float  # V, sine minimum / maximum as programmed on W1
+    frequency: float  # Hz, wave frequency
+    low: float  # V, wave minimum / maximum as programmed on W1
     high: float
     captures: list[SchmittResult]  # one per capture
     t: np.ndarray  # first capture, for plotting / CSV
     ain: np.ndarray
     aout: np.ndarray
+    shape: str = "sine"  # "sine" or "triangle"
+    sample_rate: float = float("nan")  # Hz, as the AD2 reported it (first capture)
     issues: list[str] = field(default_factory=list)  # setup problems: the run isn't a valid measurement
     notes: list[str] = field(default_factory=list)  # real findings worth a look (chatter, weak VOH)
 
@@ -65,6 +80,17 @@ class EnSineResult:
         v = np.array([getattr(c, key) for c in self.captures], float)
         v = v[np.isfinite(v)]
         return (float(v.mean()), float(v.std())) if len(v) else (float("nan"), float("nan"))
+
+    def _edge(self, key: str) -> str:
+        """Mean 10-90 % edge time as text, or a bound when it's within one sample interval.
+
+        An edge faster than the sampling lands between two samples and measures as ~0.8 of an
+        interval whatever its real speed, so anything up to one interval is reported as "under".
+        """
+        t, dt = self._stat(key)[0], 1 / self.sample_rate
+        if not np.isfinite(t):
+            return "n/a"
+        return f"under {_seconds(dt)}" if t <= dt else _seconds(t)
 
     @property
     def rows(self) -> list[dict]:
@@ -107,7 +133,9 @@ class EnSineResult:
             "issues": self.issues,
             "notes": self.notes,
             "vin": self.vin,
+            "shape": self.shape,
             "frequency": self.frequency,
+            "sample_rate": self.sample_rate,
             "sine_low": self.low,
             "sine_high": self.high,
             "captures": len(self.captures),
@@ -116,7 +144,7 @@ class EnSineResult:
 
     def report(self) -> str:
         head = (
-            f"Enable block, sine {self.low:.2f}-{self.high:.2f} V at {self.frequency:g} Hz into EN_AIN, "
+            f"Enable block, {self.shape} {self.low:.2f}-{self.high:.2f} V at {self.frequency:g} Hz into EN_AIN, "
             f"VIN {self.vin:.2f} V, {len(self.captures)} captures:"
         )
         if self.issues:
@@ -136,8 +164,8 @@ class EnSineResult:
             f"  VT- (falling) {mv('vt_fall')}",
             f"  hysteresis    {np.nanmean(h) * 1e3:8.1f} mV  (spread {np.nanstd(h) * 1e3:.1f} mV)",
             f"  VOH / VOL     {self._stat('voh')[0]:.3f} V / {self._stat('vol')[0]:.3f} V",
-            f"  rise / fall   {self._stat('t_rise')[0] * 1e9:.0f} ns / {self._stat('t_fall')[0] * 1e9:.0f} ns "
-            "(10-90 %, limited by the sample interval)",
+            f"  rise / fall   {self._edge('t_rise')} / {self._edge('t_fall')} "
+            f"(10-90 %, sample interval {_seconds(1 / self.sample_rate)})",
             f"  duty          {self._stat('duty')[0] * 100:.1f} %   "
             f"edges per input cycle {self._stat('edges_per_cycle')[0]:.2f}",
         ]
@@ -157,22 +185,23 @@ def wiring(bench: Bench, es: EnSineConfig) -> list[str]:
 
 
 def run(bench: Bench, es: EnSineConfig) -> EnSineResult:
-    """Sweep EN_AIN with the sine and analyse EN_OUT (see the module docstring for the steps).
+    """Sweep EN_AIN with the sine or triangle and analyse EN_OUT (see the module docstring for the steps).
 
     es: the [en_sine] section. Setup problems are recorded in `issues`, never raised.
     """
     a = bench.cfg.ad2
     lo, hi = es.low, es.sine_high
     bench.confirm_wiring(
-        "enable block (sine)", wiring(bench, es), ref_probe=("en_ain", 0), ch1_probe="en_out"
+        f"enable block ({es.shape})", wiring(bench, es), ref_probe=("en_ain", 0), ch1_probe="en_out"
     )
-    # 5 V range (+/-2.5 V) on both: covers the 0-EN_VDD sine and EN_OUT at the best resolution
+    # 5 V range (+/-2.5 V) on both: covers the 0-EN_VDD wave and EN_OUT at the best resolution
     setups = {a.vout_channel: ChannelSetup(5.0, 0.0), a.ref_channel: ChannelSetup(5.0, 0.0)}
     bench.vin_from_psu(es.vin)
-    bench.en_ain_sine(es.wavegen_channel, frequency=es.frequency, low=lo, high=hi)
+    bench.en_ain_sine(es.wavegen_channel, frequency=es.frequency, low=lo, high=hi, shape=es.shape)
     bench.sleep(0.05)  # let the wavegen output start
     rate = es.n_samples / (es.cycles / es.frequency)  # n_samples spread over `cycles` periods
-    level = (lo + hi) / 2  # trigger at the sine's midpoint (V)
+    level = (lo + hi) / 2  # trigger at the wave's midpoint (V)
+    window = es.cycles / es.frequency  # s, one capture (4 s for a 1 Hz triangle over 4 cycles)
     issues: list[str] = []
     caps: list[Capture] = []
     for k in range(es.captures):
@@ -184,8 +213,8 @@ def run(bench: Bench, es: EnSineConfig) -> EnSineResult:
             "trigger_level": level,
             "edge": "rising",
             "pre_trigger": 0.1,
-            "stimulus": lambda: None,  # the sine runs continuously: nothing to do once armed
-            "timeout": es.timeout,
+            "stimulus": lambda: None,  # the wave runs continuously: nothing to do once armed
+            "timeout": es.timeout + window,  # the AD2 waits for the trigger, then fills the window
         }
         try:
             caps.append(bench.scope.capture(**kw))
@@ -225,7 +254,7 @@ def run(bench: Bench, es: EnSineConfig) -> EnSineResult:
     if swing_bad:
         k, sw = swing_bad[0]
         issues.append(
-            f"scope {a.ref_channel} swings {sw:.2f} V but the sine is {hi - lo:.2f} V ({which(swing_bad)}): is it "
+            f"scope {a.ref_channel} swings {sw:.2f} V but the {es.shape} is {hi - lo:.2f} V ({which(swing_bad)}): is it "
             "on TP6 (EN_AIN), and is J6 at 5-6 (EN_FG -> EN_AIN)?"
         )
     if switch_bad:
@@ -245,7 +274,18 @@ def run(bench: Bench, es: EnSineConfig) -> EnSineResult:
             notes.append("no hysteresis: VT+ is not above VT-")
     t = first.time
     return EnSineResult(
-        es.vin, es.frequency, lo, hi, results, t, ain, aout, list(dict.fromkeys(issues)), notes
+        es.vin,
+        es.frequency,
+        lo,
+        hi,
+        results,
+        t,
+        ain,
+        aout,
+        shape=es.shape,
+        sample_rate=first.sample_rate,
+        issues=list(dict.fromkeys(issues)),
+        notes=notes,
     )
 
 
@@ -300,7 +340,10 @@ def plot(res: EnSineResult, dut: str):
     ax_in.tick_params(labelbottom=False)
     ax_tr.set_xlabel("EN_AIN (V)")
     ax_tr.set_ylabel("EN_OUT (V)")
-    title = f"Enable block: {dut}  ·  {res.low:.2f}-{res.high:.2f} V sine at {res.frequency:g} Hz  ·  VIN {res.vin:.2f} V"
+    title = (
+        f"Enable block: {dut}  ·  {res.low:.2f}-{res.high:.2f} V {res.shape} at {res.frequency:g} Hz"
+        f"  ·  VIN {res.vin:.2f} V"
+    )
     if not valid:
         title = "SETUP PROBLEM, not a valid measurement\n" + title
     fig.suptitle(

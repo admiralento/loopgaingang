@@ -107,8 +107,9 @@ dio_pin = 5                  # AD2 DIO 5 -> J13.12 EN_CTRL_33 -> U6 -> EN_CTRL_1
 dio_pin_n = 6                # AD2 DIO 6 -> J13.10 ~EN_CTRL_33 -> U5 -> ~EN_CTRL_18 (driven inverted)
 v33 = 3.3                    # AD2 V+ -> J13.14 V_33 (level shifters' 3.3 V side)
 
-[en_sine]                    # enable block on its own: W1 sine -> EN_FG SMA (J2) -> J6 5-6 -> EN_AIN
+[en_sine]                    # enable block on its own: W1 sine / triangle -> EN_FG SMA (J2) -> J6 5-6 -> EN_AIN
 vin = 1.8                    # VIN -> EN_VDD through J1 9-11
+shape = "sine"               # or "triangle": a linear ramp up and down (--shape triangle --freq 1 for a slow ramp)
 frequency = 1e3
 low = 0.0
 # high = 1.8                 # default: vin (EN_VDD)

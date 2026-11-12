@@ -114,7 +114,7 @@ def test_psrr_peak_stop_turns_the_wavegen_off_first(jafwak):
             psrr.run(b, jafwak.psrr, TooBig())
         # switched off by the check itself, before the bench's shutdown ran
         assert events.index("wavegen_off", events.index("measure")) > events.index("measure")
-        assert not b.sim_model.awg_sine
+        assert not b.sim_model.awg_wave
 
 
 # --- enable-sine goes through the bench ------------------------------------------

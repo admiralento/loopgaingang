@@ -268,16 +268,21 @@ Powers VIN up (default `load_reg.vin`), then reads VOUT, VIN and the supply's V 
   - AD2 W1 -> EN_FG SMA (J2); J6 5-6: EN_FG -> EN_AIN
   - Scope 2+ -> TP6 (EN_AIN) (trigger), Scope 1+ -> J8.2 (EN_OUT); both - -> GND
   - AD2 GND -> board GND
-- **Does:** a slow sine (0 V to EN_VDD, 1 kHz; the bench refuses a top above `dut.vin_max`) into EN_AIN sweeps the input through both thresholds every cycle. The capture is repeated `captures` times to get the spread.
+- **Does:** a slow wave (0 V to EN_VDD; the bench refuses a top above `dut.vin_max`) into EN_AIN sweeps the input through both thresholds every cycle. The capture is repeated `captures` times to get the spread.
+- **Shape** (`--shape`, `en_sine.shape`):
+  - `sine` (default), at 1 kHz: about 5.6 V/ms through the midpoint.
+  - `triangle`: a linear ramp up and down at 2 (high − low) f V/s. With `--freq 1` that's 3.6 V/s, about 1500× slower than the 1 kHz sine, and the same slope through both thresholds. Comparing the two runs shows how much the comparator's delay moves the thresholds.
+  - Each capture spans `cycles` periods in 8192 samples, so at 1 Hz a capture takes 4 s, one sample every 488 µs, and resolves the threshold to about 2 mV. The trigger wait is `timeout` plus that window.
 - **Computes:**
   - **Thresholds:** the input voltage at each output crossing gives VT+ and VT-, and their difference is the hysteresis.
-  - **Output levels and edges:** VOH / VOL, 10–90 % edge times (limited by the sample interval) and duty cycle.
+  - **Output levels and edges:** VOH / VOL, 10–90 % edge times and duty cycle. An edge within one sample interval is reported as "under" that interval (488 ns at 1 kHz, 488 µs at 1 Hz), not as a time.
   - **Chatter:** output edges per input cycle. More than 1 means it chatters.
 - **Plot:** input and output against time, and the transfer curve (output against input: the hysteresis loop).
 - **Setup checks**, on every capture (a probe can slip mid-run):
-  - the input swing isn't the sine's (probe not on TP6, J6 wrong)
+  - the input swing isn't the wave's (probe not on TP6, J6 wrong)
   - EN_OUT doesn't switch (probe not on J8.2, EN_VDD unpowered)
 - **Options:**
+  - `--shape triangle`
   - `--freq 1e3`
   - `--captures 8`
 - **Config:** `[en_sine]`.

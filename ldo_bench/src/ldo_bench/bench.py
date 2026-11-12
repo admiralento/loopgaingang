@@ -27,6 +27,7 @@ from ldo_bench.instruments.base import (
     PowerSupply,
     SupplyOutput,
     Voltmeter,
+    WaveShape,
 )
 from ldo_bench.loadbank import LoadBank
 
@@ -350,18 +351,21 @@ class Bench:
             levels[e.dio_pin_n] = not on
         self.dio.write_pins(levels)
 
-    def en_ain_sine(self, channel: int, *, frequency: float, low: float, high: float) -> None:
-        """Wavegen sine (low..high V) into the enable block's EN_AIN (enable-sine).
+    def en_ain_sine(
+        self, channel: int, *, frequency: float, low: float, high: float, shape: WaveShape = "sine"
+    ) -> None:
+        """Wavegen sine or triangle (`shape`, low..high V, Hz) into the enable block's EN_AIN (enable-sine).
 
-        EN_AIN is powered from VIN (EN_VDD), so the sine's top is held to dut.vin_max (and the
-        wavegen's 5 V); its bottom may go to -0.3 V, the usual input clamp limit.
+        EN_AIN is powered from VIN (EN_VDD), so the wave's top is held to dut.vin_max (and the
+        wavegen's 5 V); its bottom may go to -0.3 V, the usual input clamp limit. Both shapes
+        peak exactly at low and high, so the same limits apply to each.
         """
         limit = min(self.cfg.dut.vin_max, AD2_WAVEGEN_MAX_V)
         if not -0.3 <= low < high <= limit + 1e-9:
             raise InstrumentError(
-                f"refusing to drive EN_AIN with a {low:.3f}..{high:.3f} V sine (limit -0.3..{limit} V)"
+                f"refusing to drive EN_AIN with a {low:.3f}..{high:.3f} V {shape} (limit -0.3..{limit} V)"
             )
-        self.awg.set_sine(channel, frequency=frequency, low=low, high=high)
+        self.awg.set_wave(channel, shape=shape, frequency=frequency, low=low, high=high)
         self._awg_on = True
 
     def wavegen_off(self, channel: int | None = None) -> None:

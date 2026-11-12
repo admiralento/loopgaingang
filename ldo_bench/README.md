@@ -69,7 +69,7 @@ uv run ldo-bench load-tran      -c configs/demo_board.toml   # --from 4mA --to 6
 uv run ldo-bench line-tran      -c configs/jafwak.toml       # --low 1.75 --high 1.85 --load 19mA
 uv run ldo-bench psrr           -c configs/jafwak.toml       # --fstart 100 --fstop 1e6 --amp-mv 20
 uv run ldo-bench iq             -c configs/jafwak.toml       # --method series --rail bgr
-uv run ldo-bench enable-sine    -c configs/jafwak.toml       # --freq 1e3
+uv run ldo-bench enable-sine    -c configs/jafwak.toml       # --freq 1e3, or --shape triangle --freq 1 (slow ramp)
 uv run ldo-bench enable-startup -c configs/jafwak.toml       # --ch2 iin
 uv run ldo-bench load-reg -c configs/jafwak.toml --vref ext  # JP2 removed: PSU OUT2 on VREF_IN
 uv run ldo-bench compare results/load-reg/<bgr run> results/load-reg/<extref run>

@@ -28,7 +28,7 @@ from collections.abc import Callable
 
 import numpy as np
 
-from ldo_bench.instruments.base import Capture, ChannelSetup, DcReading, Edge, InstrumentError
+from ldo_bench.instruments.base import Capture, ChannelSetup, DcReading, Edge, InstrumentError, WaveShape
 
 log = logging.getLogger(__name__)
 
@@ -296,18 +296,25 @@ class AnalogDiscovery2:
 
     def set_sine(self, channel: int, *, frequency: float, low: float, high: float) -> None:
         """Continuous sine between `low` and `high` volts (AD2 W1/W2: +/-5 V)."""
+        self.set_wave(channel, shape="sine", frequency=frequency, low=low, high=high)
+
+    def set_wave(self, channel: int, *, shape: WaveShape, frequency: float, low: float, high: float) -> None:
+        """Continuous sine or triangle (Hz) between `low` and `high` volts (AD2 W1/W2: +/-5 V)."""
         p, ao = self._p, self.dev.analogOut
+        functions = {"sine": p.DwfAnalogOutFunction.Sine, "triangle": p.DwfAnalogOutFunction.Triangle}
+        if shape not in functions:
+            raise InstrumentError(f"unknown wavegen shape {shape!r} (one of {', '.join(functions)})")
         if not (-5.0 <= low < high <= 5.0):
-            raise InstrumentError(f"sine {low}..{high} V is outside the AD2 wavegen's +/-5 V")
+            raise InstrumentError(f"{shape} {low}..{high} V is outside the AD2 wavegen's +/-5 V")
         ch, carrier = channel - 1, p.DwfAnalogOutNode.Carrier
         ao.reset(ch)
         ao.idleSet(ch, p.DwfAnalogOutIdle.Offset)
         ao.nodeEnableSet(ch, carrier, True)
-        ao.nodeFunctionSet(ch, carrier, p.DwfAnalogOutFunction.Sine)
+        ao.nodeFunctionSet(ch, carrier, functions[shape])
         ao.nodeFrequencySet(ch, carrier, frequency)
         ao.nodeAmplitudeSet(ch, carrier, (high - low) / 2)
         ao.nodeOffsetSet(ch, carrier, (high + low) / 2)
-        self._wrap("wavegen sine", ao.configure, ch, 1)
+        self._wrap(f"wavegen {shape}", ao.configure, ch, 1)
         self._awg_running.discard(channel)  # a later set_dc() must reconfigure from scratch
 
     def set_vplus(self, volts: float | None) -> None:

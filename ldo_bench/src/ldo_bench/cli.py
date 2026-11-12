@@ -507,7 +507,13 @@ def line_tran(
 @app.command("enable-sine")
 def enable_sine(
     config: ConfigOpt,
-    freq: Annotated[float | None, typer.Option("--freq", help="Sine frequency (Hz)")] = None,
+    shape: Annotated[
+        str | None,
+        typer.Option("--shape", help="Input wave: sine, or triangle (a slow linear ramp up and down)"),
+    ] = None,
+    freq: Annotated[
+        float | None, typer.Option("--freq", help="Wave frequency (Hz), e.g. 1 for a slow ramp")
+    ] = None,
     captures: Annotated[
         int | None, typer.Option("--captures", help="Separate captures (threshold spread)")
     ] = None,
@@ -519,13 +525,15 @@ def enable_sine(
     yes: YesOpt = False,
     verbose: VerboseOpt = False,
 ) -> None:
-    """Enable block on its own: a sine into EN_AIN, its square-wave EN_OUT -> thresholds and hysteresis."""
+    """Enable block on its own: a sine or triangle into EN_AIN, its square-wave EN_OUT -> thresholds and hysteresis."""
     from ldo_bench.procedures import en_sine as proc
 
     _logging(verbose)
     cfg = _load(config)
     es = _section(cfg, "en-sine")
     update: dict = {}
+    if shape is not None:
+        update["shape"] = shape  # checked by _load_with (sine or triangle)
     if freq is not None:
         update["frequency"] = freq
     if captures is not None:

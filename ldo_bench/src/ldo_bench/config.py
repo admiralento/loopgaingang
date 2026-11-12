@@ -427,23 +427,31 @@ class EnableConfig(_Model):
 
 
 class EnSineConfig(_Model):
-    """[en_sine] (enable-sine): a sine into the enable block's analog input, its output watched for the thresholds."""
+    """[en_sine] (enable-sine): a sine or triangle into the enable block's analog input, its output watched for the thresholds."""
 
     vin: float = Field(gt=0, description="PSU on VIN (feeds EN_VDD through J1 9-11) (V)")
-    frequency: float = Field(1e3, gt=0, description="Sine frequency (Hz)")
-    low: float = Field(0.0, ge=-0.3, description="Sine minimum (V)")
-    high: float | None = Field(None, gt=0, description="Sine maximum (V); None = vin (EN_VDD)")
-    cycles: float = Field(4.0, gt=0.5, description="Sine cycles per capture")
+    shape: Literal["sine", "triangle"] = Field(
+        "sine",
+        description="Input wave: sine, or triangle (a linear ramp up and down at 2 (high - low) f V/s)",
+    )
+    frequency: float = Field(1e3, gt=0, description="Wave frequency (Hz)")
+    low: float = Field(0.0, ge=-0.3, description="Wave minimum (V)")
+    high: float | None = Field(None, gt=0, description="Wave maximum (V); None = vin (EN_VDD)")
+    cycles: float = Field(4.0, gt=0.5, description="Wave cycles per capture")
     n_samples: int = Field(8192, gt=64, description="Samples per capture (sample rate follows from cycles)")
     captures: int = Field(
         8, ge=1, description="Separate captures; thresholds are reported as mean and spread"
     )
     wavegen_channel: Literal[1, 2] = Field(1, description="AD2 W1/W2 -> EN_FG SMA (J2)")
-    timeout: float = Field(5.0, gt=0, description="Max wait for one AD2 trigger (s)")
+    timeout: float = Field(
+        5.0,
+        gt=0,
+        description="Max wait for one AD2 trigger (s), on top of one capture window (cycles / frequency)",
+    )
 
     @property
     def sine_high(self) -> float:
-        """Sine maximum actually used (V): `high`, or `vin` if not set."""
+        """Wave maximum actually used (V): `high`, or `vin` if not set."""
         return self.vin if self.high is None else self.high
 
     @model_validator(mode="after")

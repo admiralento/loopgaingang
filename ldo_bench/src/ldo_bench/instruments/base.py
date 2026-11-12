@@ -22,6 +22,7 @@ from typing import Literal, Protocol, runtime_checkable
 import numpy as np
 
 Edge = Literal["rising", "falling"]
+WaveShape = Literal["sine", "triangle"]  # periodic wavegen shapes (Wavegen.set_wave)
 
 
 class InstrumentError(RuntimeError):
@@ -222,6 +223,13 @@ class Wavegen(Protocol):
 
     def set_sine(self, channel: int, *, frequency: float, low: float, high: float) -> None:
         """Output a continuous sine (Hz) swinging between `low` and `high` (V)."""
+        ...
+
+    def set_wave(self, channel: int, *, shape: WaveShape, frequency: float, low: float, high: float) -> None:
+        """Output a continuous periodic wave of `shape` (Hz) swinging between `low` and `high` (V).
+
+        "triangle" rises and falls linearly, at 2 (high - low) frequency V/s.
+        """
         ...
 
     def off(self, channel: int) -> None:

@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from ldo_bench.instruments.base import Capture, ChannelSetup, DcReading, Edge, InstrumentError
+from ldo_bench.instruments.base import Capture, ChannelSetup, DcReading, Edge, InstrumentError, WaveShape
 
 # Fraction of the quiescent current drawn by each of the board's J1 supply rails (iq series test).
 RAIL_SHARE = {"total": 1.0, "bgr": 0.15, "vdd": 0.30, "en": 0.10, "ota": 0.45}
@@ -98,7 +98,9 @@ class LdoModel:
     iq_on: float = 150e-6  # quiescent current when enabled (A)
     sense_ohm: float = 0.1  # ohm, current-sense resistors R13 (input) / R1 (output)
     ch1_probe: str = "vout"  # what the VOUT channel is on: "vout" or "en_out"
-    awg_sine: dict[int, tuple[float, float, float]] = field(default_factory=dict)  # ch -> (f, low, high)
+    awg_wave: dict[int, tuple[str, float, float, float]] = field(
+        default_factory=dict
+    )  # ch -> (shape, f, low, high)
     # quiescent / shutdown current and the DMM measuring it
     iq_off: float = 0.3e-6  # A, shutdown current (below the shunt method's floor, like the real board)
     iq_vin_slope: float = 0.05  # fractional change in Iq per volt of VIN (relative to 1.8 V)
@@ -142,8 +144,8 @@ class LdoModel:
         """DC level the wavegen puts on the buffer input (a sine's mid-level), None if it's off."""
         if self.awg_v:
             return next(iter(self.awg_v.values()))
-        if self.awg_sine:
-            _, lo, hi = next(iter(self.awg_sine.values()))
+        if self.awg_wave:
+            _, _, lo, hi = next(iter(self.awg_wave.values()))
             return (lo + hi) / 2
         return None
 
@@ -384,9 +386,9 @@ class SimAnalogDiscovery:
         step doesn't cross trigger_level.
         """
         m = self.m
-        if m.awg_sine and m.psu_to == "rail":
+        if m.awg_wave and m.psu_to == "rail":
             return self._psrr_capture(sample_rate, n_samples, stimulus)
-        if m.awg_sine:
+        if m.awg_wave:
             return self._sine_capture(sample_rate, n_samples, trigger_level, edge, pre_trigger, stimulus)
         if dio_trigger is not None:
             return self._dio_capture(sample_rate, n_samples, dio_trigger, pre_trigger, stimulus, force)
@@ -433,17 +435,21 @@ class SimAnalogDiscovery:
         return self.last_capture
 
     def _sine_capture(self, rate, n, level, edge, pre, stimulus) -> Capture:
-        """W1 sine on EN_AIN (scope ref channel), the enable comparator's EN_OUT on the other."""
+        """W1 sine or triangle on EN_AIN (scope ref channel), the enable comparator's EN_OUT on the other."""
         m = self.m
         stimulus()
-        f, lo, hi = next(iter(m.awg_sine.values()))
+        shape, f, lo, hi = next(iter(m.awg_wave.values()))
         mid, amp = (hi + lo) / 2, (hi - lo) / 2
         i0 = round(pre * n)
         t = (np.arange(n) - i0) / rate
         ratio = float(np.clip((level - mid) / amp, -1, 1))
-        # phase so the sine crosses `level` with the right slope at t = 0 (the trigger)
-        phase = math.asin(ratio) if edge == "rising" else math.pi - math.asin(ratio)
-        ain = mid + amp * np.sin(2 * math.pi * f * t + phase)
+        # phase so the wave crosses `level` with the right slope at t = 0 (the trigger).
+        # The triangle is (2/pi) asin(sin(theta)): same phase as the sine, linear between its peaks.
+        start = math.asin(ratio) if shape == "sine" else math.pi / 2 * ratio
+        phase = start if edge == "rising" else math.pi - start
+        theta = 2 * math.pi * f * t + phase
+        unit = np.sin(theta) if shape == "sine" else 2 / math.pi * np.arcsin(np.sin(theta))
+        ain = mid + amp * unit
         vdd = m.vin
         hi_th, lo_th = m.en_vt_rise * vdd, m.en_vt_fall * vdd
         out = np.zeros(n)
@@ -466,7 +472,7 @@ class SimAnalogDiscovery:
         """W1 sine through the buffer onto VIN; VOUT carries it attenuated by the PSRR (free-running)."""
         m = self.m
         stimulus()
-        f, lo, hi = next(iter(m.awg_sine.values()))
+        _, f, lo, hi = next(iter(m.awg_wave.values()))
         t = np.arange(n) / rate
         ph = float(m.rng.uniform(0, 2 * math.pi))
         vin_dc = m.vin
@@ -523,17 +529,22 @@ class SimAnalogDiscovery:
         self.m.awg_v[channel] = volts
 
     def set_sine(self, channel: int, *, frequency: float, low: float, high: float) -> None:
+        self.set_wave(channel, shape="sine", frequency=frequency, low=low, high=high)
+
+    def set_wave(self, channel: int, *, shape: WaveShape, frequency: float, low: float, high: float) -> None:
+        if shape not in ("sine", "triangle"):
+            raise InstrumentError(f"unknown wavegen shape {shape!r}")
         if not (-5.0 <= low < high <= 5.0):
             raise InstrumentError("AD2 wavegen is limited to +/-5 V")
         self.m.awg_v.pop(channel, None)
-        self.m.awg_sine[channel] = (frequency, low, high)
+        self.m.awg_wave[channel] = (shape, frequency, low, high)
 
     def set_vplus(self, volts: float | None) -> None:
         self.vplus = volts  # recorded only; nothing in the model depends on it
 
     def off(self, channel: int) -> None:
         self.m.awg_v.pop(channel, None)
-        self.m.awg_sine.pop(channel, None)
+        self.m.awg_wave.pop(channel, None)
 
     def close(self) -> None:
         pass

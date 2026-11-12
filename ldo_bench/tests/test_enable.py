@@ -69,7 +69,7 @@ def test_en_sine_on_sim(jafwak):
     assert r.vt_rise == pytest.approx(m.en_vt_rise * vin, abs=0.01)
     assert r.vt_fall == pytest.approx(m.en_vt_fall * vin, abs=0.01)
     assert r.edges_per_cycle == pytest.approx(1.0, abs=0.3)
-    assert not m.awg_sine  # wavegen off afterwards
+    assert not m.awg_wave  # wavegen off afterwards
     en_sine.plot(res, "x")
 
 
@@ -126,3 +126,66 @@ def test_sine_peak_limited_by_vin_max(jafwak):
     d["en_sine"]["high"] = 2.5  # > dut.vin_max 1.9
     with pytest.raises(ValueError, match="vin_max"):
         BenchConfig.model_validate(d)
+
+
+def test_en_sine_triangle_on_sim(jafwak):
+    """A 1 Hz triangle: the same thresholds, the shape recorded, a trigger wait longer than the window."""
+    es = jafwak.en_sine.model_copy(update={"shape": "triangle", "frequency": 1.0, "captures": 2})
+    timeouts = []
+    with open_bench(jafwak, sim=True) as b:
+        capture = b.scope.capture
+
+        def spy(**kw):
+            timeouts.append(kw["timeout"])
+            return capture(**kw)
+
+        b.scope.capture = spy
+        res = en_sine.run(b, es)
+        m = b.sim_model
+    assert not res.issues, res.issues
+    vin, r = es.vin, res.captures[0]
+    assert r.vt_rise == pytest.approx(m.en_vt_rise * vin, abs=0.01)
+    assert r.vt_fall == pytest.approx(m.en_vt_fall * vin, abs=0.01)
+    # a triangle, not a sine: EN_AIN moves at a constant slope, 2 (high - low) f, between its vertices
+    slope = np.abs(np.diff(res.ain)) * (len(res.ain) / (res.t[-1] - res.t[0]))
+    expected = 2 * (es.sine_high - es.low) * es.frequency
+    assert np.median(slope) == pytest.approx(expected, rel=0.05)
+    window = es.cycles / es.frequency
+    assert all(t > window for t in timeouts)  # 4 s capture: the wait must cover it
+    assert res.summary()["shape"] == "triangle"
+    assert "triangle" in res.report()
+    assert not m.awg_wave  # wavegen off afterwards
+    en_sine.plot(res, "x")
+
+
+def test_en_sine_shape_triangle_accepted_square_rejected(jafwak):
+    d = jafwak.model_dump()
+    d["en_sine"]["shape"] = "triangle"
+    assert BenchConfig.model_validate(d).en_sine.shape == "triangle"
+    d["en_sine"]["shape"] = "square"
+    with pytest.raises(ValueError, match="shape"):
+        BenchConfig.model_validate(d)
+
+
+def test_cli_enable_sine_shape_option(tmp_path):
+    from pathlib import Path
+
+    from typer.testing import CliRunner
+
+    from ldo_bench.cli import app
+
+    cfg = str(Path(__file__).parents[1] / "configs" / "jafwak.toml")
+    base = ["enable-sine", "-c", cfg, "--sim", "--yes", "-o", str(tmp_path), "--captures", "1"]
+    r = CliRunner().invoke(app, [*base, "--shape", "triangle", "--freq", "1"])
+    assert r.exit_code == 0, r.output
+    assert "triangle 0.00-1.80 V at 1 Hz" in r.output
+    assert CliRunner().invoke(app, [*base, "--shape", "square"]).exit_code == 2
+
+
+def test_en_sine_edge_times_under_one_sample_are_a_bound(jafwak):
+    """At 1 Hz the AD2 samples every 488 us: a fast EN_OUT edge is reported as under that, not as a time."""
+    es = jafwak.en_sine.model_copy(update={"shape": "triangle", "frequency": 1.0, "captures": 1})
+    with open_bench(jafwak, sim=True) as b:
+        res = en_sine.run(b, es)
+    line = next(ln for ln in res.report().splitlines() if "rise / fall" in ln)
+    assert "under 488 us / under 488 us" in line, line

@@ -51,3 +51,28 @@ def test_find_crossing_picks_edge_nearest_expected():
     assert _find_crossing(x, 1.65, "rising", near=55) == 60
     assert _find_crossing(x[::-1].copy(), 1.65, "falling", near=40) == 40
     assert _find_crossing(np.zeros(10), 1.65, "rising", near=5) is None
+
+
+class FakeAnalogOut:
+    """Records the last value given to each analogOut setter."""
+
+    def __init__(self):
+        self.calls = {}
+
+    def __getattr__(self, name):
+        def setter(*args):
+            self.calls[name] = args
+
+        return setter
+
+
+def test_wavegen_triangle_uses_the_triangle_function():
+    ad = AnalogDiscovery2(FakeDevice(), "TEST")
+    ad.dev.analogOut = ao = FakeAnalogOut()
+    ad.set_wave(1, shape="triangle", frequency=1.0, low=0.0, high=1.8)
+    p = ad._p
+    assert ao.calls["nodeFunctionSet"] == (0, p.DwfAnalogOutNode.Carrier, p.DwfAnalogOutFunction.Triangle)
+    assert ao.calls["nodeFrequencySet"][2] == 1.0
+    assert ao.calls["nodeAmplitudeSet"][2] == 0.9 and ao.calls["nodeOffsetSet"][2] == 0.9
+    ad.set_sine(1, frequency=1e3, low=0.0, high=1.8)  # set_sine is still a sine
+    assert ao.calls["nodeFunctionSet"][2] == p.DwfAnalogOutFunction.Sine

@@ -182,7 +182,7 @@ def test_psrr_on_sim_matches_the_model(cfg):
             if p.frequency >= 10e3:
                 assert p.phase_deg == pytest.approx(math.degrees(np.angle(model_h(p.frequency))), abs=5)
     assert res.points[0].frequency == cfg.psrr.f_start and res.points[-1].frequency == cfg.psrr.f_stop
-    assert not m.psu_on and not m.awg_sine and not m.awg_v and b.loadbank.code == 0
+    assert not m.psu_on and not m.awg_wave and not m.awg_v and b.loadbank.code == 0
     psrr.plot(res, "x")
     assert "PSRR" in res.report() and res.summary()["psrr_at"]
 
@@ -225,7 +225,7 @@ def test_psrr_stops_if_vin_peaks_above_vin_max(jafwak):
 
     with pytest.raises(InstrumentError, match=r"above dut\.vin_max"):
         run_psrr(jafwak, setup=keep, meter=FakeMeter(0.2))  # 1.8 + 0.2 > 1.9
-    assert not holder["b"].sim_model.awg_sine
+    assert not holder["b"].sim_model.awg_wave
 
 
 def test_psrr_no_injection_is_flagged(jafwak):

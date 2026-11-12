@@ -83,7 +83,7 @@ Procedures never program a voltage onto the DUT directly. They call Bench method
 | `psu_output(v)` | PSU with only a meter on it (psu-check) | `psu.v_max` |
 | `vin_from_wavegen(v)` | W1 DC → buffer → VIN | `min(dut.vin_max, 5 V)` |
 | `vin_sine_from_wavegen(dc, amplitude, f)` | W1 sine → buffer → VIN | peak within `min(dut.vin_max, 5 V)` |
-| `en_ain_sine(ch, f, low, high)` | W1 sine → EN_AIN (enable-sine) | −0.3 V to `min(dut.vin_max, 5 V)` |
+| `en_ain_sine(ch, f, low, high, shape)` | W1 sine or triangle → EN_AIN (enable-sine) | −0.3 V to `min(dut.vin_max, 5 V)` |
 | `enable_logic(on)`, `set_enable(on)` | AD2 V+ → V_33, DIO → EN_CTRL_33 | fixed by `[enable]` |
 | `loadbank.set(code)` | AD2 DIO → load bank | `dut.i_max` |
 | `reference_on()` / `reference_off()` | PSU's other output → VREF_IN (`--vref ext` only) | `vref.v_max`, and at most `vref.above_vin` above VIN |
