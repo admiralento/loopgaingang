@@ -1,6 +1,6 @@
 """Command-line interface: `uv run ldo-bench --help`.
 
-One command per test (load-tran, line-tran, load-reg, line-reg, vref-line, temp, iq, psrr, enable-sine,
+One command per test (load-tran, line-tran, load-reg, line-reg, vref-line, temp, iq, psrr, buffer-check, enable-sine,
 enable-startup, psu-check, loadbank-check), plus check-config, discover, smoke and compare (two
 saved runs side by side, e.g. the BGR against `--vref ext`). Every test
 command follows the same pattern:
@@ -203,6 +203,22 @@ def _enable_mode(cfg: BenchConfig, enable: str) -> str:
             )
             raise typer.Exit(2)
     return enable
+
+
+def _no_vref_with_split_buffer(cfg: BenchConfig, vref: str) -> None:
+    """line-tran / psrr: --vref ext can't run with [buffer], whose negative rail is the same PSU output. Exit 2."""
+    if (
+        vref == "ext"
+        and cfg.buffer is not None
+        and cfg.vref is not None
+        and cfg.vref.psu_channel == cfg.buffer.channel
+    ):
+        typer.secho(
+            f"--vref ext can't run with the split-supply buffer ([buffer]): both use PSU OUT{cfg.buffer.channel}",
+            fg="red",
+            err=True,
+        )
+        raise typer.Exit(2)
 
 
 def _vref_mode(cfg: BenchConfig, vref: str) -> str:
@@ -515,6 +531,7 @@ def line_tran(
     _logging(verbose)
     cfg = _load(config)
     vref = _vref_mode(cfg, vref)
+    _no_vref_with_split_buffer(cfg, vref)
     lt = _section(cfg, "line-tran")
     update: dict = {}
     if low is not None:
@@ -732,6 +749,7 @@ def psrr(
     _logging(verbose)
     cfg = _load(config)
     vref = _vref_mode(cfg, vref)
+    _no_vref_with_split_buffer(cfg, vref)
     sec = _section(cfg, "psrr")
     update: dict = {}
     for key, val in (("f_start", fstart), ("f_stop", fstop), ("points_per_decade", ppd), ("vin", vin)):
@@ -942,6 +960,32 @@ def temp(
         tc = cfg.temp
     with _bench(cfg, sim, psu, ad_serial, yes, use_dmm=not no_dmm, enable=_enable_mode(cfg, enable)) as bench:
         res = proc.run(bench, tc)
+        path = _save(bench, cfg, config, out, proc, res, save_sim)
+    _echo_report(bench, res)
+    _saved(path, fg="green", res=res)
+
+
+@app.command("buffer-check")
+def buffer_check(
+    config: ConfigOpt,
+    out: OutOpt = Path("results"),
+    sim: SimOpt = False,
+    save_sim: SaveSimOpt = False,
+    psu: PsuOpt = None,
+    ad_serial: AdOpt = None,
+    yes: YesOpt = False,
+    verbose: VerboseOpt = False,
+) -> None:
+    """U2 buffer on its own, chip disconnected (JP4 open, 100 Ohm dummy): split supply, levels, step, sine."""
+    from ldo_bench.procedures import buffer_check as proc
+
+    _logging(verbose)
+    cfg = _load(config)
+    if cfg.buffer is None:
+        typer.secho("buffer-check needs a [buffer] section (the split-supply U2)", fg="red", err=True)
+        raise typer.Exit(2)
+    with _bench(cfg, sim, psu, ad_serial, yes, use_dmm=False) as bench:
+        res = proc.run(bench, cfg.buffer)
         path = _save(bench, cfg, config, out, proc, res, save_sim)
     _echo_report(bench, res)
     _saved(path, fg="green", res=res)

@@ -52,28 +52,28 @@ def test_interlock_never_raises_rail_above_check_level(jafwak):
     assert max(seen) <= line_tran.INTERLOCK_RAIL + 1e-9  # the 4 V rail was never applied
 
 
-def test_buffer_without_headroom_is_reported(jafwak):
+def test_buffer_without_headroom_is_reported(jafwak_single):
     seen = []
 
     def weak_buffer(b):
         # healthy through the interlock's proof (rail at vin_max), weak at the full rail:
-        # the 4.0 V rail can then only reach 1.5 V
+        # the full rail (line_tran.psu_voltage) can then only reach 1.5 V
         rail = b.buffer_rail
 
         def weak_at_full_rail(v):
             if v > b.cfg.dut.vin_max:
-                b.sim_model.buffer_dropout = 2.5
+                b.sim_model.buffer_dropout = v - 1.5
             rail(v)
 
         b.buffer_rail = weak_at_full_rail
         orig = b.awg.set_dc
         b.awg.set_dc = lambda ch, v: (seen.append(v), orig(ch, v))
 
-    res, _ = run(jafwak, setup=weak_buffer)  # runs to the end, records the problem
+    res, _ = run(jafwak_single, setup=weak_buffer)  # runs to the end, records the problem
     assert any("headroom" in i for i in res.issues)
     # the calibration never chased the dead buffer upward
-    lt = jafwak.line_tran
-    assert max(seen) <= min(lt.vin_high + line_tran.CAL_MAX_CORRECTION, jafwak.dut.vin_max) + 1e-9
+    lt = jafwak_single.line_tran
+    assert max(seen) <= min(lt.vin_high + line_tran.CAL_MAX_CORRECTION, jafwak_single.dut.vin_max) + 1e-9
 
 
 def test_load_limit_applies(jafwak):

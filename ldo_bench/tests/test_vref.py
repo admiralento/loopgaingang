@@ -111,8 +111,8 @@ def test_supply_off_zeroes_the_reference_first(jafwak):
         assert seen == [0.0]
 
 
-def test_wavegen_off_on_vin_zeroes_the_reference_first(jafwak):
-    with ext_bench(jafwak) as b:
+def test_wavegen_off_on_vin_zeroes_the_reference_first(jafwak_single):
+    with ext_bench(jafwak_single) as b:
         b.confirm_wiring("t", [], ref_probe=("vin", 0), psu_to="rail")
         b.buffer_rail(4.0)
         b.vin_from_wavegen(1.8)
@@ -199,8 +199,16 @@ def test_each_test_proves_the_reference_and_runs_on_it(cmd, tmp_path, monkeypatc
         seen["proof"] = self.vref_proof
 
     monkeypatch.setattr(Bench, "reference_on", spy)
-    out = [] if cmd == "smoke" else ["-o", str(tmp_path)]  # smoke saves nothing
-    r = runner.invoke(app, [cmd, "-c", str(CONFIGS / "jafwak.toml"), "--sim", "--vref", "ext", *out])
+    out = [] if cmd == "smoke" else ["-o", str(tmp_path / "results")]  # smoke saves nothing
+    cfg = CONFIGS / "jafwak.toml"
+    if cmd in ("line-tran", "psrr"):
+        # With [buffer], U2's negative rail is on OUT2, so --vref ext is refused (test_buffer_split);
+        # the external reference itself is still tested on the single-rail buffer.
+        text = cfg.read_text()
+        start = text.index("[buffer]")
+        cfg = tmp_path / "jafwak_single.toml"
+        cfg.write_text(text[:start] + text[text.index("\n[", start + 1) + 1 :])
+    r = runner.invoke(app, [cmd, "-c", str(cfg), "--sim", "--vref", "ext", *out])
     assert r.exit_code == 0, r.output
     assert seen["vref"] == pytest.approx(1.204)
     assert seen["proof"]["vout_moved_v"] > 0.01

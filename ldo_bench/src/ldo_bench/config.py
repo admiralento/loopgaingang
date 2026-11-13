@@ -635,6 +635,63 @@ class IqConfig(_Model):
         return self
 
 
+class BufferConfig(_Model):
+    """[buffer]: the reworked injection buffer (JAFWAK U2) on a split supply, for line-tran, psrr and buffer-check.
+
+    After the rework U2's V- (pin 4) is on a negative rail, so its output can reach 0 V and the
+    1.7-1.9 V VIN range. The PSU's other output, wired reversed (OUT+ to GND, OUT- to U2 pin 4),
+    supplies it; psu.channel stays on VS_BUFF (J4). With this section the buffer tests:
+      - drive U2's input (W1) at DC 0 V before either rail comes up and never turn it off while
+        they are up (a floating input sends U2's output to a rail),
+      - ramp V- and VS_BUFF together in `ramp_step` steps, reading VIN after each one; outside
+        vin_window the rails come down and the run stops,
+      - shut down with W1 at 0 V until both rails are off.
+    """
+
+    v_minus: float = Field(
+        5.0, gt=0, le=8.0, description="Magnitude of U2's negative rail (V): pin 4 sits at -v_minus"
+    )
+    channel: Literal[1, 2] = Field(
+        2, description="PSU output wired reversed onto U2 pin 4 (OUT+ -> GND, OUT- -> pin 4)"
+    )
+    current_limit: float = Field(0.02, gt=0, description="Current limit on the negative rail (A)")
+    ovp: float | None = Field(6.0, gt=0, description="OVP on the negative rail's output (V); None = none")
+    rail_current_limit: float = Field(
+        0.1,
+        gt=0,
+        description="Current limit on VS_BUFF (psu.channel) while the buffer runs (A); replaces psu.current_limit",
+    )
+    ramp_step: float = Field(0.1, gt=0, le=0.5, description="Step for ramping the two rails together (V)")
+    vin_window: tuple[float, float] = Field(
+        (-0.1, 0.3),
+        description=(
+            "VIN (V) allowed while the rails ramp with W1 at 0 V; U2's offset is up to ~65 mV (datasheet, "
+            "first bring-up plan). Outside it the rails come down and the run stops"
+        ),
+    )
+    v_plus: float = Field(5.0, gt=0, description="VS_BUFF for buffer-check (V)")
+    check_levels: list[float] = Field(
+        [1.7, 1.8, 1.85],
+        description=(
+            "buffer-check: DC levels to reach on JP4 pin 1 (V). W1 is capped at dut.vin_max, so 1.90 V is only "
+            "reachable if U2's offset is positive; line-tran and psrr go up to 1.85 V"
+        ),
+    )
+    check_peak_max: float = Field(
+        1.95, gt=0, description="buffer-check: nothing on JP4 pin 1 may exceed this (V)"
+    )
+    check_sine_frequency: float = Field(1e4, gt=0, description="buffer-check: sine frequency (Hz)")
+    check_sine_dc: float = Field(1.8, gt=0, description="buffer-check: sine centre on JP4 pin 1 (V)")
+    check_sine_amplitude: float = Field(0.05, gt=0, description="buffer-check: sine amplitude (V peak)")
+
+    @model_validator(mode="after")
+    def _check(self) -> BufferConfig:
+        lo, hi = self.vin_window
+        if not lo < 0 < hi:
+            raise ValueError("buffer.vin_window must contain 0 V (W1 sits at 0 V while the rails ramp)")
+        return self
+
+
 class BufferProofConfig(_Model):
     """Settings for proving the buffer path before the rail goes above dut.vin_max (line-tran, psrr)."""
 
@@ -810,6 +867,7 @@ class BenchConfig(_Model):
     iq: IqConfig | None = None
     psrr: PsrrConfig | None = None
     vref: VrefConfig | None = None
+    buffer: BufferConfig | None = None
 
     def lowest_vin(self) -> dict[str, float]:
         """The lowest VIN (V) each configured test puts on the LDO while it runs, by test name.
@@ -951,6 +1009,26 @@ class BenchConfig(_Model):
                     f"(~{self.ad2.vin_margin(lt.vin_high) * 1e3:.0f} mV) of dut.vin_max ({self.dut.vin_max} V)"
                 )
             code_ok("line_tran.load_code", lt.load_code)
+        if self.buffer:
+            bu = self.buffer
+            if bu.channel == self.psu.channel:
+                raise ValueError(
+                    f"buffer.channel ({bu.channel}) is psu.channel: U2's negative rail needs the other output"
+                )
+            if bu.v_plus > self.psu.v_max:
+                raise ValueError(f"buffer.v_plus exceeds psu.v_max ({self.psu.v_max} V)")
+            for name, sec in (("line_tran", self.line_tran), ("psrr", self.psrr)):
+                if sec is not None and bu.v_minus < sec.buffer_headroom:
+                    raise ValueError(
+                        f"buffer.v_minus ({bu.v_minus} V) is less than {name}.buffer_headroom "
+                        f"({sec.buffer_headroom} V): U2 couldn't drive VIN down to 0 V"
+                    )
+            if max(bu.check_levels) > self.dut.vin_max:
+                raise ValueError(f"buffer.check_levels exceed dut.vin_max ({self.dut.vin_max} V)")
+            if bu.check_sine_dc + bu.check_sine_amplitude > self.dut.vin_max:
+                raise ValueError(
+                    f"buffer.check_sine_dc + check_sine_amplitude exceed dut.vin_max ({self.dut.vin_max} V)"
+                )
         if self.vref:
             vr = self.vref
             if vr.psu_channel == self.psu.channel:

@@ -23,6 +23,14 @@ run() steps:
    vin_high - vin_low). The extra metric is the peak VOUT deviation per volt of
    VIN step (V/V).
 6. W1 off, load bank off.
+
+Split-supply buffer ([buffer], JAFWAK's reworked U2 with V- on -5 V): W1 holds U2's input at DC
+0 V before either rail comes up and is never turned off while they are up (`input_idle` sets it to
+0 V instead). `_interlock` brings both rails up together to min(psu_voltage, dut.vin_max) through
+`Bench.buffer_rails_on`, which reads VIN after every step: VIN following VS_BUFF (PSU on VIN),
+going negative, or not held at 0 V (V- missing) stops the run. Then the proof levels as above, W1
+back to 0 V, and VS_BUFF up to psu_voltage. At the end `Bench.buffer_rails_off` takes the rails
+down with W1 at 0 V and turns W1 off last.
 """
 
 from __future__ import annotations
@@ -187,9 +195,57 @@ class LineTranResult:
         return "\n".join(lines)
 
 
+def split_wiring(bench: Bench) -> list[str]:
+    """Wiring for the split-supply buffer ([buffer], JAFWAK silkscreen labels)."""
+    a, bu, n = bench.cfg.ad2, bench.cfg.buffer, bench.cfg.psu.channel
+    return [
+        f"PSU OUT{n} + -> VS_BUFF (J4), OUT{n} - -> GND (J11). NOT on VIN_DC (J7): VS_BUFF goes to "
+        f"{bench.cfg.psu.v_max:g} V max",
+        f"PSU OUT{bu.channel} REVERSED: OUT{bu.channel} + -> GND, OUT{bu.channel} - -> U2 pin 4 "
+        f"(-{bu.v_minus:g} V), 100 nF at the pin",
+        f'AD2 W{a.wavegen_channel} -> VIN_FG (J3); JP4 1-2 "FG" (VIN from U2); nothing on VIN_DC (J7)',
+    ]
+
+
+def buffer_up(bench: Bench, rail: float) -> None:
+    """Buffer rail to `rail` (V): the split supply (W1 at 0 V first) with [buffer], else the single rail."""
+    if bench.cfg.buffer is not None:
+        bench.vin_from_wavegen(0.0)
+        bench.buffer_rails_on(rail)
+    else:
+        bench.buffer_rail(rail)
+
+
+def input_idle(bench: Bench) -> None:
+    """Stop driving VIN: W1 to DC 0 V with the split buffer (its input must never float), else W1 off."""
+    if bench.cfg.buffer is not None:
+        bench.vin_from_wavegen(0.0)
+    else:
+        bench.wavegen_off()
+
+
+def buffer_down(bench: Bench) -> None:
+    """End of a buffer test: the split supply down with W1 at 0 V (W1 off last), else just W1 off."""
+    if bench.cfg.buffer is not None:
+        bench.buffer_rails_off()
+    else:
+        bench.wavegen_off()
+
+
 def wiring(bench: Bench) -> list[str]:
     """Wiring lines shown before the run (the load bank line only if a load code is set)."""
     a, lb = bench.cfg.ad2, bench.cfg.loadbank
+    if bench.cfg.buffer is not None:
+        lines = [
+            *split_wiring(bench),
+            f"Scope {a.vout_channel}+ -> J13 pin 4 (OUTA), Scope {a.ref_channel}+ -> J13 pin 1 (INA) (VIN, trigger); "
+            f"both - -> J13 pin 6 (GND)",
+        ]
+        if bench.cfg.line_tran and bench.cfg.line_tran.load_code:
+            lines.append(
+                f'DIO {lb.dio_pins} -> J13 pins 7..15 (B0..B4); J10 "LOAD" fitted (VS_BUFF is up first)'
+            )
+        return lines
     lines = [
         f"PSU OUT{bench.cfg.psu.channel} -> buffer rail VS_BUFF / VDD_BUF and GND. NOT on VIN: "
         "the rail goes above the LDO's VIN limit",
@@ -202,31 +258,12 @@ def wiring(bench: Bench) -> list[str]:
     return lines
 
 
-FINE_RANGE = 5.0  # AD2 scope range (V p-p, +/-2.5 V): 0.3 mV per count
-FINE_RANGE_MAX = 2.4  # V: readings up to here fit on the fine range with room to spare
 PROOF_FOLLOW = 0.5  # VIN must move by at least this fraction of the W1 proof step
 
 
-def _vin_setups(bench: Bench) -> dict[int, ChannelSetup]:
-    """Scope setups for reading VIN: the fine 5 V range whenever dut.vin_max fits on it.
-
-    On the 50 V range one count is 3 mV and the accuracy is far coarser, too coarse to hold VIN
-    within tens of mV of dut.vin_max. Anything above the fine range's span reads as clipped
-    (about 2.5 V), which is still above a vin_max of at most 2.4 V, so the limit checks still trip.
-    """
-    a = bench.cfg.ad2
-    ref = (
-        ChannelSetup(FINE_RANGE, 0.0)
-        if bench.cfg.dut.vin_max <= FINE_RANGE_MAX
-        else (ChannelSetup(a.ref.range, a.ref.offset))
-    )
-    return {a.vout_channel: ChannelSetup(a.vout.range, a.vout.offset), a.ref_channel: ref}
-
-
 def _measure_vin(bench: Bench) -> float:
-    """VIN at the board (V): the AD2 ref channel averaged over 50 ms, on the finest range that fits."""
-    r = bench.scope.measure_dc(0.05, _vin_setups(bench))
-    return r[bench.cfg.ad2.ref_channel].mean
+    """VIN at the board (V) on the AD2's finest range that fits (Bench.measure_vin_fine)."""
+    return bench.measure_vin_fine()
 
 
 def _vin_limit(bench: Bench) -> float:
@@ -248,8 +285,11 @@ def _interlock(bench: Bench, rail: float, proof_levels: tuple[float, float] = (0
        alone can't tell from a correct bench. Then stop, before the rail goes above vin_max.
 
     proof_levels must be within what the buffer can drive with its rail at dut.vin_max. Also used
-    by psrr.
+    by psrr. With [buffer] the split-supply version runs instead (_interlock_split).
     """
+    if bench.cfg.buffer is not None:
+        _interlock_split(bench, rail, proof_levels)
+        return
     bench.wavegen_off()
     # stage 1: never above the real rail target, so a low psu_voltage is not exceeded by the check
     v_check = min(INTERLOCK_RAIL, rail)
@@ -287,7 +327,39 @@ def _interlock(bench: Bench, rail: float, proof_levels: tuple[float, float] = (0
         )
 
 
-def _calibrate(bench: Bench, target: float) -> tuple[float, float, str | None]:
+def _interlock_split(bench: Bench, rail: float, proof_levels: tuple[float, float]) -> None:
+    """The interlock for the split-supply buffer: rails up to min(rail, dut.vin_max), then the proof.
+
+    1. W1 at DC 0 V, then Bench.buffer_rails_on: VS_BUFF and V- ramp together with VIN read after
+       every step. VIN following VS_BUFF (PSU on VIN), going negative (V- reversed onto VIN), or
+       not held near 0 V (V- missing, JP4, W1) stops it with the rails down.
+    2. The proof levels with VS_BUFF at min(rail, dut.vin_max), as in the single-rail interlock: VIN
+       must follow W1 (catches a VIN probe that's off VIN, which reads ~0 V and passes step 1).
+       W1 goes back to DC 0 V, never off.
+    """
+    v_proof = min(rail, bench.cfg.dut.vin_max)
+    buffer_up(bench, v_proof)
+    lo, hi = proof_levels
+    seen = []
+    for level in (lo, hi):
+        bench.vin_from_wavegen(level)
+        bench.sleep(0.02)
+        seen.append(_measure_vin(bench))
+    bench.vin_from_wavegen(0.0)
+    moved = seen[1] - seen[0]
+    log.info("interlock: VS_BUFF %.2f V, W1 %.2f / %.2f V -> VIN %.3f / %.3f V", v_proof, lo, hi, *seen)
+    if moved < PROOF_FOLLOW * (hi - lo):
+        bench.buffer_rails_off()
+        raise InstrumentError(
+            f"with VS_BUFF at {v_proof:.2f} V, stepping W1 {lo:.2f} -> {hi:.2f} V moved VIN by only "
+            f"{moved * 1e3:.0f} mV ({seen[0]:.3f} -> {seen[1]:.3f} V), so VIN isn't proven to come from U2. "
+            f'Rails are down. Check: scope {bench.cfg.ad2.ref_channel} on J13 pin 1 (INA), JP4 1-2 "FG", '
+            f"W{bench.cfg.ad2.wavegen_channel} on VIN_FG (J3). If all of that is right, U2 can't drive the "
+            "proof levels at this VS_BUFF: adjust proof_levels."
+        )
+
+
+def _calibrate(bench: Bench, target: float, limit: float | None = None) -> tuple[float, float, str | None]:
     """W1 setpoint that puts VIN at `target` through the buffer: (w1, measured VIN, issue or None).
 
     The correction is capped (CAL_MAX_CORRECTION) so a buffer that isn't driving VIN can't make us
@@ -297,20 +369,23 @@ def _calibrate(bench: Bench, target: float) -> tuple[float, float, str | None]:
     Simple fixed-point iteration: W1 += (target - measured VIN), up to CAL_ITERATIONS times, done
     when VIN is within CAL_TOLERANCE. The buffer is unity gain, so a few passes remove its offset.
     If it doesn't converge, the last setpoint is applied, measured, and the issue says so. Also
-    used by psrr for its DC level.
+    used by psrr for its DC level. `limit` (V) replaces the VIN hard stop: buffer-check, with the
+    chip disconnected, uses buffer.check_peak_max. W1 stays within dut.vin_max either way.
     """
-    limit = _vin_limit(bench)
+    what = (
+        f"above dut.vin_max ({bench.cfg.dut.vin_max} V) less the AD2's error margin"
+        if limit is None
+        else f"above the {limit:.3f} V limit"
+    )
+    limit = _vin_limit(bench) if limit is None else limit
 
     def apply(w: float) -> float:
         bench.vin_from_wavegen(w)
         bench.sleep(0.02)  # let VIN settle at the new setpoint before measuring
         v = _measure_vin(bench)
         if v > limit:
-            bench.wavegen_off()
-            raise InstrumentError(
-                f"VIN reached {v:.3f} V with W1 at {w:.3f} V, above dut.vin_max ({bench.cfg.dut.vin_max} V) "
-                f"less the AD2's error margin: stopping"
-            )
+            input_idle(bench)
+            raise InstrumentError(f"VIN reached {v:.3f} V with W1 at {w:.3f} V, {what}: stopping")
         return v
 
     w = target  # start from the target: unity gain buffer, only its offset to remove
@@ -347,7 +422,7 @@ def run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig) -> LineTranResult:
     }
     bench.loadbank.set(lt.load_code)
     _interlock(bench, lt.psu_voltage, lt.proof_levels)  # must pass before the rail goes above dut.vin_max
-    bench.buffer_rail(lt.psu_voltage)
+    buffer_up(bench, lt.psu_voltage)
     w_lo, v_lo, cal_lo = _calibrate(bench, lt.vin_low)
     w_hi, v_hi, cal_hi = _calibrate(bench, lt.vin_high)
     log.info("VIN levels %.4f / %.4f V (W1 %.4f / %.4f V)", v_lo, v_hi, w_lo, w_hi)
@@ -425,7 +500,7 @@ def run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig) -> LineTranResult:
         else:
             log.info("%s: peak %+.2f mV, settling %.2f us", edge, m.deviation * 1e3, m.settling_time * 1e6)
 
-    bench.wavegen_off()
+    buffer_down(bench)
     bench.loadbank.off()
     return LineTranResult(
         lt.psu_voltage,

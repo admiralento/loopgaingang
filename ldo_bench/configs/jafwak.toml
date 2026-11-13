@@ -106,8 +106,17 @@ pre_trigger = 0.2
 averages = 64                # as on the demo board: 16 left the scopes a ring period apart on settling (2026-11-10)
 edges = ["rising", "falling"]
 
+[buffer]                     # U2 reworked (2026-11-13): V- on -5 V, so the buffer tests run on a split supply
+v_minus = 5.0                # PSU OUT2 wired reversed: OUT2 + -> GND, OUT2 - -> U2 pin 4 (-5 V)
+channel = 2
+current_limit = 0.02         # A on the -5 V rail (BUF634 low-Iq mode: ~1.5-2.3 mA)
+rail_current_limit = 0.1     # A on VS_BUFF (OUT1) while the buffer runs (approved 2026-11-13)
+ramp_step = 0.1              # V: the two rails ramp together in these steps, VIN read after each
+vin_window = [-0.1, 0.3]     # V on VIN while the rails ramp with W1 at 0 V; outside it everything comes down
+v_plus = 5.0                 # V on VS_BUFF for buffer-check
+
 [line_tran]                  # W1 -> VIN_FG SMA -> BUF634 -> VIN (JP4 to the buffer), PSU on VS_BUFF
-psu_voltage = 4.0            # on VS_BUFF (not VIN!); >= vin_high + buffer_headroom
+psu_voltage = 5.0            # on VS_BUFF (not VIN!); >= vin_high + buffer_headroom
 vin_low = 1.75               # +/-50 mV around the 1.8 V nominal; keeps 50 mV below vin_max
 vin_high = 1.85
 load_code = 4                # 19.2 mA
@@ -162,7 +171,7 @@ settle_time = 0.5
 check_code = 1               # shunt: switch in 4.8 mA once to prove the DMM sees R13's current (0 = skip)
 
 [psrr]                       # sine on VIN through the BUF634 (line-tran path: JP4 to the buffer, PSU on VS_BUFF)
-psu_voltage = 4.0            # on VS_BUFF (not VIN!)
+psu_voltage = 5.0            # on VS_BUFF (not VIN!)
 vin = 1.8                    # DC level; peak = vin + amplitude must stay <= dut.vin_max
 amplitude = 0.05             # V peak (100 mV p-p)
 f_start = 100

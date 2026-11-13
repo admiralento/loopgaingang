@@ -6,9 +6,9 @@ from ldo_bench.bench import open_bench
 from ldo_bench.instruments.base import InstrumentError
 
 
-def test_vin_ceiling_enforced(jafwak):
-    vmax = jafwak.dut.vin_max
-    with open_bench(jafwak, sim=True) as b:
+def test_vin_ceiling_enforced(jafwak_single):
+    vmax = jafwak_single.dut.vin_max
+    with open_bench(jafwak_single, sim=True) as b:
         with pytest.raises(InstrumentError, match=rf"limit {vmax}"):
             b.vin_from_psu(vmax + 0.1)
         b.buffer_rail(4.5)  # buffer rail may exceed the DUT's VIN limit

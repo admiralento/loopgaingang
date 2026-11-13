@@ -97,7 +97,7 @@ def test_calibration_stops_above_vin_max(jafwak):
     assert "above dut.vin_max" in str(err)
 
 
-def test_psrr_peak_stop_turns_the_wavegen_off_first(jafwak):
+def test_psrr_peak_stop_turns_the_wavegen_off_first(jafwak_single):
     events = []
 
     class TooBig:
@@ -107,11 +107,11 @@ def test_psrr_peak_stop_turns_the_wavegen_off_first(jafwak):
             events.append("measure")
             return psrr.Tone(complex(0.2), complex(1e-4), 1e-5, 1e-5, 1.8)  # 2.0 V peak
 
-    with open_bench(jafwak, sim=True) as b:
+    with open_bench(jafwak_single, sim=True) as b:
         orig = b.wavegen_off
         b.wavegen_off = lambda: (events.append("wavegen_off"), orig())
         with pytest.raises(InstrumentError, match=r"above dut\.vin_max"):
-            psrr.run(b, jafwak.psrr, TooBig())
+            psrr.run(b, jafwak_single.psrr, TooBig())
         # switched off by the check itself, before the bench's shutdown ran
         assert events.index("wavegen_off", events.index("measure")) > events.index("measure")
         assert not b.sim_model.awg_wave
@@ -148,6 +148,7 @@ def test_vin_from_psu_obeys_psu_v_max_when_it_is_below_vin_max(jafwak):
         "en_sine",
         "startup",
         "iq",
+        "buffer",
     ):
         data[sec] = None
     cfg = BenchConfig.model_validate(data)

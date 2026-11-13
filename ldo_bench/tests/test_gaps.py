@@ -69,8 +69,8 @@ def test_swing_tolerance_boundary(jafwak, scale, flagged):
     ("vin_frac", "stops"),
     [(line_tran.INTERLOCK_FRACTION + 0.05, True), (line_tran.INTERLOCK_FRACTION - 0.05, False)],
 )
-def test_interlock_fraction_boundary(jafwak, vin_frac, stops):
-    with open_bench(jafwak, sim=True) as b:
+def test_interlock_fraction_boundary(jafwak_single, vin_frac, stops):
+    with open_bench(jafwak_single, sim=True) as b:
         b.confirm_wiring = lambda *a, **k: None
         reads = iter([vin_frac * line_tran.INTERLOCK_RAIL, 0.1, 0.3])  # stage 1, then a healthy proof
         b.scope.measure_dc = lambda d, setups: (

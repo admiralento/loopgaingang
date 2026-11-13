@@ -19,6 +19,12 @@ def jafwak():
 
 
 @pytest.fixture
+def jafwak_single(jafwak):
+    """JAFWAK without [buffer]: the single-rail buffer path (U2 before its rework, and the demo board's)."""
+    return jafwak.model_copy(update={"buffer": None})
+
+
+@pytest.fixture
 def bench(cfg):
     with open_bench(cfg, sim=True) as b:
         yield b

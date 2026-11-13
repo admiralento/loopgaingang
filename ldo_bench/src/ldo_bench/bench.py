@@ -90,8 +90,16 @@ class Bench:
     They call `ldo_enable(False)` before VIN comes up, `ldo_enable(True)` once it is up, and
     `ldo_enable(False)` when they finish; with the enable tied on (the default) these do nothing.
 
+    Split-supply buffer ([buffer], JAFWAK's reworked U2): `buffer_rails_on(v_plus)` brings up VS_BUFF
+    (psu.channel) and U2's negative rail (buffer.channel, wired reversed) together in buffer.ramp_step
+    steps, with W1 already holding U2's input at DC 0 V, reading VIN after every step; outside
+    buffer.vin_window both come down and the run stops. While they are up, W1 can't be turned off
+    (a floating input sends U2's output to a rail); `buffer_rails_off()` takes them down with W1 at
+    0 V and turns W1 off last. `buffer_rail` (the single-rail path) is refused with [buffer].
+
     `shutdown()` (also run on leaving `with Bench`) turns things off in this order: external
-    reference 0 V -> LDO enable low (--enable dio) -> wavegen (both channels) -> AD2 V+ -> load bank -> DIO released -> PSU output
+    reference 0 V -> LDO enable low (--enable dio) -> with the buffer rails up: W1 to DC 0 V, PSU
+    outputs off, negative rail 0 V -> wavegen (both channels) -> AD2 V+ -> load bank -> DIO released -> PSU output
     off and 0 V -> close the instruments. Signals into the board go first, so nothing drives an
     unpowered DUT.
 
@@ -146,6 +154,9 @@ class Bench:
         self.enable_dio = enable_dio
         self._enable_driven = False  # V_33 on and the enable DIO driven by ldo_enable()
         self.last_wiring: list[str] = []  # the wiring lines last shown by confirm_wiring()
+        # split-supply buffer (see the class docstring)
+        self.vminus_out: SupplyOutput | None = None  # the PSU output on U2's V- (wired reversed)
+        self._buffer_up = False  # buffer rails may be up: W1 must keep driving U2's input
 
     @property
     def is_sim(self) -> bool:
@@ -212,6 +223,9 @@ class Bench:
             if en_pin is None:  # the simulated LDO now follows the enable DIO
                 en_pin = self.cfg.enable.dio_pin
         if self.sim_model is not None:
+            if psu_to == "rail" and self.cfg.buffer is not None:  # the operator wired U2's split supply
+                self.sim_model.buffer_split = True
+                self.sim_model.vminus_wired = True
             self.sim_model.ref_probe = ref_probe
             self.sim_model.dmm_probe = dmm_probe
             self.sim_model.dmm_rail = dmm_rail
@@ -270,13 +284,17 @@ class Bench:
             raise KeyboardInterrupt("JP2 removal not confirmed")
 
     # --- Supplies -----------------------------------------------------------
-    def _ensure_psu(self) -> None:
-        """First use only: output off, then current limit / OVP / range, then 0 V."""
+    def _ensure_psu(self, current_limit: float | None = None) -> None:
+        """First use only: output off, then current limit / OVP / range, then 0 V.
+
+        current_limit (A) replaces psu.current_limit (buffer.rail_current_limit for the split buffer).
+        """
         if self._psu_ready:
             return
         p = self.cfg.psu
         self.psu.output(False)
-        self.psu.setup(current_limit=p.current_limit, ovp=p.ovp, voltage_range=p.voltage_range)
+        limit = p.current_limit if current_limit is None else current_limit
+        self.psu.setup(current_limit=limit, ovp=p.ovp, voltage_range=p.voltage_range)
         self.psu.set_voltage(0.0)
         if self.vref_external:
             vr = self.cfg.vref
@@ -339,10 +357,148 @@ class Bench:
         """PSU drives the BUF634 supply (VS_BUFF / VDD_BUF) during line transient and PSRR.
 
         Only psu.v_max applies: the buffer rail doesn't reach VIN (the wavegen sets VIN). Refused
-        while the external reference is on (lowering the rail could pull VIN below it).
+        while the external reference is on (lowering the rail could pull VIN below it), and with a
+        [buffer] section (the split supply must come up through buffer_rails_on).
         """
+        if self.cfg.buffer is not None:
+            raise InstrumentError(
+                "refusing buffer_rail with a [buffer] section: use buffer_rails_on (split supply)"
+            )
         self._no_reference("buffer_rail")
         self._psu_ramp(volts, self.cfg.psu.v_max)
+
+    # --- Split-supply buffer ([buffer]) ---------------------------------------
+    FINE_RANGE = 5.0  # AD2 scope range (V p-p, +/-2.5 V): 0.3 mV per count
+    FINE_RANGE_MAX = 2.4  # V: readings up to here fit on the fine range with room to spare
+
+    def vin_fine_setups(self) -> dict[int, ChannelSetup]:
+        """Scope setups for reading VIN: the fine 5 V range whenever dut.vin_max fits on it.
+
+        On the 50 V range one count is 3 mV and the accuracy is far coarser, too coarse to hold VIN
+        within tens of mV of dut.vin_max. Anything above the fine range's span reads as clipped
+        (about 2.5 V), which is still above a vin_max of at most 2.4 V, so the limit checks still trip.
+        """
+        a = self.cfg.ad2
+        ref = (
+            ChannelSetup(self.FINE_RANGE, 0.0)
+            if self.cfg.dut.vin_max <= self.FINE_RANGE_MAX
+            else ChannelSetup(a.ref.range, a.ref.offset)
+        )
+        return {a.vout_channel: ChannelSetup(a.vout.range, a.vout.offset), a.ref_channel: ref}
+
+    def measure_vin_fine(self) -> float:
+        """VIN at the board (V): the AD2 ref channel averaged over 50 ms, on the finest range that fits."""
+        r = self.scope.measure_dc(0.05, self.vin_fine_setups())
+        return r[self.cfg.ad2.ref_channel].mean
+
+    def buffer_rails_on(self, v_plus: float) -> None:
+        """Bring U2's split supply to +v_plus (VS_BUFF, V) and -buffer.v_minus, or move V+ to v_plus.
+
+        W1 must already hold U2's input at DC 0 V (vin_from_wavegen(0.0)). The rails ramp together,
+        one buffer.ramp_step at a time (V- then V+), and VIN is read after each step. If it leaves
+        buffer.vin_window, both rails come down (W1 still at 0 V) and InstrumentError says what the
+        reading points to. v_plus is limited to psu.v_max. VS_BUFF's current limit is
+        buffer.rail_current_limit; the negative rail's is buffer.current_limit.
+        """
+        bu = self.cfg.buffer
+        if bu is None:
+            raise InstrumentError("buffer_rails_on needs a [buffer] section")
+        self._no_reference("buffer_rails_on")
+        if self.vref_external and self.cfg.vref is not None and self.cfg.vref.psu_channel == bu.channel:
+            raise InstrumentError(
+                f"refusing U2's split supply with --vref ext: both need PSU OUT{bu.channel} "
+                "(the reference would move U2's V-)"
+            )
+        if not 0 <= v_plus <= self.cfg.psu.v_max + 1e-9:
+            raise InstrumentError(f"refusing VS_BUFF = {v_plus} V (limit 0..{self.cfg.psu.v_max} V)")
+        if not (self._awg_on and self._vin_from == "wavegen" and self._vin_level == 0.0):
+            raise InstrumentError(
+                "refusing to power U2's rails: W1 must first hold its input at DC 0 V (vin_from_wavegen(0.0)); "
+                "a floating input sends U2's output to a rail"
+            )
+        self._ensure_psu(current_limit=bu.rail_current_limit)
+        if self.vminus_out is None:
+            if not hasattr(self.psu, "aux"):
+                raise InstrumentError(
+                    f"the supply ({self.psu.idn}) has no second output for U2's negative rail"
+                )
+            self.vminus_out = self.psu.aux(bu.channel)
+            self.vminus_out.setup(current_limit=bu.current_limit, ovp=bu.ovp)
+            self.vminus_out.set_voltage(0.0)
+        if not self._psu_on:  # both outputs switch on together, at 0 V
+            self.psu.set_voltage(0.0)
+            self.psu.output(True)
+            self._psu_on = True
+        self._buffer_up = True
+        self._ramp_rails(v_plus, bu.v_minus, check=True)
+        for out, want, name in ((self.psu, v_plus, "VS_BUFF"), (self.vminus_out, bu.v_minus, "U2 V-")):
+            got = out.get_voltage_setpoint()
+            if abs(got - want) > SETPOINT_TOLERANCE:
+                self.buffer_rails_off()
+                raise InstrumentError(f"the {name} setpoint reads {got:.4f} V after programming {want:.4f} V")
+        self.sleep(self.cfg.psu.settle_time)
+
+    def _ramp_rails(self, v_plus: float, v_minus: float, *, check: bool) -> None:
+        """Step VS_BUFF towards v_plus and U2's V- towards -v_minus (V), alternately, ramp_step at a time.
+
+        With check=True, VIN is read after every step and must stay in buffer.vin_window; if not,
+        the rails come down and InstrumentError is raised.
+        """
+        bu = self.cfg.buffer
+        step = bu.ramp_step
+
+        def toward(v: float, target: float) -> float:
+            return min(target, v + step) if target > v else max(target, v - step)
+
+        vp, vm = self.psu.get_voltage_setpoint(), self.vminus_out.get_voltage_setpoint()
+        while abs(vp - v_plus) > 1e-9 or abs(vm - v_minus) > 1e-9:
+            vm = toward(vm, v_minus)
+            self.vminus_out.set_voltage(vm)
+            vp = toward(vp, v_plus)
+            self.psu.set_voltage(vp)
+            self.sleep(0.02)
+            if not check:
+                continue
+            vin = self.measure_vin_fine()
+            lo, hi = bu.vin_window
+            if lo <= vin <= hi:
+                continue
+            self.buffer_rails_off()
+            n, m = self.cfg.psu.channel, bu.channel
+            if vin > hi and abs(vin - vp) <= VIN_SET_REL * vp + VIN_SET_ABS:
+                why = f"VIN follows VS_BUFF: PSU OUT{n} looks connected to VIN, not to VS_BUFF (J4). Move its leads"
+            elif vin < lo:
+                why = (
+                    f"VIN went negative: is OUT{m} wired reversed onto U2 pin 4 (OUT{m} + -> GND, OUT{m} - -> "
+                    "pin 4), and not onto VIN?"
+                )
+            else:
+                why = (
+                    f"U2 isn't holding VIN at W1's 0 V: check -{bu.v_minus:g} V reaches U2 pin 4 (OUT{m} "
+                    f'reversed), JP4 1-2 "FG", and W{self.cfg.ad2.wavegen_channel} on VIN_FG (J3)'
+                )
+            raise InstrumentError(
+                f"with VS_BUFF at {vp:.2f} V and U2 V- at -{vm:.2f} V (W1 at 0 V), VIN reads {vin:.3f} V, outside "
+                f"{lo:g}..{hi:g} V. Rails are down. {why}"
+            )
+
+    def buffer_rails_off(self) -> None:
+        """Take U2's rails down: W1 to DC 0 V, both rails ramped to 0 together, outputs off, then W1 off."""
+        if self.vminus_out is None and not self._buffer_up:
+            return
+        ch = self.cfg.ad2.wavegen_channel
+        self.awg.set_dc(ch, 0.0)
+        self._awg_on = True
+        if self._psu_on and self.vminus_out is not None:
+            self._ramp_rails(0.0, 0.0, check=False)
+        self.psu.output(False)
+        self._psu_on = False
+        if self.vminus_out is not None:
+            self.vminus_out.set_voltage(0.0)
+        self._buffer_up = False
+        self.awg.off(ch)
+        self._awg_on = False
+        self._vin_level, self._vin_from = None, None
 
     def vin_from_wavegen(self, volts: float) -> None:
         """Wavegen drives VIN through the BUF634: a DC level of `volts` (V), at most
@@ -427,6 +583,11 @@ class Bench:
         If that channel drives VIN (through the buffer), the external reference goes to 0 V first.
         """
         ch = self.cfg.ad2.wavegen_channel if channel is None else channel
+        if self._buffer_up and ch == self.cfg.ad2.wavegen_channel:
+            raise InstrumentError(
+                "refusing to turn W1 off while U2's rails are up (its input would float and rail VIN): "
+                "use vin_from_wavegen(0.0), or buffer_rails_off()"
+            )
         drives_vin = ch == self.cfg.ad2.wavegen_channel and self._vin_from == "wavegen"
         if drives_vin:
             self.reference_off()
@@ -640,6 +801,13 @@ class Bench:
         steps: list[tuple[str, Callable[[], None]]] = [
             ("external reference 0 V", lambda: self.vref_out.set_voltage(0.0) if self.vref_out else None),
             ("LDO enable low", lambda: self.set_enable(False) if self._enable_driven else None),
+            # split-supply buffer: U2's input stays driven at 0 V until both of its rails are off
+            (
+                "buffer input 0 V",
+                lambda: self.awg.set_dc(self.cfg.ad2.wavegen_channel, 0.0) if self._buffer_up else None,
+            ),
+            ("PSU outputs off (buffer rails)", lambda: self.psu.output(False) if self._buffer_up else None),
+            ("buffer V- 0 V", lambda: self.vminus_out.set_voltage(0.0) if self.vminus_out else None),
             ("wavegen off", lambda: self.awg.off(self.cfg.ad2.wavegen_channel)),
             ("wavegen 2 off", lambda: self.awg.off(2 if self.cfg.ad2.wavegen_channel == 1 else 1)),
             ("AD2 V+ off", lambda: self.scope.set_vplus(None) if hasattr(self.scope, "set_vplus") else None),
@@ -659,6 +827,8 @@ class Bench:
                 log.error("shutdown: %s failed: %s", name, e)
                 self.shutdown_errors.append(f"{name}: {e}")
         self._psu_on = self._awg_on = self._psu_ready = self._vref_on = self._enable_driven = False
+        self._buffer_up = False
+        self.vminus_out = None
         self._vin_level, self._vin_from = None, None
 
 

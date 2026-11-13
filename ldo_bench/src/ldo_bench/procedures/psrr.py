@@ -46,7 +46,15 @@ from ldo_bench.analysis import multi_sine_fit, sine_fit
 from ldo_bench.bench import Bench
 from ldo_bench.config import AD2_WAVEGEN_MAX_V, PsrrConfig
 from ldo_bench.instruments.base import ChannelSetup, InstrumentError
-from ldo_bench.procedures.line_tran import _calibrate, _interlock, _vin_limit
+from ldo_bench.procedures.line_tran import (
+    _calibrate,
+    _interlock,
+    _vin_limit,
+    buffer_down,
+    buffer_up,
+    input_idle,
+    split_wiring,
+)
 
 log = logging.getLogger(__name__)
 
@@ -312,6 +320,17 @@ class PsrrResult:
 def wiring(bench: Bench, ps: PsrrConfig) -> list[str]:
     """Wiring lines shown before the run (the load bank line only if a load code is set)."""
     a, lb = bench.cfg.ad2, bench.cfg.loadbank
+    if bench.cfg.buffer is not None:
+        lines = [
+            *split_wiring(bench),
+            f"Scope {a.vout_channel}+ -> J13 pin 4 (OUTA) (short ground lead), Scope {a.ref_channel}+ -> J13 pin 1 "
+            f"(INA); both - -> J13 pin 6 (GND)",
+        ]
+        if ps.load_code:
+            lines.append(
+                f'DIO {lb.dio_pins} -> J13 pins 7..15 (B0..B4); J10 "LOAD" fitted (VS_BUFF is up first)'
+            )
+        return lines
     lines = [
         f"PSU OUT{bench.cfg.psu.channel} -> buffer rail VS_BUFF / VDD_BUF and GND. NOT on VIN: "
         "the rail goes above the LDO's VIN limit",
@@ -332,7 +351,7 @@ def _check_peak(bench: Bench, tone: Tone, f: float) -> None:
     """
     peak = tone.vin_dc + abs(tone.vin)
     if peak > _vin_limit(bench):
-        bench.wavegen_off()
+        input_idle(bench)
         raise InstrumentError(
             f"at {f:g} Hz VIN peaks at {peak:.3f} V, above dut.vin_max ({bench.cfg.dut.vin_max} V) "
             "less the AD2's error margin: stopped"
@@ -350,7 +369,7 @@ def run(bench: Bench, ps: PsrrConfig, meter: PsrrMeter | None = None) -> PsrrRes
     bench.confirm_wiring("PSRR", wiring(bench, ps), ref_probe=("vin", 0), psu_to="rail")
     bench.loadbank.set(ps.load_code)
     _interlock(bench, ps.psu_voltage, ps.proof_levels)
-    bench.buffer_rail(ps.psu_voltage)
+    buffer_up(bench, ps.psu_voltage)
     w_dc, v_dc, cal = _calibrate(bench, ps.vin)
     if bench.vref_external:  # after the interlock and calibration, with VIN at its DC level
         bench.vin_from_wavegen(w_dc)
@@ -397,7 +416,7 @@ def run(bench: Bench, ps: PsrrConfig, meter: PsrrMeter | None = None) -> PsrrRes
         points.append(p)
         db = f">= {p.psrr_db:.1f}" if p.limited else f"{p.psrr_db:.1f}"
         log.info("[%d/%d] %g Hz: PSRR %s dB (VIN %.1f mV pk)", n, len(freqs), f, db, got * 1e3)
-    bench.wavegen_off()
+    buffer_down(bench)
     bench.loadbank.off()
 
     notes = []

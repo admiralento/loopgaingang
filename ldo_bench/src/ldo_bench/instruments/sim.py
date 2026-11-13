@@ -24,6 +24,10 @@ matching field instead:
   vref_wired the PSU's second output is wired to VREF_IN (external reference run)
   jp2_fitted JP2 joins the BGR to VREF_IN; with it fitted the BGR sets the reference (and a
              wired second output back-drives it: bgr_backdriven records that it happened)
+  buffer_split  the reworked U2 on a split supply ([buffer]): its output can't get within
+             buffer_dropout of either rail, and a floating input sends it to the top rail
+  vminus_wired  the PSU's second output is wired reversed onto U2's V- (its setpoint is the
+             negative rail's magnitude)
 Fake instruments (SimPowerSupply, SimAnalogDiscovery, SimDmm, SimXScope) read and
 write this shared state, so e.g. a DIO write changes the load the PSU sees.
 """
@@ -137,17 +141,38 @@ class LdoModel:
     buffer_offset: float = -0.015  # V, BUF634 output minus input (line tran calibrates it out)
     psu_to: str = "vin"  # where the PSU is wired: "vin" (DC tests) or "rail" (BUF634 supply, line tran)
     buffer_dropout: float = 1.5  # V, the BUF634 output can't get closer than this to its rail
+    buffer_split: bool = False  # U2 reworked: V- from the second output (see the module docstring)
+    vminus_wired: bool = False
 
     @property
     def vin(self) -> float:
         """VIN on the board (V): PSU setpoint, or the buffered W1 level when psu_to == "rail"."""
         if self.psu_to == "rail":  # VIN = buffer output: W1 + offset, only while the rail is powered
             src = self.awg_level()
+            if self.buffer_split:
+                return self._split_buffer_out(src)
             if not self.psu_on or src is None:
                 return 0.0
             out = src + self.buffer_offset
             return max(0.0, min(out, self.psu_v - self.buffer_dropout))
         return self.psu_v if self.psu_on else 0.0
+
+    def _split_buffer_out(self, src: float | None) -> float:
+        """U2's output (V) on its split supply, for input `src` (V; None = floating).
+
+        It stays buffer_dropout inside both rails. With the rails too low for any output range it
+        sits midway between them; with a floating input it goes to the top of its range.
+        """
+        vp = self.psu_v if self.psu_on else 0.0
+        vm = self.vref_out_v if (self.psu_on and self.vminus_wired) else 0.0  # second output = |V-|
+        if vp <= 0 and vm <= 0:
+            return 0.0
+        hi, lo = vp - self.buffer_dropout, -vm + self.buffer_dropout
+        if lo > hi:
+            return (vp - vm) / 2
+        if src is None:
+            return hi
+        return min(max(src + self.buffer_offset, lo), hi)
 
     def awg_level(self) -> float | None:
         """DC level the wavegen puts on the buffer input (a sine's mid-level), None if it's off."""
