@@ -79,7 +79,8 @@ Procedures never program a voltage onto the DUT directly. They call Bench method
 | Method | Drives | Limit |
 |---|---|---|
 | `vin_from_psu(v)` | PSU → VIN | `min(dut.vin_max, psu.v_max)` |
-| `buffer_rail(v)` | PSU → BUF634 rail | `psu.v_max` |
+| `buffer_rail(v)` | PSU → BUF634 rail (single-rail buffer; refused with `[buffer]`) | `psu.v_max` |
+| `buffer_rails_on(v_plus)` / `buffer_rails_off()` | PSU → VS_BUFF and the other output (reversed) → U2's V−, together, W1 at DC 0 V (`[buffer]`) | `psu.v_max`; VIN within `buffer.vin_window` after every step |
 | `psu_output(v)` | PSU with only a meter on it (psu-check) | `psu.v_max` |
 | `vin_from_wavegen(v)` | W1 DC → buffer → VIN | `min(dut.vin_max, 5 V)` |
 | `vin_sine_from_wavegen(dc, amplitude, f)` | W1 sine → buffer → VIN | peak within `min(dut.vin_max, 5 V)` |
@@ -100,7 +101,8 @@ Other things the Bench does:
   - **JP2 can't be measured beforehand**, and the BGR must not be back-driven, so `confirm_wiring()` asks about JP2 in a separate question every run, even with `--yes`. A run that can't ask (no prompt) stops.
   - **Records:** `vref_info()` (source, the applied voltage, the proof readings) goes into `summary.json` and `meta.json` as `vref`, and the folder name gets `_extref`.
 - **Enable from the AD2** (`--enable dio`, `Bench.enable_dio`): the DC and transient tests call `ldo_enable(False)` before VIN comes up, `ldo_enable(True)` once it is up (which waits `enable.settle_time`) and `ldo_enable(False)` when they finish. With EN tied on (the default) these do nothing. `confirm_wiring()` adds the enable wiring and tells the simulator the LDO now follows the enable DIO. An enable pin shared with the load bank is refused.
-- **Shutdown:** leaving the `with` block for any reason (end of test, exception, Ctrl-C) runs `shutdown()`. It turns off, in order: external reference (0 V), LDO enable low (`--enable dio`), wavegen, AD2 V+, load bank, DIO, PSU output (then the setpoint goes to 0 V), and closes every instrument. Each step runs even if an earlier one fails. A failed step is printed in red as SHUTDOWN FAILED and the command exits 1, since the bench may still be powered.
+- **Split-supply buffer** (`[buffer]`): `buffer_rails_on()` refuses unless W1 already holds U2's input at DC 0 V, sets VS_BUFF's limit to `buffer.rail_current_limit` and the negative rail's to `buffer.current_limit`, and ramps them together one `ramp_step` at a time (V− then V+), reading VIN on the fine range (`measure_vin_fine()`) after each. Outside `vin_window` it takes both down and raises, saying whether VIN followed VS_BUFF (PSU on VIN), went negative, or wasn't held at 0 V (V− missing). While the rails are up `wavegen_off()` on W1 is refused. line-tran and psrr go through `line_tran.buffer_up` / `input_idle` / `buffer_down`, which pick the split or single-rail path from the config. `--vref ext` is refused with it (both need the PSU's other output).
+- **Shutdown:** leaving the `with` block for any reason (end of test, exception, Ctrl-C) runs `shutdown()`. It turns off, in order: external reference (0 V), LDO enable low (`--enable dio`), with the split buffer up: W1 to DC 0 V, PSU outputs off, V− to 0 V; then wavegen, AD2 V+, load bank, DIO, PSU output (then the setpoint goes to 0 V), and closes every instrument. Each step runs even if an earlier one fails. A failed step is printed in red as SHUTDOWN FAILED and the command exits 1, since the bench may still be powered.
 - **Commands are confirmed:** after every ramp the supply's setpoint is read back, and `OUTP OFF` is confirmed with `OUTP?`. A serial reply that ends at the timeout instead of its line feed is rejected, not parsed.
 - **Time:** `sleep()` waits on hardware; in simulation it returns at once and advances the model's clock, and `now()` reads that clock, so timed procedures (`temp`) run in the tests without waiting.
 - **Measurements:** `measure_dc()` averages both AD2 channels, `measure_point()` takes VOUT from the DMM when there is one, and `vout_issue()` is the standard "is VOUT where it should be?" check. With a DMM, `vout_agreement_issue()` also checks the AD2 reads the same VOUT (2 % + 50 mV), so a loose scope 1 is caught in the DC tests too.
@@ -164,7 +166,7 @@ This is the rule the whole package is built around: **nothing saved or plotted i
 `--sim` replaces every instrument with a fake that shares one `LdoModel`. The model is simple but has what the analysis must cope with:
 - output resistance, line regulation and dropout
 - noise, a ringing transient and a switching glitch
-- the BUF634 offset and its dropout from the rail
+- the BUF634 offset and its dropout from the rail; with `buffer_split`, U2 on its split supply: 1.5 V headroom from both rails, V− from the second output (`vminus_wired`), and a floating input that sends the output to the top rail
 - the enable comparator, its propagation delay (`en_delay`) and the startup dynamics
 - the BGR output (`bgr_vref()`): a line term, a headroom knee at `bgr_min_vin` (1.56 V) and a temperature coefficient that VOUT follows too
 - the TMP235 (`ref_probe` `("tmp", 0)`) and a board temperature from `temp_profile(clock)`
@@ -195,7 +197,7 @@ results/
 ## Tests and tooling
 
 ```
-uv run poe verify         # the gate: format check, lint, both configs validated, 366 tests (~15 s, no hardware)
+uv run poe verify         # the gate: format check, lint, both configs validated, 386 tests (~15 s, no hardware)
 uv run poe test           # just the tests
 uv run poe format         # format the code
 ```

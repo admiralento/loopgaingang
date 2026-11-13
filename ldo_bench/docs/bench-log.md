@@ -13,7 +13,13 @@ The bring-up plan was rewritten as "Bring up 2" (Google Doc): each test now says
 
 **Confirmed on the board (Alek):** J8's silkscreen is swapped on the EN_IN half. "HI" is printed over 5–6, which is GND, and "LO" over 7–8, which is VIN. The ~EN_IN half is right. Go by pin numbers.
 
-**Still by hand:** dropout "Method B" (BGR and OTA on a second supply), BGR PSRR, the HP 8591E readings and output noise. `line-tran` and `psrr` stay blocked until U2 is reworked: they assume U2's V− is on GND, and after the rework it needs −5 V.
+**Still by hand:** dropout "Method B" (BGR and OTA on a second supply), BGR PSRR, the HP 8591E readings and output noise.
+
+**U2 reworked and tested by hand (Alek, 2026-11-13).** The scripts now run it on its split supply (`[buffer]` in `jafwak.toml`): −5 V on pin 4 from PSU OUT2 wired reversed, VS_BUFF at 5.0 V with a 100 mA limit (approved). Simulator only.
+- **Found while planning it:** the old `line-tran` / `psrr` turned W1 off during their interlock, between its stages and at the end, and the shutdown turned the wavegen off before the supply. After the rework that leaves U2's input floating with its rails up, which can put up to ~3.4 V on VIN. Now W1 holds 0 V whenever the rails are up, and the shutdown keeps it there until the outputs are off (shutdown order approved).
+- **Also:** V− mustn't reach −5 V while VS_BUFF is low (U2's output can't then rise to 0 V and VIN goes negative), so the two rails ramp together in 0.1 V steps with VIN read after each.
+- **New `buffer-check`:** U2 alone with the chip off (first plan I.1–I.5). Run it first on the board.
+- **Limit found:** W1 stays within `dut.vin_max` (1.9 V), so with a negative U2 offset the output can't reach 1.90 V. `buffer-check` checks 1.70 / 1.80 / 1.85 V; line-tran and psrr never go above 1.85 V.
 
 ## 2026-11-12: JAFWAK enable block, first `enable-sine` runs
 

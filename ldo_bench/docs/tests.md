@@ -27,7 +27,7 @@ How a run decides it measured the board, and what `_INVALID` means, is covered i
   - `line-reg`
   - `load-tran`
 - **JAFWAK:** no valid run yet. Its load-transient runs had the scope off VOUT (see [bench-log.md](bench-log.md)).
-- **Simulator only so far:** `line-tran`, `enable-startup`, `iq` and `psrr`; `vref-line`, `temp`, `enable-sine --shape square` and `--enable dio` (added 2026-11-13). `enable-sine --shape triangle` ran on JAFWAK on 2026-11-12.
+- **Simulator only so far:** `line-tran`, `enable-startup`, `iq` and `psrr` (on the split-supply U2 too); `buffer-check`; `vref-line`, `temp`, `enable-sine --shape square` and `--enable dio` (added 2026-11-13). `enable-sine --shape triangle` ran on JAFWAK on 2026-11-12.
 
 Suggested order for a first session on a board:
 1. `discover`
@@ -71,6 +71,26 @@ Lists every instrument it can reach over VISA (GPIB, USB), RS-232 and Prologix a
 
 ### `smoke`
 Powers VIN up (default `load_reg.vin`), then reads VOUT, VIN and the supply's V and I at no load and at the largest allowed load, and powers down. Prints a table; saves nothing. Use `--vin` to set VIN.
+
+### `buffer-check`: the reworked U2 on its own (JAFWAK)
+First bring-up plan, steps I.1–I.5. **Run it before `line-tran` or `psrr`, with the chip disconnected.** Needs `[buffer]`.
+- **Wiring:**
+  - CHIP DISCONNECTED: JP4 open (no jumper); nothing on VIN_DC (J7)
+  - 100 Ohm dummy load from JP4 pin 1 (U2 output) to GND (TP8): ~18 mA at 1.8 V, about what the chip draws at 20 mA
+  - PSU OUT1 + -> VS_BUFF (J4), OUT1 - -> GND (J11)
+  - PSU OUT2 REVERSED: OUT2 + -> GND, OUT2 - -> U2 pin 4 (-5 V)
+  - AD2 W1 -> VIN_FG (J3); Scope 2+ -> JP4 pin 1, 2- -> GND (TP8)
+- **Does:**
+  1. W1 to DC 0 V, then the split supply up ([below](#split-supply-u2-jafwak-buffer)), with JP4 pin 1 read after every step.
+  2. The output at W1 = 0 V: U2's offset (up to ~65 mV, first plan).
+  3. Calibrates W1 for each of `check_levels` (1.70, 1.80, 1.85 V). The hard stop is `check_peak_max` (1.95 V) since the chip is off; W1 itself stays within `dut.vin_max`. That's why 1.90 V isn't a default: with a negative offset it needs W1 above 1.9 V.
+  4. DC gain across the levels (the first plan expects 0.93–0.99; outside that is a note).
+  5. A step between the lowest and highest levels, both ways: peak and 10–90 % time (C9 and U2's ~7 Ohm give tens of µs; within two samples, 2 µs, it's reported as "under 2 µs").
+  6. A sine, 1.80 V ± 50 mV at 10 kHz: output amplitude against W1's, and its peak.
+  7. Rails down with W1 at 0 V, W1 off last.
+- **Not ready (exit 3)** if a level isn't reached, anything on JP4 pin 1 goes above 1.95 V, or the output doesn't follow W1 (probe not on JP4 pin 1). The report prints the W1 setting for each level, a cross-check for line-tran's and psrr's own calibration.
+- **Not tested:** the first plan's I.4 (what W1 does when stopped). The scripts never stop W1 while U2's rails are up.
+- **Config:** `[buffer]` (`check_levels`, `check_peak_max`, `check_sine_*`, `v_plus`).
 
 ---
 
@@ -222,8 +242,23 @@ Powers VIN up (default `load_reg.vin`), then reads VOUT, VIN and the supply's V 
   - `--no-xscope`
 - **Config:** `[load_tran]`, `[analysis]`.
 
+### Split-supply U2 (JAFWAK, `[buffer]`)
+After the rework, U2's V− (pin 4) is on −5 V, so it can drive VIN down to 0 V and across 1.7–1.9 V. With a `[buffer]` section in the config, `line-tran`, `psrr` and `buffer-check` run it on a split supply:
+- **Supplies:** PSU OUT1 -> VS_BUFF (J4), `line_tran.psu_voltage` / `psrr.psu_voltage` (5.0 V), limit `buffer.rail_current_limit` (100 mA). PSU OUT2 wired reversed (OUT2 + -> GND, OUT2 - -> U2 pin 4), `buffer.v_minus` (5.0 V), limit `buffer.current_limit` (20 mA).
+- **W1 first, and always:** W1 holds U2's input (VIN_FG, J3) at DC 0 V before either rail comes up, and is never turned off while they are up. A floating input sends U2's output to a rail (up to ~3.4 V on VIN, first plan). Where the single-rail path turned W1 off, the split path sets it to 0 V.
+- **Ramp:** VS_BUFF and V− ramp together, `buffer.ramp_step` (0.1 V) at a time, and VIN is read after each step. If it leaves `buffer.vin_window` (−0.1 to +0.3 V), both rails come down and the run stops, saying which case it looks like:
+  - VIN follows VS_BUFF: the PSU is on VIN_DC / VIN, not on VS_BUFF
+  - VIN goes negative: OUT2 is on VIN rather than U2 pin 4
+  - VIN not held near 0 V: V− missing, JP4, or W1 not on VIN_FG
+- **Interlock** (line-tran, psrr): rails up to VS_BUFF = `dut.vin_max` that way, then the 0.1 / 0.3 V proof (VIN must follow W1; catches a VIN probe that's off VIN), W1 back to 0 V, then VS_BUFF up to `psu_voltage`.
+- **End and shutdown:** W1 to 0 V, rails down together, outputs off, W1 off last. A run that stops for any reason shuts down in the same order (W1 to 0 V, PSU outputs off, V− to 0 V, then the wavegen).
+- **Not with `--vref ext`:** both need OUT2 (exit 2; the Bench refuses it too).
+- **Wiring** (what the commands print): PSU OUT1 + -> VS_BUFF (J4), OUT1 - -> GND (J11); PSU OUT2 reversed onto U2 pin 4; AD2 W1 -> VIN_FG (J3); JP4 1-2 "FG"; nothing on VIN_DC (J7); Scope 1+ -> J13 pin 4 (OUTA), Scope 2+ -> J13 pin 1 (INA); both - -> J13 pin 6 (GND).
+
+Without `[buffer]` (the demo board) line-tran and psrr use the single-rail path described under each test.
+
 ### `line-tran`: line transient
-- **Wiring:**
+- **Wiring** (single-rail buffer; JAFWAK with `[buffer]`: see [above](#split-supply-u2-jafwak-buffer)):
   - PSU OUT1 -> buffer rail VS_BUFF / VDD_BUF and GND. NOT on VIN: the rail goes above the LDO's VIN limit
   - AD2 W1 -> buffer input SMA (VIN_FG / V_SIG); buffer output onto VIN (JP4)
   - Scope 1+ -> VOUT at the output pins, 1- -> GND
@@ -245,7 +280,7 @@ Powers VIN up (default `load_reg.vin`), then reads VOUT, VIN and the supply's V 
 - **Config:** `[line_tran]`.
 
 ### `psrr`: power-supply rejection vs frequency
-- **Wiring:**
+- **Wiring** (single-rail buffer; JAFWAK with `[buffer]`: see [Split-supply U2](#split-supply-u2-jafwak-buffer)):
   - PSU OUT1 -> buffer rail VS_BUFF / VDD_BUF and GND. NOT on VIN: the rail goes above the LDO's VIN limit
   - AD2 W1 -> buffer input SMA (VIN_FG / V_SIG); buffer output onto VIN (JP4)
   - Scope 1+ -> VOUT at the output pins, 1- -> GND (short ground lead)
