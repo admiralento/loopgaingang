@@ -1,6 +1,6 @@
 """Command-line interface: `uv run ldo-bench --help`.
 
-One command per test (load-tran, line-tran, load-reg, line-reg, vref-line, iq, psrr, enable-sine,
+One command per test (load-tran, line-tran, load-reg, line-reg, vref-line, temp, iq, psrr, enable-sine,
 enable-startup, psu-check, loadbank-check), plus check-config, discover, smoke and compare (two
 saved runs side by side, e.g. the BGR against `--vref ext`). Every test
 command follows the same pattern:
@@ -900,6 +900,48 @@ def vref_line(
         raise typer.Exit(2)
     with _bench(cfg, sim, psu, ad_serial, yes, enable=_enable_mode(cfg, enable)) as bench:
         res = proc.run(bench, vl)
+        path = _save(bench, cfg, config, out, proc, res, save_sim)
+    _echo_report(bench, res)
+    _saved(path, fg="green", res=res)
+
+
+@app.command("temp")
+def temp(
+    config: ConfigOpt,
+    minutes: Annotated[float | None, typer.Option("--minutes", help="Log length (min), at most 120")] = None,
+    interval: Annotated[float | None, typer.Option("--interval", help="Time between samples (s)")] = None,
+    vin: Annotated[float | None, typer.Option(help="Override temp.vin (V)")] = None,
+    out: OutOpt = Path("results"),
+    sim: SimOpt = False,
+    save_sim: SaveSimOpt = False,
+    psu: PsuOpt = None,
+    ad_serial: AdOpt = None,
+    no_dmm: NoDmmOpt = False,
+    enable: EnableOpt = "static",
+    yes: YesOpt = False,
+    verbose: VerboseOpt = False,
+) -> None:
+    """Temperature log: TMP235 (J13 pin 5), VREF (DMM on TP3) and VOUT over time; tempco from stable plateaus.
+
+    Ctrl-C ends the log early and keeps the data.
+    """
+    from ldo_bench.procedures import temp as proc
+
+    _logging(verbose)
+    cfg = _load(config)
+    tc = _section(cfg, "temp")
+    update = {}
+    if minutes is not None:
+        update["duration"] = minutes * 60
+    if interval is not None:
+        update["interval"] = interval
+    if vin is not None:
+        update["vin"] = vin
+    if update:
+        cfg = _load_with(cfg, temp=tc.model_copy(update=update))
+        tc = cfg.temp
+    with _bench(cfg, sim, psu, ad_serial, yes, use_dmm=not no_dmm, enable=_enable_mode(cfg, enable)) as bench:
+        res = proc.run(bench, tc)
         path = _save(bench, cfg, config, out, proc, res, save_sim)
     _echo_report(bench, res)
     _saved(path, fg="green", res=res)

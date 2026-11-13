@@ -141,6 +141,7 @@ def test_vin_from_psu_obeys_psu_v_max_when_it_is_below_vin_max(jafwak):
         "load_reg",
         "line_reg",
         "vref_line",
+        "temp",
         "load_tran",
         "line_tran",
         "psrr",

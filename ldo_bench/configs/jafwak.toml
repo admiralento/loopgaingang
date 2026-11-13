@@ -88,6 +88,14 @@ load_code = 0
 vref_nominal = 1.204         # simulated BGR output; the board measured 1.17 V (2026-11-07)
 drop_fraction = 0.01         # BGR minimum VIN: VREF 1 % below its value at vin_high
 
+[temp]                       # TMP235 (TEMP, TP7) on AD2 scope 2 via J13 pin 5, VREF (TP3) on the DMM, VOUT on scope 1
+vin = 1.8
+load_code = 0                # 1 mA as in the first plan: 1.2 kOhm on VOUT (J5) by hand
+interval = 2.0               # s between samples
+duration = 1800              # s (max 2 h); Ctrl-C ends the log early and keeps the data
+stable_window = 30           # s: a plateau is T within stable_delta for this long (first plan 3.10)
+stable_delta = 0.5           # C
+
 [load_tran]
 vin = 1.8
 code_low = 1                 # 4.8 mA

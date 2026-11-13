@@ -403,6 +403,44 @@ class VrefLineConfig(_Model):
         return self
 
 
+TEMP_MAX_DURATION = 2 * 3600.0  # s: the temperature log's hard timeout
+
+
+class TempConfig(_Model):
+    """[temp] (temp): log the board temperature (TMP235 on the AD2), VREF (DMM) and VOUT over time.
+
+    The TMP235 (TEMP, TP7, J13 pin 5) runs from VS_BUFF, set by hand. Its output is
+    tmp_offset + tmp_slope * T (500 mV at 0 C, 10 mV/C). Where the temperature holds within
+    stable_delta over stable_window, the readings are averaged into a plateau; two plateaus at least
+    min_spread apart give the temperature coefficient of VREF and VOUT.
+    """
+
+    vin: float = Field(1.8, gt=0, description="PSU on VIN (V)")
+    load_code: int = Field(0, ge=0, description="Load bank code while logging")
+    interval: float = Field(2.0, gt=0, description="Time between samples (s)")
+    duration: float = Field(
+        1800.0,
+        gt=0,
+        le=TEMP_MAX_DURATION,
+        description="Log length (s), at most 2 h; Ctrl-C ends it early and keeps the data",
+    )
+    stable_window: float = Field(
+        30.0, gt=0, description="A sample is stable if T held within stable_delta this long (s)"
+    )
+    stable_delta: float = Field(0.5, gt=0, description="Allowed temperature change over stable_window (C)")
+    min_spread: float = Field(2.0, gt=0, description="Plateaus must span at least this much for a tempco (C)")
+    dc_window: float = Field(0.1, gt=0, description="AD2 averaging window per sample (s)")
+    tmp_offset: float = Field(0.5, description="TMP235 output at 0 C (V)")
+    tmp_slope: float = Field(0.010, gt=0, description="TMP235 output slope (V/C)")
+    temp_min: float = Field(-20.0, description="Readings below this (C) mean the TMP235 isn't being read")
+    temp_max: float = Field(80.0, description="Readings above this (C) mean the TMP235 isn't being read")
+    vref_nominal: float = Field(1.204, gt=0, description="Expected VREF (V) on the DMM")
+    vref_tolerance: float = Field(
+        0.2, gt=0, lt=1, description="VREF must stay within this fraction of vref_nominal"
+    )
+    psu_readback: bool = Field(True, description="Also record the supply current (~0.4 s per sample)")
+
+
 class TransientCaptureConfig(_Model):
     """AD2 capture settings shared by [load_tran] and [line_tran] (not a section of its own)."""
 
@@ -763,6 +801,7 @@ class BenchConfig(_Model):
     load_reg: LoadRegConfig | None = None
     line_reg: LineRegConfig | None = None
     vref_line: VrefLineConfig | None = None
+    temp: TempConfig | None = None
     load_tran: LoadTranConfig | None = None
     line_tran: LineTranConfig | None = None
     enable: EnableConfig = EnableConfig()
@@ -847,6 +886,9 @@ class BenchConfig(_Model):
             lr = self.line_reg
             vin_ok("line_reg sweep", max(lr.vin_start, lr.vin_stop))
             code_ok("line_reg.load_code", lr.load_code)
+        if self.temp:
+            vin_ok("temp.vin", self.temp.vin)
+            code_ok("temp.load_code", self.temp.load_code)
         if self.vref_line:
             vl = self.vref_line
             vin_ok("vref_line.vin_high", vl.vin_high)
