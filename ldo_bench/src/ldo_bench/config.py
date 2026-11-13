@@ -362,6 +362,46 @@ class LineRegConfig(_Model):
         return self
 
 
+class VrefLineConfig(_Model):
+    """[vref_line] (vref-line): sweep VIN down with the LDO on and read VREF (TP3) on the DMM.
+
+    Gives the BGR's line sensitivity (mV/V) and the lowest VIN it still works at (where VREF falls
+    drop_fraction below its value at vin_high). VOUT on the AD2 shows whether the LDO follows.
+    """
+
+    vin_high: float = Field(1.9, gt=0, description="First (highest) VIN of the sweep (V)")
+    vin_low: float = Field(1.4, gt=0, description="Last (lowest) VIN of the sweep (V)")
+    vin_step: float = Field(0.02, gt=0, description="VIN step (V)")
+    load_code: int = Field(0, ge=0, description="Load bank code during the sweep")
+    vref_nominal: float = Field(
+        1.204, gt=0, description="Expected VREF (V); the run checks the DMM reads near it at vin_high"
+    )
+    vref_tolerance: float = Field(
+        0.2, gt=0, lt=1, description="VREF at vin_high must be within this fraction of vref_nominal"
+    )
+    drop_fraction: float = Field(
+        0.01,
+        gt=0,
+        lt=1,
+        description="BGR minimum VIN = where VREF falls this fraction below its value at vin_high",
+    )
+    settle_time: float = Field(0.2, ge=0, description="Wait after each VIN step before reading (s)")
+    dc_window: float = Field(0.1, gt=0, description="AD2 DC averaging window (s)")
+    vin_source: Literal["ad2", "psu"] = Field(
+        "ad2",
+        description=(
+            "'ad2' = VIN measured at the board (scope ref channel on J13 pin 1, INA), VOUT checked on "
+            "the AD2; 'psu' = the PSU's readback (no scope wiring, VOUT not checked)"
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _check(self) -> VrefLineConfig:
+        if self.vin_low >= self.vin_high:
+            raise ValueError("vref_line.vin_low must be below vin_high (the sweep goes down)")
+        return self
+
+
 class TransientCaptureConfig(_Model):
     """AD2 capture settings shared by [load_tran] and [line_tran] (not a section of its own)."""
 
@@ -718,6 +758,7 @@ class BenchConfig(_Model):
     loadbank_check: LoadBankCheckConfig = LoadBankCheckConfig()
     load_reg: LoadRegConfig | None = None
     line_reg: LineRegConfig | None = None
+    vref_line: VrefLineConfig | None = None
     load_tran: LoadTranConfig | None = None
     line_tran: LineTranConfig | None = None
     enable: EnableConfig = EnableConfig()
@@ -802,6 +843,10 @@ class BenchConfig(_Model):
             lr = self.line_reg
             vin_ok("line_reg sweep", max(lr.vin_start, lr.vin_stop))
             code_ok("line_reg.load_code", lr.load_code)
+        if self.vref_line:
+            vl = self.vref_line
+            vin_ok("vref_line.vin_high", vl.vin_high)
+            code_ok("vref_line.load_code", vl.load_code)
         if self.load_tran:
             lt = self.load_tran
             vin_ok("load_tran.vin", lt.vin)

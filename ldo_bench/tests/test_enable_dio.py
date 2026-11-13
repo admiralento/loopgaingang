@@ -90,3 +90,20 @@ def test_enable_dio_refuses_pins_shared_with_the_load_bank(jafwak):
     bad = jafwak.model_copy(update={"enable": jafwak.enable.model_copy(update={"dio_pin": 2})})
     with pytest.raises(InstrumentError, match="load bank"):
         open_bench(bad, sim=True, enable_dio=True)
+
+
+def test_cli_enable_option(tmp_path):
+    import json
+    from pathlib import Path
+
+    from typer.testing import CliRunner
+
+    from ldo_bench.cli import app
+
+    cfg = str(Path(__file__).parents[1] / "configs" / "jafwak.toml")
+    base = ["load-reg", "-c", cfg, "--sim", "--save-sim", "-o", str(tmp_path)]
+    assert CliRunner().invoke(app, [*base, "--enable", "maybe"]).exit_code == 2
+    r = CliRunner().invoke(app, [*base, "--enable", "dio"])
+    assert r.exit_code == 0, r.output
+    (run,) = [p for p in (tmp_path / "load-reg").iterdir() if p.is_dir()]
+    assert json.loads((run / "meta.json").read_text())["enable"] == "dio"

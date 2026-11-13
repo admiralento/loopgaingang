@@ -137,7 +137,17 @@ def test_vin_from_psu_obeys_psu_v_max_when_it_is_below_vin_max(jafwak):
     data = jafwak.model_dump()
     data["psu"] |= {"v_max": 1.5, "ovp": 2.0}
     data["psu_check"]["points"] = [0.5, 1.0]
-    for sec in ("load_reg", "line_reg", "load_tran", "line_tran", "psrr", "en_sine", "startup", "iq"):
+    for sec in (
+        "load_reg",
+        "line_reg",
+        "vref_line",
+        "load_tran",
+        "line_tran",
+        "psrr",
+        "en_sine",
+        "startup",
+        "iq",
+    ):
         data[sec] = None
     cfg = BenchConfig.model_validate(data)
     with open_bench(cfg, sim=True) as b, pytest.raises(InstrumentError, match="refusing"):

@@ -40,7 +40,7 @@ VIN_SET_REL, VIN_SET_ABS = 0.02, 0.020  # measured VIN may be off its setpoint b
 VOUT_AGREE_REL, VOUT_AGREE_ABS = 0.02, 0.050
 
 # What the AD2 ref channel is wired to, for the simulator: (signal, DIO pin if signal is "dio" else 0).
-RefProbe = tuple[Literal["vin", "dio", "vref", "iin", "iout", "en_ain"], int]
+RefProbe = tuple[Literal["vin", "dio", "vref", "iin", "iout", "en_ain", "tmp"], int]
 ConfirmFn = Callable[[str], bool]  # shows a prompt, returns True if the user answered yes
 
 
@@ -159,9 +159,16 @@ class Bench:
         self.shutdown()
 
     def sleep(self, seconds: float) -> None:
-        """Wait `seconds` (s) on real hardware; no-op in simulation so tests run fast."""
-        if not self.is_sim and seconds > 0:
+        """Wait `seconds` (s) on real hardware. In simulation it returns at once and only advances
+        the model's clock, so tests run fast and timed procedures still see time pass."""
+        if self.is_sim:
+            self.sim_model.clock += max(0.0, seconds)
+        elif seconds > 0:
             time.sleep(seconds)
+
+    def now(self) -> float:
+        """Seconds on a monotonic clock: the real one, or the simulator's (advanced by sleep)."""
+        return self.sim_model.clock if self.is_sim else time.monotonic()
 
     def idns(self) -> dict[str, str]:
         """Identification string of each open instrument, for meta.json."""
@@ -186,7 +193,7 @@ class Bench:
         title: str,
         lines: list[str],
         ref_probe: RefProbe,
-        dmm_probe: Literal["vout", "psu", "shunt", "series"] = "vout",
+        dmm_probe: Literal["vout", "vref", "psu", "shunt", "series"] = "vout",
         dmm_rail: str = "total",
         bank_on_psu: bool = False,
         psu_to: Literal["vin", "rail"] = "vin",

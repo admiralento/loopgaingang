@@ -15,10 +15,11 @@ matching field instead:
   psu_to     where the PSU output goes: "vin" (straight to VIN) or "rail" (the BUF634's
              supply, VIN = buffered W1; line transient and PSRR)
   ref_probe  what the AD2 reference channel (ch2) probes: ("vin", 0), ("dio", pin),
-             ("vref", 0) BGR output, ("iin", 0) across R13, ("iout", 0) across R1
+             ("vref", 0) BGR output, ("iin", 0) across R13, ("iout", 0) across R1,
+             ("tmp", 0) the TMP235 output (J13 pin 5)
   ch1_probe  what the VOUT channel probes: "vout" or "en_out" (enable-sine test)
-  dmm_probe  what the DMM is on: "vout", "psu" (supply terminals), "shunt" (across R13),
-             "series" (in series with a rail, current mode) or "open"
+  dmm_probe  what the DMM is on: "vout", "vref" (TP3, the BGR output), "psu" (supply terminals),
+             "shunt" (across R13), "series" (in series with a rail, current mode) or "open"
   en_pin     the AD2 DIO driving the enable path, None if EN is tied on
   vref_wired the PSU's second output is wired to VREF_IN (external reference run)
   jp2_fitted JP2 joins the BGR to VREF_IN; with it fitted the BGR sets the reference (and a
@@ -88,7 +89,14 @@ class LdoModel:
     en_vt_rise: float = 0.58  # fraction of EN_VDD (= VIN) where EN_OUT goes high
     en_vt_fall: float = 0.42  # fraction of EN_VDD where EN_OUT goes low (Schmitt hysteresis)
     en_t_rise: float = 30e-9  # EN_OUT edge time (s)
-    vref_nominal: float = 1.2  # BGR output (V)
+    vref_nominal: float = 1.2  # BGR output (V) at VIN 1.8 V and 25 C
+    bgr_line: float = 0.5e-3  # V/V, BGR line sensitivity while it has headroom
+    bgr_min_vin: float = 1.56  # V, below this VIN the BGR runs out of headroom: VREF falls 1 V/V
+    bgr_tc: float = 58.9e-6  # 1/C, VREF temperature coefficient (VOUT follows it)
+    # temperature (temp logger): the TMP235 on VS_BUFF, read by the AD2 on J13 pin 5
+    temp_profile: Callable[[float], float] | None = None  # clock (s) -> board temperature (C); None = 25 C
+    clock: float = 0.0  # s, simulated time: Bench.sleep advances it
+    vs_buff_on: bool = True  # VS_BUFF powered (by hand), so the TMP235 runs
     vref_delay: float = 4e-6  # s from the enable edge until VREF starts rising
     vref_tau: float = 8e-6  # s, VREF rise time constant (turn-off falls 4x faster)
     vout_delay: float = 15e-6  # s, after VREF starts
@@ -179,7 +187,23 @@ class LdoModel:
         """What the regulator follows (V): the BGR (vout_nominal), or the external reference with JP2 out."""
         if self.vref_wired and not self.jp2_fitted:
             return self.vref_out_v if self.psu_on else 0.0
-        return self.vout_nominal
+        return self.vout_nominal * (1 + self.bgr_tc * (self.temperature - 25.0))
+
+    @property
+    def temperature(self) -> float:
+        """Board temperature (C) now, from temp_profile (25 C when unset)."""
+        return 25.0 if self.temp_profile is None else float(self.temp_profile(self.clock))
+
+    def bgr_vref(self) -> float:
+        """BGR output at TP3 (V): vref_nominal with its line and temperature terms, falling 1 V/V
+        below bgr_min_vin; 0 when the LDO is disabled or VIN is off."""
+        vin = self.vin
+        if vin <= 0 or not self.enabled:
+            return 0.0
+        v = self.vref_nominal * (1 + self.bgr_tc * (self.temperature - 25.0)) + self.bgr_line * (vin - 1.8)
+        if vin < self.bgr_min_vin:
+            v -= self.bgr_min_vin - vin
+        return max(0.0, v)
 
     @property
     def enabled(self) -> bool:
@@ -221,7 +245,9 @@ class LdoModel:
         if kind == "dio":
             return 3.3 if self.dio.get(pin, False) else 0.0
         if kind == "vref":
-            return self.vref_nominal if self.enabled and self.vin > 0 else 0.0
+            return self.bgr_vref()
+        if kind == "tmp":  # TMP235: 500 mV at 0 C, 10 mV/C, powered from VS_BUFF
+            return 0.5 + 0.01 * self.temperature if self.vs_buff_on else 0.0
         if kind == "iin":  # across R13: everything the board draws from VIN
             return self.sense_ohm * (self.load_current() + (self.iq_on if self.enabled else self.iq))
         if kind == "iout":  # across R1: the LDO's output current
@@ -596,7 +622,8 @@ class SimDmm:
         if m.dmm_probe == "shunt":  # across R13
             v = m.sense_ohm * m.supply_current() + m.dmm_offset_v
             return v + float(m.rng.normal(0.0, m.dmm_noise_v))
-        v = m.psu_actual() if m.dmm_probe == "psu" else m.vout_dc()
+        sources = {"vref": m.bgr_vref, "psu": m.psu_actual}  # anything else: VOUT
+        v = sources.get(m.dmm_probe, m.vout_dc)()
         return v + float(m.rng.normal(0.0, 20e-6))
 
     def close(self) -> None:

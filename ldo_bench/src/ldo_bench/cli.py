@@ -1,6 +1,6 @@
 """Command-line interface: `uv run ldo-bench --help`.
 
-One command per test (load-tran, line-tran, load-reg, line-reg, iq, psrr, enable-sine,
+One command per test (load-tran, line-tran, load-reg, line-reg, vref-line, iq, psrr, enable-sine,
 enable-startup, psu-check, loadbank-check), plus check-config, discover, smoke and compare (two
 saved runs side by side, e.g. the BGR against `--vref ext`). Every test
 command follows the same pattern:
@@ -852,6 +852,51 @@ def line_reg(
         cfg, sim, psu, ad_serial, yes, use_dmm=not no_dmm, vref=vref, enable=_enable_mode(cfg, enable)
     ) as bench:
         res = proc.run(bench, lr)
+        path = _save(bench, cfg, config, out, proc, res, save_sim)
+    _echo_report(bench, res)
+    _saved(path, fg="green", res=res)
+
+
+@app.command("vref-line")
+def vref_line(
+    config: ConfigOpt,
+    high: Annotated[float | None, typer.Option("--high", help="First (highest) VIN (V)")] = None,
+    low: Annotated[float | None, typer.Option("--low", help="Last (lowest) VIN (V)")] = None,
+    step: Annotated[float | None, typer.Option("--step", help="VIN step (V)")] = None,
+    vin_from: Annotated[
+        str | None, typer.Option("--vin-from", help="'ad2' (VIN at the board) or 'psu' (supply readback)")
+    ] = None,
+    out: OutOpt = Path("results"),
+    sim: SimOpt = False,
+    save_sim: SaveSimOpt = False,
+    psu: PsuOpt = None,
+    ad_serial: AdOpt = None,
+    enable: EnableOpt = "static",
+    yes: YesOpt = False,
+    verbose: VerboseOpt = False,
+) -> None:
+    """VREF vs VIN: step VIN down with the LDO on, DMM on VREF (TP3); BGR line sensitivity and minimum VIN."""
+    from ldo_bench.procedures import vref_line as proc
+
+    _logging(verbose)
+    cfg = _load(config)
+    vl = _section(cfg, "vref-line")
+    update = {k: v for k, v in (("vin_high", high), ("vin_low", low), ("vin_step", step)) if v is not None}
+    if vin_from is not None:
+        if vin_from not in ("ad2", "psu"):
+            typer.secho("--vin-from must be 'ad2' or 'psu'", fg="red", err=True)
+            raise typer.Exit(2)
+        update["vin_source"] = vin_from
+    if update:
+        cfg = _load_with(cfg, vref_line=vl.model_copy(update=update))
+        vl = cfg.vref_line
+    if cfg.dmm is None or not cfg.dmm.enabled:
+        typer.secho(
+            "vref-line reads VREF with the DMM: the config's [dmm] must be enabled", fg="red", err=True
+        )
+        raise typer.Exit(2)
+    with _bench(cfg, sim, psu, ad_serial, yes, enable=_enable_mode(cfg, enable)) as bench:
+        res = proc.run(bench, vl)
         path = _save(bench, cfg, config, out, proc, res, save_sim)
     _echo_report(bench, res)
     _saved(path, fg="green", res=res)
