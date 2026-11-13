@@ -113,7 +113,6 @@ def run(bench: Bench, lc: LoadBankCheckConfig) -> LoadBankCheckResult:
     lc: the [loadbank_check] section. The PSU goes through bench.psu_output (only psu.v_max).
     """
     bank, lb = bench.loadbank, bench.cfg.loadbank
-    ch = bench.cfg.psu.channel
     bench.confirm_wiring(
         "load bank check (no LDO)",
         [
