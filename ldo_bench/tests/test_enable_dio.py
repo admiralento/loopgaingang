@@ -107,3 +107,29 @@ def test_cli_enable_option(tmp_path):
     assert r.exit_code == 0, r.output
     (run,) = [p for p in (tmp_path / "load-reg").iterdir() if p.is_dir()]
     assert json.loads((run / "meta.json").read_text())["enable"] == "dio"
+
+
+@pytest.mark.parametrize("which", ["iq", "startup"])
+def test_error_mid_run_leaves_en_low_in_the_shutdown(jafwak, which):
+    """iq and enable-startup drive EN themselves: an error must still bring it low first in shutdown."""
+    from ldo_bench.procedures import iq, startup
+
+    with open_bench(jafwak, sim=True) as b:
+        _, writes = _watch(b)
+        en = jafwak.enable.dio_pin
+        real = b.set_enable
+
+        def boom_after_enable(on):
+            real(on)
+            if on:
+                raise RuntimeError("instrument fell over")
+
+        b.set_enable = boom_after_enable
+        with pytest.raises(RuntimeError), b:
+            if which == "iq":
+                iq.run(b, jafwak.iq)
+            else:
+                startup.run(b, jafwak.startup)
+        b.set_enable = real
+        last = [w for w in writes if en in w]
+    assert last[-1][en] is False  # the shutdown drove EN low (before the DIO were released)

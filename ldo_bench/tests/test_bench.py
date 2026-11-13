@@ -85,3 +85,61 @@ def test_vout_issue(jafwak):
         assert b.vout_issue(1.19, source="scope 1") is None  # within 20 % of 1.2 V
         msg = b.vout_issue(-0.0004, source="scope 1")  # floating input, like the 15:09 run
         assert msg and "should be at 1.2 V" in msg
+
+
+def test_sweep_points_end_on_stop_either_way():
+    from ldo_bench.analysis import sweep_points
+
+    assert list(sweep_points(1.4, 1.9, 0.15)) == pytest.approx([1.4, 1.55, 1.7, 1.85, 1.9])
+    assert list(sweep_points(1.9, 1.4, 0.2)) == pytest.approx([1.9, 1.7, 1.5, 1.4])
+    assert list(sweep_points(1.25, 1.35, 0.05)) == pytest.approx([1.25, 1.3, 1.35])  # no float-error drop
+
+
+def test_iq_sweep_ends_on_vin_stop(jafwak):
+    from ldo_bench.procedures import iq
+
+    cfg = jafwak.iq.model_copy(update={"vin_step": 0.15})
+    with open_bench(jafwak, sim=True) as b:
+        res = iq.run(b, cfg)
+    assert max(p.vin for p in res.points) == pytest.approx(cfg.vin_stop, abs=0.01)  # PSU readback
+
+
+def test_wavegen_off_leaves_vin_undriven(jafwak_single):
+    """After W1 stops driving VIN, nothing may treat VIN as up (the external reference needs it)."""
+    with open_bench(jafwak_single, sim=True) as b:
+        b.confirm_wiring("t", [], ref_probe=("vin", 0), psu_to="rail")
+        b.vin_from_wavegen(1.8)
+        b.wavegen_off()
+        assert b._vin_level is None and b._vin_from is None
+
+
+def test_buffer_current_limit_not_silently_ignored(jafwak):
+    """VS_BUFF must get buffer.rail_current_limit: a PSU already set up with another limit is refused."""
+    with open_bench(jafwak, sim=True) as b:
+        b.supply_off()  # sets the PSU up with psu.current_limit
+        b.confirm_wiring("t", [], ref_probe=("vin", 0), psu_to="rail")
+        b.vin_from_wavegen(0.0)
+        with pytest.raises(InstrumentError, match="current limit"):
+            b.buffer_rails_on(1.9)
+
+
+def test_unexpected_error_still_reports_a_failed_shutdown(monkeypatch):
+    from pathlib import Path
+
+    from typer.testing import CliRunner
+
+    from ldo_bench.bench import Bench
+    from ldo_bench.cli import app
+    from ldo_bench.procedures import load_reg
+
+    monkeypatch.setattr(load_reg, "run", lambda b, lr: (_ for _ in ()).throw(ValueError("a bug")))
+    real = Bench.shutdown
+
+    def failing_shutdown(self):
+        real(self)
+        self.shutdown_errors.append("PSU output off: no reply")
+
+    monkeypatch.setattr(Bench, "shutdown", failing_shutdown)
+    cfg = str(Path(__file__).parents[1] / "configs" / "jafwak.toml")
+    r = CliRunner().invoke(app, ["load-reg", "-c", cfg, "--sim"])
+    assert r.exit_code != 0 and "SHUTDOWN FAILED" in r.output

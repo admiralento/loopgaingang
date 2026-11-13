@@ -345,7 +345,7 @@ def plot(res: LoadTranResult, dut: str, full: bool = False, per_edge: bool = Fal
         window=res.plot_window,
         per_edge=per_edge,
         vout_nominal=res.vout_nominal,
-        ref_label=f"DIO {res.trigger_pin}, scope 2 (V)",
+        ref_label=f"DIO {res.trigger_pin}, AD2 (V)",
         suptitle=f"Load transient: {dut}  ·  VIN {res.vin:.2f} V  ·  {res.averages} averages  ·  "
         "shaded = settling band" + span,
     )

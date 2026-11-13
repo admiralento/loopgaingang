@@ -139,6 +139,7 @@ class Bench:
         self._confirm = confirm
         self.loadbank = LoadBank(cfg.loadbank, ad2, i_max=cfg.dut.i_max, vout=cfg.dut.vout_nominal)
         self._psu_ready = False  # current limit / OVP / range programmed
+        self._psu_limit = 0.0  # A, the current limit programmed (once _psu_ready)
         self._psu_on = False  # output enabled
         self._awg_on = False
         self.shutdown_errors: list[str] = []  # steps of the last shutdown() that failed
@@ -152,7 +153,8 @@ class Bench:
         self._vin_from: Literal["psu", "wavegen"] | None = None
         # enable from the AD2 (see the class docstring)
         self.enable_dio = enable_dio
-        self._enable_driven = False  # V_33 on and the enable DIO driven by ldo_enable()
+        self._v33_on = False  # AD2 V+ on V_33 (enable_logic)
+        self._enable_driven = False  # the enable DIO has been driven: shutdown drives it low first
         self.last_wiring: list[str] = []  # the wiring lines last shown by confirm_wiring()
         # split-supply buffer (see the class docstring)
         self.vminus_out: SupplyOutput | None = None  # the PSU output on U2's V- (wired reversed)
@@ -289,12 +291,18 @@ class Bench:
 
         current_limit (A) replaces psu.current_limit (buffer.rail_current_limit for the split buffer).
         """
-        if self._psu_ready:
-            return
         p = self.cfg.psu
-        self.psu.output(False)
         limit = p.current_limit if current_limit is None else current_limit
+        if self._psu_ready:
+            if abs(limit - self._psu_limit) > 1e-12:
+                raise InstrumentError(
+                    f"the PSU is already set up with a {self._psu_limit * 1e3:g} mA current limit; this needs "
+                    f"{limit * 1e3:g} mA (set before the output turns on)"
+                )
+            return
+        self.psu.output(False)
         self.psu.setup(current_limit=limit, ovp=p.ovp, voltage_range=p.voltage_range)
+        self._psu_limit = limit
         self.psu.set_voltage(0.0)
         if self.vref_external:
             vr = self.cfg.vref
@@ -535,6 +543,7 @@ class Bench:
         v = self.cfg.enable.v33
         if v is not None and hasattr(self.scope, "set_vplus"):
             self.scope.set_vplus(v if on else None)
+        self._v33_on = on
 
     def set_enable(self, on: bool) -> None:
         """Drive EN_CTRL_33 (and ~EN_CTRL_33 inverted, if wired) from the AD2."""
@@ -543,6 +552,7 @@ class Bench:
         if e.dio_pin_n is not None:
             levels[e.dio_pin_n] = not on
         self.dio.write_pins(levels)
+        self._enable_driven = True  # whoever drove it (ldo_enable, iq, enable-startup), shutdown takes it low
 
     def ldo_enable(self, on: bool) -> None:
         """--enable dio: drive the LDO's enable through [enable]; does nothing when EN is tied on.
@@ -553,9 +563,8 @@ class Bench:
         """
         if not self.enable_dio:
             return
-        if not self._enable_driven:
+        if not self._v33_on:
             self.enable_logic(True)
-            self._enable_driven = True
         self.set_enable(on)
         if on:
             self.sleep(self.cfg.enable.settle_time)
@@ -594,7 +603,7 @@ class Bench:
         self.awg.off(ch)
         self._awg_on = False
         if drives_vin:
-            self._vin_level, self._vin_from = 0.0, None
+            self._vin_level, self._vin_from = None, None
 
     # --- External reference (--vref ext) -----------------------------------
     def _no_reference(self, what: str) -> None:
@@ -754,7 +763,7 @@ class Bench:
 
     def vin_issue(self, vin: float, setpoint: float, *, source: str) -> str | None:
         """A setup problem if VIN measured at the board is off its setpoint by more than
-        VIN_SET_TOLERANCE (2 % + 20 mV, which allows for cable drop under load).
+        VIN_SET_REL / VIN_SET_ABS (2 % + 20 mV, which allows for cable drop under load).
 
         Catches a VIN probe on the wrong node, a supply in current limit, or a lost command: the
         data would otherwise be analysed against a VIN axis that isn't the LDO's input.
@@ -796,8 +805,11 @@ class Bench:
 
     # --- Shutdown -----------------------------------------------------------
     def shutdown(self) -> None:
-        """Reference 0 V, wavegen off, AD2 V+ off, load off, DIO released, PSU off, close. Each step runs even if an
-        earlier one fails (failures are logged). Safe to call more than once."""
+        """Turn everything off in the order the class docstring gives, then close the instruments.
+
+        Each step runs even if an earlier one fails (failures are logged and kept in
+        shutdown_errors). Safe to call more than once.
+        """
         steps: list[tuple[str, Callable[[], None]]] = [
             ("external reference 0 V", lambda: self.vref_out.set_voltage(0.0) if self.vref_out else None),
             ("LDO enable low", lambda: self.set_enable(False) if self._enable_driven else None),
@@ -826,7 +838,9 @@ class Bench:
             except Exception as e:  # keep going: the remaining steps matter more
                 log.error("shutdown: %s failed: %s", name, e)
                 self.shutdown_errors.append(f"{name}: {e}")
-        self._psu_on = self._awg_on = self._psu_ready = self._vref_on = self._enable_driven = False
+        self._psu_on = self._awg_on = self._psu_ready = self._vref_on = self._enable_driven = self._v33_on = (
+            False
+        )
         self._buffer_up = False
         self.vminus_out = None
         self._vin_level, self._vin_from = None, None

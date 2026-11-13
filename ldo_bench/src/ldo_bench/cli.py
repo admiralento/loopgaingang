@@ -171,6 +171,9 @@ def _bench(
         if not _shutdown_failed(bench):
             typer.secho("Aborted; outputs are off.", fg="yellow", err=True)
         raise typer.Exit(130) from e
+    except Exception:  # a bug or an unexpected error: shutdown has run, but say if any step of it failed
+        _shutdown_failed(bench)
+        raise
     if _shutdown_failed(bench):
         raise typer.Exit(1)
 
@@ -590,7 +593,7 @@ def enable_sine(
     yes: YesOpt = False,
     verbose: VerboseOpt = False,
 ) -> None:
-    """Enable block on its own: a sine or triangle into EN_AIN, its square-wave EN_OUT -> thresholds and hysteresis."""
+    """Enable block on its own: a sine / triangle into EN_AIN gives the thresholds and hysteresis; a square, the delay."""
     from ldo_bench.procedures import en_sine as proc
 
     _logging(verbose)
@@ -1048,14 +1051,8 @@ def compare_runs(
     except ValueError as e:
         typer.secho(str(e), fg="red", err=True)
         raise typer.Exit(2) from e
-    try:
-        cfg = BenchConfig.model_validate(a.config)
-    except ValidationError as e:
-        typer.secho(
-            f"run A's saved config doesn't load with this version of ldo-bench:\n{e}", fg="red", err=True
-        )
-        raise typer.Exit(2) from e
-    run = RunDir(out, proc.NAME, cfg, simulated=a.sim or b.sim, invalid=bool(res.issues), tag=a.test)
+    # run A's saved config as it was saved: it may not load under this version's schema
+    run = RunDir(out, proc.NAME, a.config, simulated=a.sim or b.sim, invalid=bool(res.issues), tag=a.test)
     run.write_csv("compare.csv", res.rows)
     run.write_json("summary.json", res.summary())
     run.write_meta(idns={}, sim=a.sim or b.sim, extra={"runs": [str(a.path), str(b.path)]})

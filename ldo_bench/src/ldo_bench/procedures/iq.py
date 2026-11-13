@@ -47,6 +47,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from ldo_bench import plotting
+from ldo_bench.analysis import sweep_points
 from ldo_bench.bench import Bench
 from ldo_bench.config import IqConfig
 from ldo_bench.instruments.base import InstrumentError
@@ -75,7 +76,7 @@ class IqPoint:
     vin: float  # PSU readback (V)
     current: float  # A, zero subtracted (nan if the meter overloaded)
     std: float  # A, standard deviation of the DMM readings at this point
-    vout: float  # AD2 scope 1 (V)
+    vout: float  # VOUT on the AD2 (V)
     psu_current: float  # PSU readback (A): coarse, a cross-check only
     below_floor: bool  # |current| < the result's floor: not resolved, shown as "< floor"
     issues: list[str] = field(default_factory=list)  # setup problems at this point
@@ -315,8 +316,7 @@ def run(bench: Bench, iq: IqConfig) -> IqResult:
         check = {"code": iq.check_code, "expected": expected, "measured": i1 - i0, "vout": vout.mean}
         log.info("load check: expected +%s, measured %s", fmt_a(expected), fmt_a(i1 - i0))
 
-    # + half a step so vin_stop is included despite float error
-    vins = np.round(np.arange(iq.vin_start, iq.vin_stop + iq.vin_step / 2, iq.vin_step), 6)
+    vins = sweep_points(iq.vin_start, iq.vin_stop, iq.vin_step)  # ends exactly on vin_stop
     points: list[IqPoint] = []
     for state in iq.states:
         if use_enable:

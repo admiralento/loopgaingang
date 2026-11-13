@@ -274,3 +274,26 @@ def test_bench_refuses_the_split_supply_with_the_external_reference(jafwak):
         with pytest.raises(InstrumentError, match="--vref ext"):
             b.buffer_rails_on(1.9)
         assert not b.sim_model.psu_on
+
+
+def test_buffer_check_limit_refusal_stops_the_run(jafwak):
+    """A Bench limit refusal is a safety stop (exit 1), not a setup issue in a saved _INVALID run."""
+    from ldo_bench.procedures import buffer_check
+
+    with open_bench(jafwak, sim=True) as b:
+        real = b.vin_sine_from_wavegen
+
+        def refuse(**k):
+            raise InstrumentError("refusing to drive VIN with a sine (limit)")
+
+        b.vin_sine_from_wavegen = refuse
+        with pytest.raises(InstrumentError, match="refusing"):
+            buffer_check.run(b, jafwak.buffer)
+        b.vin_sine_from_wavegen = real
+
+
+def test_buffer_check_needs_two_levels(jafwak):
+    d = jafwak.model_dump()
+    d["buffer"]["check_levels"] = [1.8]
+    with pytest.raises(ValidationError, match="check_levels"):
+        BenchConfig.model_validate(d)

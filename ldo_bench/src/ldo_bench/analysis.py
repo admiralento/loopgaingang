@@ -4,11 +4,13 @@ Every function takes plain arrays (volts, amps, seconds) and returns a frozen da
 `as_dict()` goes into summary.json. NaN means "not measurable from this data" (e.g. the LDO
 never settled within the capture), never an error.
 
+  sweep_points                                                    every VIN sweep
   linear_fit / load_regulation / line_regulation / find_dropout   DC tests
+  dropout_strays                                                  line-reg, vref-line
   settling_analysis (with find_step, smooth)                      load-tran, line-tran
-  schmitt_analysis                                                enable-sine
+  schmitt_analysis / propagation_delays                           enable-sine
   step_metrics                                                    enable-startup
-  sine_fit                                                        psrr
+  sine_fit / multi_sine_fit                                       psrr
 """
 
 from __future__ import annotations
@@ -135,6 +137,15 @@ def _below(vin, vout, fraction: float):
     x, y = np.asarray(vin, float)[order], np.asarray(vout, float)[order]
     threshold = (1.0 - fraction) * y[-1]
     return x, y, threshold, y < threshold
+
+
+def sweep_points(start: float, stop: float, step: float) -> np.ndarray:
+    """Setpoints (V) from start towards stop (up or down) in `step`, always ending exactly on stop."""
+    n = int(np.floor(abs(stop - start) / step + 1e-9)) + 1  # 1e-9: float error mustn't drop the last step
+    pts = start + np.sign(stop - start) * step * np.arange(n)
+    if abs(pts[-1] - stop) > 1e-9:
+        pts = np.append(pts, stop)
+    return np.round(pts, 6)
 
 
 def find_dropout(vin, vout, fraction: float) -> tuple[float, float]:

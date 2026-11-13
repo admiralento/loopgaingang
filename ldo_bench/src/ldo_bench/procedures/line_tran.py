@@ -22,7 +22,7 @@ run() steps:
    `settling_analysis` and `capture_issues` as in load-tran (expected ref swing =
    vin_high - vin_low). The extra metric is the peak VOUT deviation per volt of
    VIN step (V/V).
-6. W1 off, load bank off.
+6. W1 off (with [buffer]: the split supply down first, W1 off last), load bank off.
 
 Split-supply buffer ([buffer], JAFWAK's reworked U2 with V- on -5 V): W1 holds U2's input at DC
 0 V before either rail comes up and is never turned off while they are up (`input_idle` sets it to
@@ -404,7 +404,7 @@ def _calibrate(bench: Bench, target: float, limit: float | None = None) -> tuple
         w,
         vin,
         f"VIN reached {vin:.3f} V, not {target:.3f} V, with W1 at {w:.3f} V: check the buffer rail "
-        "headroom (line_tran.psu_voltage), JP4, and the W1 -> buffer input wiring",
+        "headroom (psu_voltage), JP4, and the W1 -> buffer input wiring",
     )
 
 
@@ -534,7 +534,7 @@ def plot(res: LineTranResult, dut: str, full: bool = False, per_edge: bool = Fal
         window=res.plot_window,
         per_edge=per_edge,
         vout_nominal=res.vout_nominal,
-        ref_label="VIN, scope 2 (V)",
+        ref_label="VIN, AD2 (V)",
         suptitle=f"Line transient: {dut}  ·  {res.i_load * 1e3:.1f} mA load  ·  {res.averages} averages  ·  "
         "shaded = settling band" + span,
     )

@@ -34,6 +34,7 @@ import numpy as np
 
 from ldo_bench import plotting
 from ldo_bench.analysis import LineRegulation, dropout_strays, line_regulation
+from ldo_bench.analysis import sweep_points as analysis_sweep
 from ldo_bench.bench import Bench
 from ldo_bench.config import LineRegConfig
 
@@ -106,13 +107,8 @@ class LineRegResult:
 
 
 def sweep_points(lr: LineRegConfig) -> np.ndarray:
-    """VIN setpoints (V): vin_start to vin_stop in vin_step, always ending exactly on vin_stop."""
-    # 1e-9 so float error doesn't drop the last whole step
-    n = int(np.floor((lr.vin_stop - lr.vin_start) / lr.vin_step + 1e-9)) + 1
-    pts = lr.vin_start + lr.vin_step * np.arange(n)
-    if pts[-1] < lr.vin_stop - 1e-9:
-        pts = np.append(pts, lr.vin_stop)
-    return np.round(pts, 6)
+    """VIN setpoints (V): vin_start up to vin_stop in vin_step, ending exactly on vin_stop."""
+    return analysis_sweep(lr.vin_start, lr.vin_stop, lr.vin_step)
 
 
 def wiring(bench: Bench, lr: LineRegConfig) -> list[str]:

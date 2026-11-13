@@ -488,7 +488,7 @@ class SimAnalogDiscovery:
         return self.last_capture
 
     def _sine_capture(self, rate, n, level, edge, pre, stimulus) -> Capture:
-        """W1 sine or triangle on EN_AIN (scope ref channel), the enable comparator's EN_OUT on the other."""
+        """W1 sine, triangle or square on EN_AIN (scope ref channel), the enable comparator's EN_OUT on the other."""
         m = self.m
         stimulus()
         shape, f, lo, hi = next(iter(m.awg_wave.values()))

@@ -1,4 +1,4 @@
-"""enable-sine: drive the enable block's analog input with a sine or triangle and watch its output switch.
+"""enable-sine: drive the enable block's analog input with a sine, triangle or square and watch its output switch.
 
 JAFWAK: AD2 W1 -> EN_FG SMA (J2) -> J6 5-6 -> R23 (1k) -> EN_AIN. The enable block runs from
 EN_VDD (J1 9-11 to INB = VIN through R13). EN_OUT is on J8.2, EN_AIN on TP6. A slow wave
@@ -232,7 +232,7 @@ def wiring(bench: Bench, es: EnSineConfig) -> list[str]:
 
 
 def run(bench: Bench, es: EnSineConfig) -> EnSineResult:
-    """Sweep EN_AIN with the sine or triangle and analyse EN_OUT (see the module docstring for the steps).
+    """Drive EN_AIN with the wave and analyse EN_OUT (see the module docstring for the steps).
 
     es: the [en_sine] section. Setup problems are recorded in `issues`, never raised.
     """

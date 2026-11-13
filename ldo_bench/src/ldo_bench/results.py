@@ -2,7 +2,7 @@
 
 Layout (the root is --out, default `results`):
 
-results/<test>/<stamp>_<dut>_<test>[_extref][_SIM][_INVALID]/
+results/<test>/<stamp>_<dut>_<test>[_extref][_SIM][_INVALID][_PARTIAL]/
     e.g. results/load-reg/20261106-143012_JAFWAK_load-reg/
     data.csv      one row per measurement point
     *.csv         extra tables some tests write
@@ -14,8 +14,9 @@ results/latest.png, results/<test>/latest.png, results/<test>/latest_full.png, l
 
 <stamp> is the local start time YYYYmmdd-HHMMSS; <dut> is dut.name made filename-safe.
 _extref: run with --vref ext (external reference on VREF_IN, not the BGR).
-_SIM: made with --sim --save-sim. _INVALID: the test found a setup problem.
-results/compare/<stamp>_<dut>_<test>_compare/ holds `ldo-bench compare` output (see compare.py).
+_SIM: made with --sim --save-sim. _INVALID: the test found a setup problem. _PARTIAL: saving
+stopped part way (the folder is incomplete).
+results/compare/<stamp>_<dut>_compare_<test>/ holds `ldo-bench compare` output (see compare.py).
 """
 
 from __future__ import annotations
@@ -81,7 +82,7 @@ class RunDir:
         self,
         root: Path,
         test: str,
-        cfg: BenchConfig,
+        cfg: BenchConfig | dict,
         *,
         config_path: Path | None = None,
         simulated: bool = False,
@@ -91,7 +92,9 @@ class RunDir:
         self.started = datetime.now()
         self.root = Path(root)
         self.test = test
-        self.cfg = cfg
+        # a BenchConfig, or a saved config as a dict (compare: it may predate this version's schema)
+        self.config = cfg if isinstance(cfg, dict) else cfg.model_dump()
+        dut = self.config["dut"]["name"]
         self.config_path = config_path
         stamp = self.started.strftime("%Y%m%d-%H%M%S")
         # never mistake a simulated run, or one with setup problems, for a valid measurement
@@ -105,7 +108,7 @@ class RunDir:
         k = 1
         while True:
             tag = stamp if k == 1 else f"{stamp}-{k}"
-            self.path = Path(root) / test / f"{tag}_{_slug(cfg.dut.name)}_{test}{suffix}"
+            self.path = self.root / test / f"{tag}_{_slug(dut)}_{test}{suffix}"
             try:
                 self.path.mkdir(parents=True, exist_ok=False)
                 break
@@ -143,7 +146,7 @@ class RunDir:
             "sim": sim,
             "instruments": idns,
             "config_file": str(self.config_path) if self.config_path else None,
-            "config": self.cfg.model_dump(),
+            "config": self.config,
             "git": _git_info(),
             "versions": _versions(),
             **(extra or {}),

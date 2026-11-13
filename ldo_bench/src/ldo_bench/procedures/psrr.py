@@ -24,7 +24,7 @@ run() steps:
    high frequency), W1's amplitude is scaled to compensate (at most 2 x the target, never past
    the wavegen / vin_max limit) and the point is measured again. After every measurement the
    measured VIN peak is checked against dut.vin_max less the AD2's error margin (hard stop).
-4. W1 off, load bank off.
+4. W1 off (with [buffer]: the split supply down first, W1 off last), load bank off.
 
 Validity check per point: VIN must carry at least MIN_INJECTION of the target amplitude,
 else the sine isn't reaching VIN (setup issue). Notes (run still valid): VOUT following VIN
@@ -424,7 +424,7 @@ def run(bench: Bench, ps: PsrrConfig, meter: PsrrMeter | None = None) -> PsrrRes
     if good and not good[0].limited and good[0].psrr_db < 3:
         notes.append(
             f"VOUT follows VIN at {good[0].frequency:g} Hz ({good[0].psrr_db:.1f} dB): the LDO may be in dropout "
-            "at this VIN / load, or scope 1 is on VIN"
+            f"at this VIN / load, or scope {bench.cfg.ad2.vout_channel} is on VIN"
         )
     if any(p.limited for p in good):
         notes.append(
@@ -489,7 +489,7 @@ def plot(res: PsrrResult, dut: str):
     vin = np.array([p.vin_amp for p in res.points]) * 1e3
     vout = np.array([p.vout_amp for p in res.points]) * 1e3
     vfl = np.array([p.tone.vout_floor for p in res.points]) * 1e3
-    ax_a.plot(f, vin, "o-", ms=4, lw=1.2, color=plotting.SERIES[1], label="VIN (scope 2)")
+    ax_a.plot(f, vin, "o-", ms=4, lw=1.2, color=plotting.SERIES[1], label="VIN (AD2)")
     ax_a.plot(f, vout, "o-", ms=4, lw=1.2, color=c, label="VOUT")
     ax_a.plot(f, vfl, color=plotting.MUTED, lw=1.0, ls=(0, (4, 3)), label="VOUT floor")
     ax_a.set_yscale("log")

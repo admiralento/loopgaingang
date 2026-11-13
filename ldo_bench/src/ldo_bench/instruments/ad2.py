@@ -1,7 +1,7 @@
 """Digilent Analog Discovery 2 via pydwf (WaveForms SDK).
 
 One object implements three Protocols: Oscilloscope (analog in), DigitalOut
-(static DIO) and Wavegen (W1/W2 as DC sources). Channel numbers are 1-based
+(static DIO) and Wavegen (W1/W2: DC, sine, triangle or square). Channel numbers are 1-based
 here and converted to the SDK's 0-based indices internally.
 
 Requires the WaveForms runtime (dwf.dll / dwf.framework). Only one program can

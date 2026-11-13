@@ -24,10 +24,32 @@ def jafwak_single(jafwak):
     return jafwak.model_copy(update={"buffer": None})
 
 
+@pytest.fixture(params=["split", "single"])
+def buffer_board(request, jafwak, jafwak_single):
+    """JAFWAK with each buffer path: the split-supply U2 ([buffer]) and the single-rail one."""
+    return jafwak if request.param == "split" else jafwak_single
+
+
 @pytest.fixture
 def bench(cfg):
     with open_bench(cfg, sim=True) as b:
         yield b
+
+
+@pytest.fixture(autouse=True)
+def _no_real_buses(monkeypatch):
+    """The suite never touches hardware: any real VISA / RS-232 / Prologix / AD2 search fails the test.
+
+    Tests that need a fake bench patch these functions themselves (e.g. test_any_interface's `bus`).
+    """
+    from ldo_bench.instruments import discovery, transports
+
+    def refuse(*_a, **_k):
+        raise AssertionError("a test tried to reach real instruments; patch the opener or use the simulator")
+
+    for name in ("_visa_candidates", "_serial_ports", "_probe_serial", "_prologix_candidates", "_ad2_lines"):
+        monkeypatch.setattr(discovery, name, refuse)
+    monkeypatch.setattr(transports, "visa_resource_manager", refuse)
 
 
 @pytest.fixture(autouse=True)

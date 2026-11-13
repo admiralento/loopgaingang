@@ -10,7 +10,7 @@ run() steps:
    ramp together with JP4 pin 1 read after every step; outside buffer.vin_window everything
    comes down and the run stops (I.2: within ~65 mV of 0 V, never above 0.3 V).
 2. The output at W1 = 0 V (U2's offset).
-3. Each of buffer.check_levels (1.70 / 1.80 / 1.90 V): calibrate W1 so JP4 pin 1 lands on it
+3. Each of buffer.check_levels (1.70 / 1.80 / 1.85 V): calibrate W1 so JP4 pin 1 lands on it
    (line_tran._calibrate, with buffer.check_peak_max as the hard stop since the chip is off). The
    W1 needed, and the gain dVOUT/dW1 across the levels (I.3; the first plan expects 0.93-0.99).
 4. A step from the lowest to the highest level and back (W1 DC steps, triggered on the output):
@@ -34,8 +34,8 @@ import numpy as np
 
 from ldo_bench import plotting
 from ldo_bench.bench import Bench
-from ldo_bench.config import BufferConfig
-from ldo_bench.instruments.base import ChannelSetup, InstrumentError
+from ldo_bench.config import AD2_MAX_SAMPLE_RATE, BufferConfig
+from ldo_bench.instruments.base import InstrumentError
 from ldo_bench.procedures.line_tran import _calibrate
 
 log = logging.getLogger(__name__)
@@ -157,92 +157,30 @@ def run(bench: Bench, bu: BufferConfig) -> BufferCheckResult:
         log.info("buffer-check: %.2f V -> W1 %.4f V, output %.4f V", level, w, v)
     ws = np.array([r["w1_v"] for r in rows])
     vs = np.array([r["out_v"] for r in rows])
-    gain = float(np.polyfit(ws, vs, 1)[0]) if len(rows) >= 2 and np.ptp(ws) > 0 else float("nan")
-    if np.isfinite(gain) and gain < FOLLOW_MIN:
-        issues.append(
-            f"the output moved {np.ptp(vs) * 1e3:.0f} mV for W1's {np.ptp(ws) * 1e3:.0f} mV: is scope "
-            f"{a.ref_channel} on JP4 pin 1, and W{a.wavegen_channel} on VIN_FG (J3)?"
+    gain = float(np.polyfit(ws, vs, 1)[0]) if np.ptp(ws) > 0 else float("nan")
+    span = float(np.ptp(bu.check_levels))
+    if np.ptp(vs) < FOLLOW_MIN * span:
+        issues.insert(
+            0,
+            f"JP4 pin 1 moved {np.ptp(vs) * 1e3:.0f} mV across levels {span * 1e3:.0f} mV apart: is scope "
+            f"{a.ref_channel} on JP4 pin 1, and W{a.wavegen_channel} on VIN_FG (J3)?",
         )
     elif np.isfinite(gain) and not GAIN_RANGE[0] <= gain <= GAIN_RANGE[1]:
         notes.append(f"DC gain {gain:.3f} is outside the first plan's {GAIN_RANGE[0]}-{GAIN_RANGE[1]}")
 
-    # step between the lowest and highest levels, triggered on the output itself
-    lo_row, hi_row = rows[int(np.argmin(vs))], rows[int(np.argmax(vs))]
-    setups = {
-        a.vout_channel: ChannelSetup(a.vout.range, a.vout.offset),
-        **{a.ref_channel: bench.vin_fine_setups()[a.ref_channel]},
-    }
-    level = (lo_row["out_v"] + hi_row["out_v"]) / 2
     step, t_step, v_step = {}, np.zeros(0), np.zeros(0)
-    for edge, (w_from, w_to) in (
-        ("rising", (lo_row["w1_v"], hi_row["w1_v"])),
-        ("falling", (hi_row["w1_v"], lo_row["w1_v"])),
-    ):
-        bench.vin_from_wavegen(w_from)
-        bench.sleep(0.05)
-        try:
-            cap = bench.scope.capture(
-                sample_rate=STEP_RATE,
-                n_samples=8192,
-                setups=setups,
-                trigger_channel=a.ref_channel,
-                trigger_level=level,
-                edge=edge,
-                pre_trigger=0.1,
-                stimulus=lambda w=w_to: bench.vin_from_wavegen(w),
-                timeout=2.0,
-            )
-        except InstrumentError as e:
-            issues.append(f"the {edge} step never triggered on JP4 pin 1 (scope {a.ref_channel}): {e}")
-            continue
-        v = cap.channel(a.ref_channel)
-        t = cap.time
-        step[edge] = {"peak_v": float(v.max()), "t10_90_s": _edge(t, v, edge == "rising")}
-        if edge == "rising":
-            t_step, v_step = t, v
-    bench.vin_from_wavegen(0.0)
-
-    # sine around check_sine_dc, W1 amplitude scaled by the DC gain so the output swings check_sine_amplitude
-    w_dc, _, cal = _calibrate(bench, bu.check_sine_dc, limit=bu.check_peak_max)
-    if cal:
-        issues.append(f"sine DC level: {cal}")
-    g = gain if np.isfinite(gain) and gain > FOLLOW_MIN else 1.0
-    w_amp = bu.check_sine_amplitude / g
     sine, t_sine, v_sine = {}, np.zeros(0), np.zeros(0)
-    try:
-        bench.vin_sine_from_wavegen(dc=w_dc, amplitude=w_amp, frequency=bu.check_sine_frequency)
-        rate = min(100e6, 8192 * bu.check_sine_frequency / 20)  # 20 cycles per capture
-        cap = bench.scope.capture(
-            sample_rate=rate,
-            n_samples=8192,
-            setups=setups,
-            trigger_channel=a.ref_channel,
-            trigger_level=bu.check_sine_dc,
-            edge="rising",
-            pre_trigger=0.0,
-            stimulus=lambda: None,
-            timeout=2.0,
-            free_running=True,
-        )
-        v_sine, t_sine = cap.channel(a.ref_channel), cap.time
-        amp = float(np.percentile(v_sine, 99.5) - np.percentile(v_sine, 0.5)) / 2
-        sine = {
-            "frequency_hz": bu.check_sine_frequency,
-            "dc_v": float(np.mean(v_sine)),
-            "w1_amplitude_v": w_amp,
-            "out_amplitude_v": amp,
-            "gain": amp / w_amp,
-            "peak_v": float(v_sine.max()),
-        }
-    except InstrumentError as e:
-        issues.append(f"the sine capture failed: {e}")
-    finally:
-        bench.vin_from_wavegen(0.0)
+    if issues:  # U2 can't reach the levels, or isn't on the probe: a step or sine would mean nothing
+        notes.append("the step and sine weren't run: fix the DC problems first")
+    else:
+        step, t_step, v_step = _steps(bench, rows, issues)
+        sine, t_sine, v_sine = _sine(bench, bu, gain, issues)
+    bench.vin_from_wavegen(0.0)
 
     peaks = (
         [s["peak_v"] for s in step.values()] + ([sine["peak_v"]] if sine else []) + [r["out_v"] for r in rows]
     )
-    if peaks and max(peaks) > bu.check_peak_max:
+    if max(peaks) > bu.check_peak_max:
         issues.append(
             f"JP4 pin 1 reached {max(peaks):.3f} V, above {bu.check_peak_max} V: fix this before connecting the chip"
         )
@@ -252,6 +190,101 @@ def run(bench: Bench, bu: BufferConfig) -> BufferCheckResult:
     return BufferCheckResult(
         idle, rows, gain, step, sine, t_step, v_step, t_sine, v_sine, bu.check_peak_max, issues, notes
     )
+
+
+def _steps(bench: Bench, rows: list[dict], issues: list[str]) -> tuple[dict, np.ndarray, np.ndarray]:
+    """W1 steps between the lowest and highest levels, both ways, triggered on JP4 pin 1.
+
+    Returns ({edge: {peak_v, t10_90_s}}, t, v of the rising step). A trigger timeout is an issue;
+    a Bench limit refusal in the stimulus is re-raised (a safety stop).
+    """
+    a = bench.cfg.ad2
+    vs = [r["out_v"] for r in rows]
+    lo_row, hi_row = rows[int(np.argmin(vs))], rows[int(np.argmax(vs))]
+    level = (lo_row["out_v"] + hi_row["out_v"]) / 2
+    step, t_step, v_step = {}, np.zeros(0), np.zeros(0)
+    for edge, (w_from, w_to) in (
+        ("rising", (lo_row["w1_v"], hi_row["w1_v"])),
+        ("falling", (hi_row["w1_v"], lo_row["w1_v"])),
+    ):
+        bench.vin_from_wavegen(w_from)
+        bench.sleep(0.05)
+        refused: list[InstrumentError] = []
+
+        def stimulus(w=w_to, refused=refused) -> None:
+            try:
+                bench.vin_from_wavegen(w)
+            except InstrumentError as e:
+                refused.append(e)
+                raise
+
+        try:
+            cap = bench.scope.capture(
+                sample_rate=STEP_RATE,
+                n_samples=8192,
+                setups=bench.vin_fine_setups(),
+                trigger_channel=a.ref_channel,
+                trigger_level=level,
+                edge=edge,
+                pre_trigger=0.1,
+                stimulus=stimulus,
+                timeout=2.0,
+            )
+        except InstrumentError as e:
+            if refused:
+                raise refused[0] from e
+            issues.append(f"the {edge} step never triggered on JP4 pin 1 (scope {a.ref_channel}): {e}")
+            continue
+        v = cap.channel(a.ref_channel)
+        step[edge] = {"peak_v": float(v.max()), "t10_90_s": _edge(cap.time, v, edge == "rising")}
+        if edge == "rising":
+            t_step, v_step = cap.time, v
+    return step, t_step, v_step
+
+
+def _sine(
+    bench: Bench, bu: BufferConfig, gain: float, issues: list[str]
+) -> tuple[dict, np.ndarray, np.ndarray]:
+    """check_sine_dc +/- check_sine_amplitude on JP4 pin 1 (W1's amplitude scaled by the DC gain).
+
+    Returns (the sine's numbers, t, v). A Bench limit refusal stops the run; a capture failure is an issue.
+    """
+    a = bench.cfg.ad2
+    w_dc, _, cal = _calibrate(bench, bu.check_sine_dc, limit=bu.check_peak_max)
+    if cal:
+        issues.append(f"sine DC level: {cal}")
+        return {}, np.zeros(0), np.zeros(0)
+    w_amp = bu.check_sine_amplitude / gain
+    bench.vin_sine_from_wavegen(dc=w_dc, amplitude=w_amp, frequency=bu.check_sine_frequency)
+    try:
+        cap = bench.scope.capture(
+            sample_rate=min(AD2_MAX_SAMPLE_RATE, 8192 * bu.check_sine_frequency / 20),  # 20 cycles
+            n_samples=8192,
+            setups=bench.vin_fine_setups(),
+            trigger_channel=a.ref_channel,
+            trigger_level=bu.check_sine_dc,
+            edge="rising",
+            pre_trigger=0.0,
+            stimulus=lambda: None,
+            timeout=2.0,
+            free_running=True,
+        )
+    except InstrumentError as e:
+        issues.append(f"the sine capture failed: {e}")
+        return {}, np.zeros(0), np.zeros(0)
+    finally:
+        bench.vin_from_wavegen(0.0)
+    v = cap.channel(a.ref_channel)
+    amp = float(np.percentile(v, 99.5) - np.percentile(v, 0.5)) / 2
+    sine = {
+        "frequency_hz": bu.check_sine_frequency,
+        "dc_v": float(np.mean(v)),
+        "w1_amplitude_v": w_amp,
+        "out_amplitude_v": amp,
+        "gain": amp / w_amp,
+        "peak_v": float(v.max()),
+    }
+    return sine, cap.time, v
 
 
 def plot(res: BufferCheckResult, dut: str):

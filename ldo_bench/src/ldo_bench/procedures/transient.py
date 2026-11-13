@@ -428,13 +428,13 @@ def edge_report(e, extra: list[str] | None = None) -> list[str]:
 def plot_edges(
     edges,
     suptitle: str,
-    ref_label: str = "Scope 2 (V)",
+    ref_label: str = "Trigger channel (V)",
     vout_nominal: float | None = None,
     full: bool = False,
     window: float | None = None,
     per_edge: bool = False,
 ):
-    """One column per edge: the scope 2 (trigger) trace on a small panel on top, sharing the time
+    """One column per edge: the trigger channel's trace on a small panel on top, sharing the time
     axis with VOUT below, both in absolute volts.
 
     Valid edges also get the analysis (smoothed trace, settling band, peak, settling time).

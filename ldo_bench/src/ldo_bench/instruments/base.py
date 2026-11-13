@@ -192,7 +192,7 @@ class Oscilloscope(Protocol):
         dio_trigger=(pin, edge): trigger on the scope's own digital pin instead of an analog channel
         (frees both channels for signals); trigger_channel / trigger_level are then ignored and
         t = 0 is the hardware trigger.
-        free_running=True: the signal runs on its own (a wavegen sine or triangle, stimulus does
+        free_running=True: the signal runs on its own (a periodic wavegen wave, stimulus does
         nothing), so the scope may trigger as soon as it's armed. Otherwise a trigger before
         stimulus() is an InstrumentError: the capture would not contain the step.
         """

@@ -91,8 +91,8 @@ class HP34401A:
         return float(self.t.query("VOLT:DC:RANG?"))
 
     def read_dcv(self) -> float:
-        """One reading (V). Unlike read(), an overload comes back as the raw +/-9.9E+37."""
-        return float(self.t.query("READ?"))
+        """One DC volts reading (V); an overload (the meter's +/-9.9E+37) comes back as +/-inf, never a voltage."""
+        return self.read()
 
     def close(self) -> None:
         try:

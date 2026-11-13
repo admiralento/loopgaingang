@@ -91,7 +91,7 @@ class PsuConfig(_Model):
         gt=0,
         description=(
             "The PSU is never programmed above this (V). Usually equals dut.vin_max; it is higher only "
-            "when line_tran powers the buffer rail from the PSU."
+            "when the PSU powers the buffer rail (line-tran, psrr, buffer-check)."
         ),
     )
     ramp_step: float = Field(0.25, gt=0, description="Max voltage step when ramping (V)")
@@ -480,7 +480,7 @@ class LoadTranConfig(TransientCaptureConfig):
 
 
 class EnableConfig(_Model):
-    """[enable]: how the AD2 drives the board's enable path (enable-startup, iq 'disabled', en-sine).
+    """[enable]: how the AD2 drives the board's enable path (enable-startup, iq 'disabled', --enable dio).
 
     JAFWAK: AD2 DIO -> J13.12 EN_CTRL_33 -> FXLP34 (U6) -> EN_CTRL_18, and DIO -> J13.10 ~EN_CTRL_33
     -> U5 -> ~EN_CTRL_18. The level shifters' 3.3 V side is V_33 (J13.14), which the AD2's V+ supply
@@ -514,7 +514,7 @@ class EnableConfig(_Model):
 
 
 class EnSineConfig(_Model):
-    """[en_sine] (enable-sine): a sine or triangle into the enable block's analog input, its output watched for the thresholds."""
+    """[en_sine] (enable-sine): a sine, triangle or square into the enable block's analog input; its output gives the thresholds (or, for a square, the propagation delay)."""
 
     vin: float = Field(gt=0, description="PSU on VIN (feeds EN_VDD through J1 9-11) (V)")
     shape: Literal["sine", "triangle", "square"] = Field(
@@ -672,6 +672,7 @@ class BufferConfig(_Model):
     v_plus: float = Field(5.0, gt=0, description="VS_BUFF for buffer-check (V)")
     check_levels: list[float] = Field(
         [1.7, 1.8, 1.85],
+        min_length=2,
         description=(
             "buffer-check: DC levels to reach on JP4 pin 1 (V). W1 is capped at dut.vin_max, so 1.90 V is only "
             "reachable if U2's offset is positive; line-tran and psrr go up to 1.85 V"

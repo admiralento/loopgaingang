@@ -240,6 +240,7 @@ def test_missing_scope_is_not_fatal(jafwak, monkeypatch):
         raise InstrumentError("no 54620-series scope found")
 
     monkeypatch.setattr(discovery, "open_xscope", no_scope)
+    monkeypatch.setattr(discovery, "reserve_dmm_port", lambda *a, **k: None)  # no real RS-232 scan
     b = open_bench(jafwak, use_dmm=False, use_xscope=True)
     assert b.xscope is None and "no 54620-series scope found" in b.xscope_issue
 

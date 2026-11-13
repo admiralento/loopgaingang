@@ -247,3 +247,20 @@ def test_psrr_config_checks(jafwak):
         BenchConfig.model_validate(data)
     ps = PsrrConfig(psu_voltage=4, vin=1.8, f_start=100, f_stop=1e6, points_per_decade=3)
     assert ps.frequencies()[:4] == [100, 215, 464, 1000] and ps.frequencies()[-1] == 1e6
+
+
+def test_34401a_dcv_overload_is_inf_not_a_voltage():
+    """An overloaded DC volts reading (+9.9E+37) must never be averaged or saved as a voltage."""
+
+    class T:
+        name, kind = "fake", "gpib"
+
+        def write(self, c):
+            pass
+
+        def query(self, c):
+            return {"*IDN?": "HEWLETT-PACKARD,34401A,0,11-5-2", "SYST:ERR?": '+0,"No error"'}.get(
+                c, "-9.9E+37"
+            )
+
+    assert HP34401A(T()).read_dcv() == -math.inf

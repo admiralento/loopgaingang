@@ -33,6 +33,7 @@ import numpy as np
 
 from ldo_bench import plotting
 from ldo_bench.analysis import LineRegulation, dropout_strays, line_regulation
+from ldo_bench.analysis import sweep_points as analysis_sweep
 from ldo_bench.bench import Bench
 from ldo_bench.config import VrefLineConfig
 from ldo_bench.instruments.base import InstrumentError
@@ -111,12 +112,8 @@ class VrefLineResult:
 
 
 def sweep_points(vl: VrefLineConfig) -> np.ndarray:
-    """VIN setpoints (V): vin_high down to vin_low in vin_step, always ending exactly on vin_low."""
-    n = int(np.floor((vl.vin_high - vl.vin_low) / vl.vin_step + 1e-9)) + 1
-    pts = vl.vin_high - vl.vin_step * np.arange(n)
-    if pts[-1] > vl.vin_low + 1e-9:
-        pts = np.append(pts, vl.vin_low)
-    return np.round(pts, 6)
+    """VIN setpoints (V): vin_high down to vin_low in vin_step, ending exactly on vin_low."""
+    return analysis_sweep(vl.vin_high, vl.vin_low, vl.vin_step)
 
 
 def wiring(bench: Bench, vl: VrefLineConfig) -> list[str]:

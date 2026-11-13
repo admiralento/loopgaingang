@@ -1,7 +1,6 @@
 import pytest
 
 from ldo_bench.bench import open_bench
-from ldo_bench.instruments.base import InstrumentError
 from ldo_bench.procedures import line_tran
 
 
@@ -29,27 +28,6 @@ def test_both_edges_on_sim(cfg):
     assert res.w1_low == pytest.approx(lt.vin_low - m.buffer_offset, abs=0.005)
     # everything off afterwards
     assert not m.psu_on and m.awg_v == {} and b.loadbank.code == 0
-
-
-def test_interlock_stops_if_psu_is_on_vin(jafwak):
-    def miswired(b):
-        b.confirm_wiring = lambda *a, **k: setattr(b.sim_model, "psu_to", "vin")
-
-    with pytest.raises(InstrumentError, match="looks connected to VIN"):
-        run(jafwak, setup=miswired)
-
-
-def test_interlock_never_raises_rail_above_check_level(jafwak):
-    seen = []
-
-    def spy(b):
-        orig = b.psu.set_voltage
-        b.psu.set_voltage = lambda v: (seen.append(v), orig(v))
-        b.confirm_wiring = lambda *a, **k: setattr(b.sim_model, "psu_to", "vin")
-
-    with pytest.raises(InstrumentError):
-        run(jafwak, setup=spy)
-    assert max(seen) <= line_tran.INTERLOCK_RAIL + 1e-9  # the 4 V rail was never applied
 
 
 def test_buffer_without_headroom_is_reported(jafwak_single):

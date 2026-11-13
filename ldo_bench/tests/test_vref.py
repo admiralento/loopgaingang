@@ -357,3 +357,15 @@ def test_second_output_ovp_rejection_stops():
 def test_no_spare_output_for_the_main_channel():
     with pytest.raises(InstrumentError, match="no spare output"):
         AgilentE36xx(_FakeTransport(), channel=2).aux(2)
+
+
+def test_compare_reads_runs_saved_under_an_older_config_schema(tmp_path):
+    """A saved run's config may hold a key this version no longer has: compare still works."""
+    a = _run(tmp_path, "load-reg")
+    b = _run(tmp_path, "load-reg", "--vref", "ext")
+    for run in (a, b):
+        meta = json.loads((run / "meta.json").read_text())
+        meta["config"]["dut"]["a_key_from_an_old_version"] = 1
+        (run / "meta.json").write_text(json.dumps(meta))
+    r = _compare(tmp_path, a, b)
+    assert r.exit_code == 0, r.output

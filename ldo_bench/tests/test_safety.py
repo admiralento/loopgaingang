@@ -46,36 +46,39 @@ def run_buffer_test(proc, cfg, setup):
 
 # --- buffer interlock (line-tran, psrr) -----------------------------------------
 @pytest.mark.parametrize("proc", [line_tran, psrr])
-def test_interlock_stops_with_psu_on_vin_before_rail_goes_up(proc, jafwak):
+def test_interlock_stops_with_psu_on_vin_before_rail_goes_up(proc, buffer_board):
     def miswired(b):
         b.sim_model.psu_to = "vin"
 
-    err, seen = run_buffer_test(proc, jafwak, miswired)
+    err, seen = run_buffer_test(proc, buffer_board, miswired)
     assert "connected to VIN" in str(err)
-    assert max(seen) <= line_tran.INTERLOCK_RAIL + 1e-9  # never above the 1 V check level
+    bu = buffer_board.buffer
+    # single rail: never above the 1 V check level; split: stopped at the first step past the VIN window
+    limit = line_tran.INTERLOCK_RAIL if bu is None else bu.vin_window[1] + bu.ramp_step
+    assert max(seen) <= limit + 1e-9
 
 
 @pytest.mark.parametrize("proc", [line_tran, psrr])
-def test_interlock_stops_with_psu_on_vin_and_vin_probe_off(proc, jafwak):
+def test_interlock_stops_with_psu_on_vin_and_vin_probe_off(proc, buffer_board):
     """The case the first stage can't see: the probe reads ~0 V whatever VIN does."""
 
     def miswired_and_probe_off(b):
         b.sim_model.psu_to = "vin"
         b.sim_model.ref_value = lambda: 0.0  # scope 2 floating / not on VIN
 
-    err, seen = run_buffer_test(proc, jafwak, miswired_and_probe_off)
+    err, seen = run_buffer_test(proc, buffer_board, miswired_and_probe_off)
     assert "isn't proven" in str(err)
-    assert max(seen) <= jafwak.dut.vin_max + 1e-9  # the rail never went above what VIN can take
+    assert max(seen) <= buffer_board.dut.vin_max + 1e-9  # the rail never went above what VIN can take
 
 
 @pytest.mark.parametrize("proc", [line_tran, psrr])
-def test_interlock_stops_with_vin_probe_off(proc, jafwak):
+def test_interlock_stops_with_vin_probe_off(proc, buffer_board):
     def probe_off(b):
         b.sim_model.ref_value = lambda: 0.0
 
-    err, seen = run_buffer_test(proc, jafwak, probe_off)
+    err, seen = run_buffer_test(proc, buffer_board, probe_off)
     assert "isn't proven" in str(err)
-    assert max(seen) <= jafwak.dut.vin_max + 1e-9
+    assert max(seen) <= buffer_board.dut.vin_max + 1e-9
 
 
 # --- VIN limit with the AD2's measurement margin ---------------------------------
