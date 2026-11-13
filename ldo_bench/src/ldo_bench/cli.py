@@ -974,6 +974,38 @@ def enable_sine(
     )
 
 
+@app.command("enable-current")
+def enable_current(
+    config: ConfigOpt = DEFAULT_CONFIG,
+    fstart: Annotated[float | None, typer.Option(help="Lowest square frequency (Hz)")] = None,
+    fstop: Annotated[float | None, typer.Option(help="Highest square frequency (Hz), at most 1e6")] = None,
+    out: OutOpt = Path("results"),
+    sim: SimOpt = False,
+    save_sim: SaveSimOpt = False,
+    psu: PsuOpt = None,
+    ad_serial: AdOpt = None,
+    yes: YesOpt = False,
+    verbose: VerboseOpt = False,
+) -> None:
+    """Enable block's EN_VDD current (DMM in place of J1 9-11) against the frequency of a square on EN_AIN."""
+    from ldo_bench.procedures import en_current as proc
+
+    cfg, ec = _override(_load(config, verbose), "en_current", fstart=fstart, fstop=fstop)
+    _need_dmm(cfg, "enable-current")
+    _run(
+        cfg,
+        config,
+        proc,
+        lambda b: proc.run(b, ec),
+        out=out,
+        sim=sim,
+        save_sim=save_sim,
+        psu=psu,
+        ad=ad_serial,
+        yes=yes,
+    )
+
+
 @app.command("enable-startup")
 def enable_startup(
     config: ConfigOpt = DEFAULT_CONFIG,

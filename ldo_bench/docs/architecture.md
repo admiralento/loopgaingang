@@ -92,6 +92,7 @@ Procedures never program a voltage onto the DUT directly. They call Bench method
 | `vin_from_wavegen(v)` | W1 DC → buffer → VIN | `min(dut.vin_max, 5 V)` |
 | `vin_sine_from_wavegen(dc, amplitude, f)` | W1 sine → buffer → VIN | peak within `min(dut.vin_max, 5 V)` |
 | `en_ain_sine(ch, f, low, high, shape)` | W1 sine, triangle or square → EN_AIN (enable-sine) | −0.3 V to `min(dut.vin_max, 5 V)` |
+| `en_ain_dc(ch, v)` | W1 DC → EN_AIN (enable-current's static point, and between its points: EN_AIN is never left floating) | the same |
 | `enable_logic(on)`, `set_enable(on)` | AD2 V+ → V_33, DIO → EN_CTRL_33 | fixed by `[enable]` |
 | `ldo_enable(on)` | the same, for `--enable dio` only (no-op when EN is tied on) | fixed by `[enable]` |
 | `loadbank.set(code)` | AD2 DIO → load bank | `dut.i_max` |

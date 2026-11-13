@@ -234,7 +234,7 @@ def wiring(bench: Bench, es: EnSineConfig) -> list[str]:
     cfg = bench.cfg
     return [
         *w.psu_on_vin(cfg),
-        "Fit J1 9-11 (EN_VDD from INB; the other J1 rails as you like)",
+        *w.j1_rails(),  # all four: VDD (J1 5-7) must be up, or the ESD diodes conduct
         'Fit J6 5-6 "FG" (EN_FG -> EN_AIN; nothing else on J6)',
         f"AD2 W{es.wavegen_channel} -> EN_FG (J2)",
         w.scope(cfg, "ref", "EN_AIN (TP6)", note="the trigger"),

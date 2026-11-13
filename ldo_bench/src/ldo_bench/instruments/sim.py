@@ -16,7 +16,7 @@ matching field instead:
              supply, VIN = buffered W1; line transient and PSRR)
   ref_probe  what the AD2 reference channel (ch2) probes: ("vin", 0), ("dio", pin),
              ("vref", 0) BGR output, ("iin", 0) across R13, ("iout", 0) across R1,
-             ("tmp", 0) the TMP235 output (J13 pin 5)
+             ("tmp", 0) the TMP235 output (J13 pin 5), ("en_ain", 0) EN_AIN (TP6, the enable tests)
   ch1_probe  what the VOUT channel probes: "vout" or "en_out" (enable-sine test)
   dmm_probe  what the DMM is on: "vout", "vref" (TP3, the BGR output), "psu" (supply terminals),
              "shunt" (across R13), "series" (in series with a rail, current mode) or "open"
@@ -43,7 +43,9 @@ import numpy as np
 from ldo_bench.instruments.base import Capture, ChannelSetup, DcReading, Edge, InstrumentError, WaveShape
 
 # Fraction of the quiescent current drawn by each of the board's J1 supply rails (iq series test).
-RAIL_SHARE = {"total": 1.0, "bgr": 0.15, "vdd": 0.30, "en": 0.10, "ota": 0.45}
+# EN_VDD's static share is ~0.3 nA of the 150 uA, as in the PEX (0.28 nA); enable-current adds its
+# switching current (en_charge per EN_AIN cycle) on top.
+RAIL_SHARE = {"total": 1.0, "bgr": 0.15, "vdd": 0.40, "en": 2e-6, "ota": 0.45}
 
 
 @dataclass
@@ -117,6 +119,9 @@ class LdoModel:
     # quiescent / shutdown current and the DMM measuring it
     iq_off: float = 0.3e-6  # A, shutdown current (below the shunt method's floor, like the real board)
     iq_vin_slope: float = 0.05  # fractional change in Iq per volt of VIN (relative to 1.8 V)
+    en_charge: float = (
+        20e-12  # C drawn from EN_VDD per EN_AIN cycle while a wave through both thresholds drives it
+    )
     dmm_rail: str = "total"  # iq series method: which rail the DMM is in (a RAIL_SHARE key)
     dmm_offset_v: float = 2e-6  # V, thermal EMF / offset on the 100 mV range (the iq zero removes it)
     dmm_noise_v: float = 0.15e-6  # V rms, DMM noise on the shunt / open readings
@@ -191,7 +196,18 @@ class LdoModel:
         i = q * RAIL_SHARE[rail]
         if rail in ("total", "vdd"):
             i += self.load_current()
+        if rail in ("total", "en"):
+            i += self.en_switching_current()
         return i
+
+    def en_switching_current(self) -> float:
+        """EN_VDD's average switching current (A): en_charge per cycle of a wave on EN_AIN that
+        crosses both thresholds (the wavegen on EN_AIN, not VIN: psu_to "vin")."""
+        if not self.awg_wave or self.psu_to != "vin":
+            return 0.0
+        _, f, lo, hi = next(iter(self.awg_wave.values()))
+        crosses = lo < self.en_vt_fall * self.vin and hi > self.en_vt_rise * self.vin
+        return self.en_charge * f if crosses else 0.0
 
     def psrr_h(self, f: float) -> complex:
         """VOUT/VIN transfer function at `f` (Hz); 0 when the LDO is off."""
@@ -527,7 +543,9 @@ class SimAnalogDiscovery:
             out = np.convolve(out, np.ones(w) / w, mode="same")
         out = out + m.noise(n) * 0.5
         en_out = out if m.ch1_probe == "en_out" else np.full(n, m.vout_dc()) + m.noise(n)
-        return self._put(en_out, ain + m.noise(n) * 0.25, rate, i0, True)
+        # the ref channel shows the wave only if it is on EN_AIN (TP6); elsewhere, that DC level
+        ref = ain if m.ref_probe[0] == "en_ain" else np.full(n, m.ref_value())
+        return self._put(en_out, ref + m.noise(n) * 0.25, rate, i0, True)
 
     def _psrr_capture(self, rate, n, stimulus) -> Capture:
         """W1 sine through the buffer onto VIN; VOUT carries it attenuated by the PSRR (free-running)."""
@@ -589,6 +607,7 @@ class SimAnalogDiscovery:
     def set_dc(self, channel: int, volts: float) -> None:
         if abs(volts) > 5.0:
             raise InstrumentError("AD2 wavegen is limited to +/-5 V")
+        self.m.awg_wave.pop(channel, None)  # DC replaces a wave, as on the AD2
         self.m.awg_v[channel] = volts
 
     def set_sine(self, channel: int, *, frequency: float, low: float, high: float) -> None:

@@ -149,6 +149,7 @@ def test_vin_from_psu_obeys_psu_v_max_when_it_is_below_vin_max(jafwak):
         "line_tran",
         "psrr",
         "en_sine",
+        "en_current",
         "startup",
         "iq",
         "buffer",

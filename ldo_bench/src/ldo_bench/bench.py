@@ -561,13 +561,25 @@ class Bench:
         wavegen's 5 V); its bottom may go to -0.3 V, the usual input clamp limit. Every shape
         peaks exactly at low and high, so the same limits apply to each.
         """
-        limit = self.wavegen_limit
-        if not -0.3 <= low < high <= limit + 1e-9:
-            raise InstrumentError(
-                f"refusing to drive EN_AIN with a {low:.3f}..{high:.3f} V {shape} (limit -0.3..{limit} V)"
-            )
+        self._en_ain_ok(low, high, f"a {low:.3f}..{high:.3f} V {shape}")
         self.awg.set_wave(channel, shape=shape, frequency=frequency, low=low, high=high)
         self._awg_on = True
+
+    def en_ain_dc(self, channel: int, volts: float) -> None:
+        """Wavegen DC level (V) into EN_AIN (enable-current's static point), within en_ain_sine's limits.
+
+        Holds EN_AIN at a defined level: off, the wavegen would leave it floating, and a floating
+        input sits between the thresholds and draws shoot-through current.
+        """
+        self._en_ain_ok(volts, volts, f"{volts:.3f} V DC")
+        self.awg.set_dc(channel, volts)
+        self._awg_on = True
+
+    def _en_ain_ok(self, low: float, high: float, what: str) -> None:
+        """Refuse a level on EN_AIN outside -0.3 V .. min(dut.vin_max, 5 V)."""
+        limit = self.wavegen_limit
+        if not (-0.3 <= low <= high <= limit + 1e-9):
+            raise InstrumentError(f"refusing to drive EN_AIN with {what} (limit -0.3..{limit} V)")
 
     def wavegen_off(self, channel: int | None = None) -> None:
         """Turn off a wavegen channel (default ad2.wavegen_channel).

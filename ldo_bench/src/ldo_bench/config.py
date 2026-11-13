@@ -14,6 +14,7 @@ again at run time (see bench.py).
 
 from __future__ import annotations
 
+import math
 import tomllib
 from pathlib import Path
 from typing import Literal
@@ -578,6 +579,63 @@ class EnSineConfig(_Model):
         return self
 
 
+EN_CURRENT_MAX_FREQUENCY = 1e6  # Hz: enable-current's top frequency (the AD2's square still has sharp edges)
+
+
+class EnCurrentConfig(_Model):
+    """[en_current] (enable-current): the enable block's EN_VDD current against the frequency of a
+    square on EN_AIN, from the DMM in place of J1 9-11.
+
+    Each input cycle moves a fixed charge through the block (its nodes charging, shoot-through at
+    each threshold crossing), so its average current is about I_static + Q f: a DC current the DMM
+    can read even though it can't catch each crossing's spike.
+    """
+
+    vin: float = Field(gt=0, description="PSU on VIN (feeds EN_VDD through the DMM) (V)")
+    fstart: float = Field(10.0, gt=0, description="Lowest square frequency (Hz)")
+    fstop: float = Field(
+        EN_CURRENT_MAX_FREQUENCY, gt=0, description="Highest square frequency (Hz), at most 1 MHz"
+    )
+    low: float = Field(0.0, ge=-0.3, description="Square low level (V)")
+    high: float | None = Field(None, gt=0, description="Square high level (V); None = vin (EN_VDD)")
+    readings: int = Field(5, ge=3, description="DMM readings averaged per point (and for the zero)")
+    settle_time: float = Field(0.5, ge=0, description="Wait after each frequency change (s)")
+    dmm_range: float = Field(0.01, gt=0, description="DMM DC amps range (A); fixed, never autorange")
+    nplc: Literal[0.02, 0.2, 1, 10, 100] | None = Field(None, description="None = dmm.nplc")
+    wavegen_channel: Literal[1, 2] = Field(1, description="AD2 W1/W2 -> EN_FG SMA (J2)")
+    swing_tolerance: float = Field(
+        0.3, gt=0, lt=1, description="EN_AIN's measured swing must be within this fraction of the square's"
+    )
+
+    @property
+    def square_high(self) -> float:
+        """Square high level actually used (V): `high`, or `vin` if not set."""
+        return self.vin if self.high is None else self.high
+
+    @property
+    def frequencies(self) -> list[float]:
+        """The sweep (Hz): 1, 2, 5 per decade from fstart up to fstop, with fstop itself last."""
+        out = []
+        decade = 10.0 ** math.floor(math.log10(self.fstart))
+        while decade <= self.fstop:
+            for m in (1, 2, 5):
+                f = float(m * decade)
+                if self.fstart * (1 - 1e-9) <= f < self.fstop * (1 - 1e-9):
+                    out.append(f)
+            decade *= 10
+        return [*out, float(self.fstop)]
+
+    @model_validator(mode="after")
+    def _check(self) -> EnCurrentConfig:
+        if self.fstop > EN_CURRENT_MAX_FREQUENCY:
+            raise ValueError(f"en_current.fstop ({self.fstop:g} Hz) is above 1 MHz")
+        if self.fstop <= self.fstart:
+            raise ValueError("en_current.fstop must be above fstart")
+        if self.square_high <= self.low:
+            raise ValueError("en_current.high must be above en_current.low")
+        return self
+
+
 class StartupConfig(_Model):
     """[startup] (enable-startup): step the enable line and record VOUT and the BGR (VREF) / supply current."""
 
@@ -655,6 +713,11 @@ class IqConfig(_Model):
     def _check(self) -> IqConfig:
         if self.vin_stop < self.vin_start:
             raise ValueError("iq.vin_stop must be at or above vin_start")
+        if self.rail == "en":
+            raise ValueError(
+                "iq can't measure EN_VDD: its static current (~0.3 nA) is under the DMM's 10 nA count. "
+                "Use enable-current (EN_VDD current against the frequency of a square on EN_AIN)."
+            )
         if self.method == "shunt" and self.rail != "total":
             raise ValueError("iq.method 'shunt' measures the total input current: use rail = 'total'")
         if not self.states:
@@ -892,6 +955,7 @@ class BenchConfig(_Model):
     enable: EnableConfig = EnableConfig()
     board: BoardConfig = BoardConfig()
     en_sine: EnSineConfig | None = None
+    en_current: EnCurrentConfig | None = None
     startup: StartupConfig | None = None
     iq: IqConfig | None = None
     psrr: PsrrConfig | None = None
@@ -939,6 +1003,7 @@ class BenchConfig(_Model):
           buffer_headroom above VIN's peak, or the BUF634 clips and the step / sine on VIN is wrong.
         - vref (only if [vref] is present): its own PSU output, v_max within dut.vin_max, and the
           external reference within vref.above_vin of every test's lowest VIN.
+        - en_sine / en_current: the wave into EN_AIN within dut.vin_max (EN_AIN runs from VIN).
         - enable-pin clashes: tests that drive the enable line (en_sine, startup, iq 'disabled')
           would fight the load bank if an enable DIO pin were also a load bank pin.
         """
@@ -1007,6 +1072,13 @@ class BenchConfig(_Model):
             if es.sine_high > self.dut.vin_max:
                 raise ValueError(
                     f"en_sine.high ({es.sine_high} V) exceeds dut.vin_max ({self.dut.vin_max} V)"
+                )
+        if self.en_current:
+            ec = self.en_current
+            vin_ok("en_current.vin", ec.vin)
+            if ec.square_high > self.dut.vin_max:  # into EN_AIN, which runs from VIN
+                raise ValueError(
+                    f"en_current.high ({ec.square_high} V) exceeds dut.vin_max ({self.dut.vin_max} V)"
                 )
         if self.startup:
             vin_ok("startup.vin", self.startup.vin)

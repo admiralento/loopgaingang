@@ -170,7 +170,7 @@ def test_plot_shows_vout_at_outa_for_every_point(jafwak):
     shows the rail was powered through the meter; ~0 V when disabled shows the enable worked."""
     from ldo_bench import plotting
 
-    res, _ = run_iq(jafwak, method="series", rail="en", check_code=0)
+    res, _ = run_iq(jafwak, method="series", rail="bgr", check_code=0)
     fig = iq.plot(res, "x")
     vout_axes = [ax for ax in fig.axes if ax.get_ylabel().startswith("VOUT at OUTA")]
     assert len(vout_axes) == len(res.states) == 2

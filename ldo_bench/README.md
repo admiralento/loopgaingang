@@ -12,6 +12,7 @@ Bench automation for characterizing our LDO (the JAFWAK board) and the TPS7A7001
 | PSRR | `psrr` | VIN ripple rejection, 100 Hz – 1 MHz |
 | Quiescent current | `iq` | supply current enabled / disabled vs VIN |
 | Enable thresholds | `enable-sine` | enable comparator VT+, VT-, hysteresis; `--shape square`: EN_AIN → EN_OUT propagation delay (JAFWAK) |
+| Enable switching current | `enable-current` | EN_VDD current (DMM in place of J1 9-11) vs the frequency of a square on EN_AIN, 10 Hz – 1 MHz → charge per cycle (JAFWAK) |
 | Startup | `enable-startup` | VOUT / VREF / current after the enable edge (JAFWAK) |
 | Temperature | `temp` | TMP235 (J13 pin 5), VREF and VOUT over time → tempco from stable plateaus (JAFWAK) |
 | Bench checks | `discover`, `psu-check`, `loadbank-check`, `smoke` | instruments found, supply accuracy, load bank wiring, quick power-up |
@@ -76,6 +77,7 @@ uv run ldo-bench iq                                      # --method series --rai
 uv run ldo-bench vref-line                               # --high 1.9 --low 1.4 --step 0.02
 uv run ldo-bench enable-sine                             # --freq 1e3, or --shape triangle --freq 1 (slow ramp)
 uv run ldo-bench enable-sine --shape square --freq 1e5     # propagation delay, rise / fall at 100 MS/s
+uv run ldo-bench enable-current                          # --fstart 10 --fstop 1e6 (EN_VDD current vs frequency)
 uv run ldo-bench temp                                    # --minutes 30 --interval 2 (Ctrl-C ends it, data kept)
 uv run ldo-bench enable-startup                          # --ch2 iin
 uv run ldo-bench load-reg --vref ext                     # JP2 removed: PSU OUT2 on VREF_IN
@@ -154,6 +156,7 @@ Each run writes a folder under `results/<test>/`, e.g. `results/load-tran/202611
 | `buffer-check` (added 2026-11-13) | simulator only: run it first on the reworked board, chip disconnected |
 | `--vref ext` (PSU OUT2 on VREF_IN) and `compare` | simulator only |
 | `vref-line`, `temp`, `enable-sine --shape square`, `--enable dio` (added 2026-11-13) | simulator only |
+| `enable-current` (added 2026-11-13; replaces `iq --rail en`) | simulator only |
 | 54624A over RS-232: load-tran cross-check (averaged capture, readback, time window), demo board | yes (2026-11-10), peaks within 0.8 mV of the AD2 |
 | load-tran supply current check (VIN reaching the board), 54621A/54624A clipping check | yes (2026-11-10): passing, and failing with the supply leads unplugged |
 | supply over RS-232, Prologix adapters | simulator / fake instruments only |

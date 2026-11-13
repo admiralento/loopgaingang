@@ -5,6 +5,8 @@ What was built, what was measured, and what went wrong along the way. Newest ses
 ## 2026-11-13: default config and enable edge plots (no hardware run)
 
 - **Default config:** every command uses `configs/jafwak.toml` unless `-c` or `LDO_BENCH_CONFIG` names another, and prints the config it loaded first. Demo-board runs need `-c configs/demo_board.toml`.
+- **enable-current (new):** EN_VDD's current against the frequency of a 0-VIN square on EN_AIN, 10 Hz to 1 MHz, with the DMM in place of J1 9-11; the slope gives the charge per cycle. It replaces `iq --rail en`, whose ~0.3 nA static current is under the DMM's 10 nA count (now refused). EN_OUT is left unprobed: a scope's ~24 pF would add ~43 µA at 1 MHz.
+- **VDD always powered:** enable-sine's wiring now asks for all four J1 rails (it said "the others as you like"); VDD (J1 5-7) must be up in every test, as only the VDD ring has ESD clamps.
 - **iq plot:** VOUT at OUTA against VIN beside each current panel, so a small current can be told apart from a meter that isn't in the path (the LDO doesn't come up) or an enable that doesn't work.
 - **enable-sine edges:** the plot adds one rising and one falling output edge close up, every sample marked, with the 10 % / 90 % levels. A sine or triangle run whose rise / fall times are only bounds (2 kS/s at 1 Hz, 2 MS/s at 1 kHz) says so and points to `--shape square --freq 1e5` (100 MS/s), which resolves them to 20 ns.
 

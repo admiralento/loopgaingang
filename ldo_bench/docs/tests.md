@@ -27,7 +27,7 @@ How a run decides it measured the board, and what `_INVALID` means, is covered i
   - `line-reg`
   - `load-tran`
 - **JAFWAK:** no valid run yet. Its load-transient runs had the scope off VOUT (see [bench-log.md](bench-log.md)).
-- **Simulator only so far:** `line-tran`, `enable-startup`, `iq` and `psrr` (on the split-supply U2 too); `buffer-check`; `vref-line`, `temp`, `enable-sine --shape square` and `--enable dio` (added 2026-11-13). `enable-sine --shape triangle` ran on JAFWAK on 2026-11-12.
+- **Simulator only so far:** `line-tran`, `enable-startup`, `iq` and `psrr` (on the split-supply U2 too); `buffer-check`; `vref-line`, `temp`, `enable-sine --shape square`, `enable-current` and `--enable dio` (added 2026-11-13). `enable-sine --shape triangle` ran on JAFWAK on 2026-11-12.
 
 Suggested order for a first session on a board:
 1. `discover`
@@ -175,7 +175,7 @@ First bring-up plan, steps I.1–I.5. **Run it before `line-tran` or `psrr`, wit
   - AD2 GND -> board GND
 - **Two methods** (`iq.method`, `--method`):
   - **`shunt`:** DMM DC volts across R13 (0.1 Ω) on the 100 mV range. This is everything drawn from VIN: the LDO, BGR, enable block, the level shifters' low side, and ~1.2 µA into the AD2 scope on VOUT. One count is 1 µA, which is fine for Iq but too coarse for shutdown current.
-  - **`series`:** DMM DC amps (I and LO jacks) in place of one J1 jumper (`--rail bgr|vdd|en|ota`), or between the PSU and VIN_DC (`--rail total`). It uses a fixed range, 10 mA unless `dmm_range` says otherwise, so the zero and every point are read on the same range. One count is 10 nA, so this resolves shutdown current. The meter's burden (~5 Ω on the 10 mA range) drops a little of that rail's voltage.
+  - **`series`:** DMM DC amps (I and LO jacks) in place of one J1 jumper (`--rail bgr|vdd|ota`; EN_VDD's ~0.3 nA is under the 10 nA count, so `--rail en` is refused: use `enable-current`), or between the PSU and VIN_DC (`--rail total`). It uses a fixed range, 10 mA unless `dmm_range` says otherwise, so the zero and every point are read on the same range. One count is 10 nA, so this resolves shutdown current. The meter's burden (~5 Ω on the 10 mA range) drops a little of that rail's voltage.
 - **Does:**
   1. Switches the supply output off (it may have been left on), then reads the DMM: the zero (offset, thermal EMF). It's subtracted from every point. The spread of those readings (at least 3) sets the floor, never below one DMM count at the chosen NPLC (1 µV on 100 mV at 10 NPLC; coarser at shorter integration times).
   2. Shunt method: switches in a known load (`check_code`, 4.8 mA) once, to prove the DMM sees the current through R13.
@@ -344,6 +344,30 @@ Without `[buffer]` (the demo board) line-tran and psrr use the single-rail path 
   - `--freq 1e3`
   - `--captures 8`
 - **Config:** `[en_sine]`.
+
+### `enable-current`: the enable block's current against switching frequency
+- **Why:** EN_VDD's static current (~0.3 nA, PEX) is under the DMM's 10 nA count, and the ~1.6 mA spike at each threshold crossing is far too short for it. But each input cycle moves about the same charge Q through the block, so its average current is I_static + Q f, a DC current the DMM reads. The slope gives Q.
+- **Wiring:**
+  - PSU -> VIN_DC (JP4 to DC)
+  - Remove the J1 9-11 jumper (EN_VDD); DMM I (3A/mA jack) -> J1 pin 9, DMM LO (COM) -> J1 pin 11
+  - J1 1-3, 5-7, 13-15 fitted. **VDD (J1 5-7) must be powered in every test:** only the VDD ring has ESD clamps, and a driven pin with VDD off forward-biases them
+  - J8 5-6 (EN_IN = GND; misprinted "HI") and J8 13-14 "HI" (~EN_IN = VIN): the LDO is held off and EN_OUT drives nothing
+  - J6 5-6 "FG"; AD2 W1 -> EN_FG (J2); Scope 2+ -> EN_AIN (TP6), Scope 2- -> GND
+  - **Nothing on EN_OUT (J8 pin 2) or ~EN_OUT (J8 pin 10):** a scope's ~24 pF charged to 1.8 V at 1 MHz is ~43 µA from EN_VDD, more than the block
+- **Does:**
+  1. The DMM zero with the supply off (subtracted) and the floor (3 × its spread, at least one count: 10 nA on 10 mA at 10 NPLC).
+  2. W1 to DC 0 V (EN_AIN never floats), VIN up: the static point.
+  3. A 0-VIN square at 10 Hz to 1 MHz, 1-2-5 per decade (16 points): at each, the DMM current and EN_AIN's swing (scope).
+  4. W1 back to DC 0 V; fits I = I0 + Q f to the points above the floor.
+- **Reports:** current per frequency ("< floor" under it), Q in pC per cycle and the equivalent capacitance Q / VIN.
+- **Plot:** current against frequency, log-log, with the fit and the floor band (points under it are bounds); EN_AIN's swing against frequency.
+- **Setup checks:**
+  - EN_AIN not swinging like the square (scope not on TP6, J6 not at 5-6, W1 not on EN_FG)
+  - the current at the top frequency not above the static point by more than the floor (DMM not in the path, or J1 9-11 left fitted beside it)
+  - a DMM overload (at the zero: every current is NaN)
+- **Square only, VOUT not read:** the LDO's startup is far slower than the square, and it is held off anyway.
+- **Options:** `--fstart 10 --fstop 1e6` (at most 1 MHz).
+- **Config:** `[en_current]`.
 
 ### `enable-startup`: turn-on and turn-off through the enable path
 - **Wiring:**

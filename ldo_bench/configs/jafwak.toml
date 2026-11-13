@@ -175,6 +175,15 @@ low = 0.0
 cycles = 4
 captures = 8
 
+[en_current]                 # enable block's EN_VDD current vs frequency: DMM in place of J1 9-11, square on EN_AIN
+vin = 1.8                    # VIN -> EN_VDD through the DMM
+fstart = 10                  # Hz; 1, 2, 5 per decade
+fstop = 1e6                  # Hz, at most 1 MHz
+low = 0.0
+# high = 1.8                 # default: vin (EN_VDD)
+readings = 5                 # DMM readings per point (10 NPLC: ~1 s)
+settle_time = 0.5
+
 [startup]                    # EN_CTRL_33 step -> enable block -> EN_IN: VOUT + VREF (or current) timing
 vin = 1.8
 load_code = 0
@@ -193,7 +202,7 @@ settle_fraction = 0.02
 [iq]                         # quiescent / shutdown current vs VIN, no load, from the DMM
 method = "shunt"             # "shunt": DMM DCV across R13 (J13.1-J13.2), total input current, ~1 uA counts
                              # "series": DMM DCI in place of a J1 jumper (rail below), 10 nA counts
-rail = "total"               # series only: "total" (PSU -> DMM -> VIN_DC), "bgr" 1-3, "vdd" 5-7, "en" 9-11, "ota" 13-15
+rail = "total"               # series only: "total" (PSU -> DMM -> VIN_DC), "bgr" 1-3, "vdd" 5-7, "ota" 13-15 (EN_VDD: use enable-current)
 sense_ohm = 0.1              # R13
 vin_start = 1.4
 vin_stop = 1.9               # = dut.vin_max

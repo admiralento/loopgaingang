@@ -116,5 +116,9 @@ J1_RAILS = {
 
 
 def j1_rails(skip: str | None = None) -> list[str]:
-    """One line per J1 rail jumper (the ON column), leaving out `skip` (the one the DMM replaces)."""
+    """One line per J1 rail jumper (the ON column), leaving out `skip` (the one the DMM replaces).
+
+    VDD (J1 5-7) must be powered in every test: only the VDD ring has ESD clamps, and with VDD off
+    a driven pin forward-biases them. Leave it out only where the DMM carries VDD (iq --rail vdd).
+    """
     return [f"Fit J1 {pins} ({name} from INB)" for key, (name, pins) in J1_RAILS.items() if key != skip]
