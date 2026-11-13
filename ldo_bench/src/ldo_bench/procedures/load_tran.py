@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from ldo_bench import wiring as w
 from ldo_bench.analysis import SettlingResult, settling_analysis
 from ldo_bench.bench import Bench
 from ldo_bench.config import AnalysisConfig, LoadTranConfig
@@ -216,14 +217,16 @@ def trigger_setup(bench: Bench, lt: LoadTranConfig) -> tuple[int, bool]:
 
 def wiring(bench: Bench, pin: int) -> list[str]:
     """Wiring lines shown before the run; `pin` is the trigger DIO from trigger_setup."""
-    a, lb = bench.cfg.ad2, bench.cfg.loadbank
-    bit = lb.dio_pins.index(pin)
-    return [
-        "PSU -> VIN",
-        f"Scope {a.vout_channel}+ -> VOUT at the output pins, {a.vout_channel}- -> GND",
-        f"Scope {a.ref_channel}+ -> DIO {pin} (load bank bit B{bit}, trigger), {a.ref_channel}- -> GND",
-        f"DIO {lb.dio_pins} -> load bank bits B0..B{len(lb.dio_pins) - 1}, AD2 GND -> board GND",
+    cfg = bench.cfg
+    bit = w.bank_bits(cfg)[cfg.loadbank.dio_pins.index(pin)]
+    lines = [
+        *w.psu_on_vin(cfg),
+        w.scope_vout(cfg, "short ground lead"),
+        w.scope(cfg, "ref", bit, note=f"DIO {pin}, the trigger"),
     ]
+    if not bench.enable_dio:
+        lines += w.enable_static(cfg)
+    return [*lines, *w.load_bank(cfg), w.ad2_gnd(cfg)]
 
 
 def run(bench: Bench, lt: LoadTranConfig, an: AnalysisConfig) -> LoadTranResult:

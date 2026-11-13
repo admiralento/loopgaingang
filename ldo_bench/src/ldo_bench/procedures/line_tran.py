@@ -40,6 +40,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from ldo_bench import wiring as w
 from ldo_bench.analysis import SettlingResult, settling_analysis
 from ldo_bench.bench import Bench
 from ldo_bench.config import AnalysisConfig, LineTranConfig
@@ -195,16 +196,17 @@ class LineTranResult:
         return "\n".join(lines)
 
 
-def split_wiring(bench: Bench) -> list[str]:
-    """Wiring for the split-supply buffer ([buffer], JAFWAK silkscreen labels)."""
-    a, bu, n = bench.cfg.ad2, bench.cfg.buffer, bench.cfg.psu.channel
-    return [
-        f"PSU OUT{n} + -> VS_BUFF (J4), OUT{n} - -> GND (J11). NOT on VIN_DC (J7): VS_BUFF goes to "
-        f"{bench.cfg.psu.v_max:g} V max",
-        f"PSU OUT{bu.channel} REVERSED: OUT{bu.channel} + -> GND, OUT{bu.channel} - -> U2 pin 4 "
-        f"(-{bu.v_minus:g} V), 100 nF at the pin",
-        f'AD2 W{a.wavegen_channel} -> VIN_FG (J3); JP4 1-2 "FG" (VIN from U2); nothing on VIN_DC (J7)',
+def buffer_wiring(bench: Bench, load_code: int, note: str = "") -> list[str]:
+    """Wiring for line-tran and psrr (split or single-rail buffer), one connection per line."""
+    cfg = bench.cfg
+    lines = [
+        *w.buffer_supply(cfg),
+        w.scope_vout(cfg, note),
+        w.scope_vin(cfg, "VIN at the LDO input; the trigger"),
     ]
+    if load_code:
+        lines += w.load_bank(cfg, supply_given=cfg.buffer is not None)  # the PSU powers VS_BUFF here
+    return [*lines, w.ad2_gnd(cfg)]
 
 
 def buffer_up(bench: Bench, rail: float) -> None:
@@ -232,30 +234,9 @@ def buffer_down(bench: Bench) -> None:
         bench.wavegen_off()
 
 
-def wiring(bench: Bench) -> list[str]:
-    """Wiring lines shown before the run (the load bank line only if a load code is set)."""
-    a, lb = bench.cfg.ad2, bench.cfg.loadbank
-    if bench.cfg.buffer is not None:
-        lines = [
-            *split_wiring(bench),
-            f"Scope {a.vout_channel}+ -> J13 pin 4 (OUTA), Scope {a.ref_channel}+ -> J13 pin 1 (INA) (VIN, trigger); "
-            f"both - -> J13 pin 6 (GND)",
-        ]
-        if bench.cfg.line_tran and bench.cfg.line_tran.load_code:
-            lines.append(
-                f'DIO {lb.dio_pins} -> J13 pins 7..15 (B0..B4); J10 "LOAD" fitted (VS_BUFF is up first)'
-            )
-        return lines
-    lines = [
-        f"PSU OUT{bench.cfg.psu.channel} -> buffer rail VS_BUFF / VDD_BUF and GND. NOT on VIN: "
-        "the rail goes above the LDO's VIN limit",
-        f"AD2 W{a.wavegen_channel} -> buffer input SMA (VIN_FG / V_SIG); buffer output onto VIN (JP4)",
-        f"Scope {a.vout_channel}+ -> VOUT at the output pins, {a.vout_channel}- -> GND",
-        f"Scope {a.ref_channel}+ -> VIN at the LDO input (trigger + VIN level), {a.ref_channel}- -> GND",
-    ]
-    if bench.cfg.line_tran and bench.cfg.line_tran.load_code:
-        lines.append(f"DIO {lb.dio_pins} -> load bank bits B0..B{len(lb.dio_pins) - 1}, AD2 GND -> board GND")
-    return lines
+def wiring(bench: Bench, lt: LineTranConfig) -> list[str]:
+    """Wiring lines shown before the run."""
+    return buffer_wiring(bench, lt.load_code)
 
 
 PROOF_FOLLOW = 0.5  # VIN must move by at least this fraction of the W1 proof step
@@ -415,7 +396,7 @@ def run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig) -> LineTranResult:
     and dut.vin_max raise InstrumentError (the run stops); everything else is recorded as issues.
     """
     a = bench.cfg.ad2
-    bench.confirm_wiring("line transient", wiring(bench), ref_probe=("vin", 0), psu_to="rail")
+    bench.confirm_wiring("line transient", wiring(bench, lt), ref_probe=("vin", 0), psu_to="rail")
     setups = {
         a.vout_channel: ChannelSetup(a.vout.range, a.vout.offset),
         a.ref_channel: ChannelSetup(a.ref.range, a.ref.offset),

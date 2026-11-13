@@ -53,6 +53,12 @@ ref_channel = 2
 vout_range = 0.16            # V full scale (20 mV/div) centred on vout_nominal
 points = 2000
 
+[board]                      # the points the wiring lines name (TPS7A7001 EVM + Switched_R_Load_Bank)
+vout_probe = "TP4 (OUT_S2: /LDO_VOUT, before R5)"  # read from the PCB file; confirm on the board
+dmm_vout = "TP4 (OUT_S2)"
+bank_bits = ["load bank J0", "load bank J1", "load bank J2", "load bank J3", "load bank J4"]
+ad2_gnd = "load bank GND (J6) and board GND"
+
 [loadbank]
 # Switched_R_Load_Bank: R1..R6, B0 = LSB. 125 ohm || 125 ohm on bit 2.
 # Current per bit at 1.0 V: 4.0, 8.0, 16.0, 31.6, 64.9 mA  (all on: ~125 mA)

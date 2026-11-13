@@ -30,6 +30,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from ldo_bench import plotting
+from ldo_bench import wiring as w
 from ldo_bench.bench import Bench
 from ldo_bench.config import LoadBankCheckConfig
 
@@ -116,9 +117,9 @@ def run(bench: Bench, lc: LoadBankCheckConfig) -> LoadBankCheckResult:
     bench.confirm_wiring(
         "load bank check (no LDO)",
         [
-            f"PSU OUT{ch} + -> load bank VIN (J5), PSU - -> load bank GND (J6)",
-            f"AD2 DIO {lb.dio_pins} -> load bank J0..J{len(lb.dio_pins) - 1}",
-            "AD2 GND -> load bank GND (the FET gates are driven relative to it)",
+            *w.psu(bench.cfg, "load bank VIN (J5)", "load bank GND (J6)"),
+            *(f"AD2 DIO {p} -> load bank J{k}" for k, p in enumerate(lb.dio_pins)),
+            "AD2 GND -> load bank GND (J6) (the FET gates are driven relative to it)",
         ],
         ref_probe=("vin", 0),
         bank_on_psu=True,

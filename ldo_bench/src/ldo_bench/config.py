@@ -479,6 +479,48 @@ class LoadTranConfig(TransientCaptureConfig):
     dio_high_level: float = Field(3.3, gt=0, description="DIO logic-high voltage, for the trigger level")
 
 
+class BoardConfig(_Model):
+    """[board]: where things connect on this board, as the wiring lines name them.
+
+    Each value is a point on the board: on JAFWAK the silkscreen label with its connector and pin
+    (e.g. "J13 pin 4 (OUTA)"). The defaults are plain names for a board described no further. The
+    wiring lines are built from these in wiring.py, one connection per line.
+    """
+
+    vin_dc: str = Field("VIN (DC input)", description="Where the PSU's + goes for the DC tests")
+    supply_gnd: str = Field("GND", description="Where the PSU's - goes")
+    dc_jumpers: list[str] = Field(default_factory=list, description="Jumpers that route VIN from vin_dc")
+    vin_probe: str = Field("VIN at the board", description="Scope point for VIN")
+    vout_probe: str = Field("VOUT at the output pins", description="Scope point for VOUT")
+    probe_gnd: str = Field("GND next to VOUT", description="Scope ground point")
+    dmm_vout: str = Field("VOUT at the output pins", description="DMM V point for VOUT")
+    dmm_gnd: str = Field("GND at the output pins", description="DMM COM point")
+    bank_bits: list[str] = Field(
+        default_factory=list,
+        description="Load bank gate inputs, one per loadbank.dio_pins; [] = 'load bank B<k>'",
+    )
+    bank_supply: list[str] = Field(
+        default_factory=list,
+        description="Connections that power the load bank / its switches by hand (left out when the PSU already does)",
+    )
+    bank_jumpers: list[str] = Field(default_factory=list, description="Jumpers that connect the load bank")
+    ad2_gnd: str = Field("board GND", description="Where AD2 GND goes")
+    vs_buff: str = Field("buffer rail (VS_BUFF / VDD_BUF)", description="The buffer's supply input")
+    buffer_input: str = Field("buffer input SMA (VIN_FG)", description="Where W1 drives the buffer")
+    buffer_jumpers: list[str] = Field(
+        default_factory=lambda: ["JP4 to the buffer"], description="Jumpers that route VIN from the buffer"
+    )
+    enable_in: str = Field("EN_CTRL_33", description="Where the enable DIO goes")
+    enable_in_n: str = Field("~EN_CTRL_33", description="Where the inverted enable DIO goes")
+    enable_vio: str = Field("V_33", description="Where AD2 V+ (the level shifters' 3.3 V) goes")
+    enable_jumpers: list[str] = Field(
+        default_factory=list, description="Jumpers for the AD2-driven enable path"
+    )
+    static_enable_jumpers: list[str] = Field(
+        default_factory=list, description="Jumpers that tie the LDO on (the DC tests without --enable dio)"
+    )
+
+
 class EnableConfig(_Model):
     """[enable]: how the AD2 drives the board's enable path (enable-startup, iq 'disabled', --enable dio).
 
@@ -863,6 +905,7 @@ class BenchConfig(_Model):
     load_tran: LoadTranConfig | None = None
     line_tran: LineTranConfig | None = None
     enable: EnableConfig = EnableConfig()
+    board: BoardConfig = BoardConfig()
     en_sine: EnSineConfig | None = None
     startup: StartupConfig | None = None
     iq: IqConfig | None = None
@@ -915,6 +958,10 @@ class BenchConfig(_Model):
         max_code = self.loadbank.max_code
 
         lb = self.loadbank
+        if self.board.bank_bits and len(self.board.bank_bits) != len(lb.dio_pins):
+            raise ValueError(
+                f"board.bank_bits has {len(self.board.bank_bits)} entries; loadbank.dio_pins has {len(lb.dio_pins)}"
+            )
 
         def code_ok(name: str, code: int) -> None:
             if not 0 <= code <= max_code:

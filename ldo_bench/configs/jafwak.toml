@@ -127,6 +127,39 @@ pre_trigger = 0.2
 averages = 16
 edges = ["rising", "falling"]
 
+[board]                      # every wiring line names these: silkscreen label + connector pin (PCB file, 2026-11-13)
+vin_dc = "VIN_DC (J7)"
+supply_gnd = "GND (J11)"
+dc_jumpers = ['JP4 2-3 "DC" (VIN from VIN_DC; nothing on VIN_FG (J3))']
+vin_probe = "J13 pin 1 (INA)"
+vout_probe = "J13 pin 4 (OUTA)"  # before R1 (0.1 Ohm): the chip's own output
+probe_gnd = "J13 pin 6 (GND)"
+dmm_vout = "OUTA (TP4)"
+dmm_gnd = "GND (TP12)"
+bank_bits = ["J13 pin 7 (B0)", "J13 pin 9 (B1)", "J13 pin 11 (B2)", "J13 pin 13 (B3)", "J13 pin 15 (B4)"]
+bank_supply = [               # VS_BUFF also feeds U4 and the TMP235; on BEFORE J10, or VOUT back-powers U4
+    'Separate supply + (5.0 V) -> VS_BUFF (J4), on before J10 "LOAD" goes in',
+    "Separate supply - -> GND (J12)",
+]
+bank_jumpers = ['J10 "LOAD" (VOUT -> load cell)']
+ad2_gnd = "J13 pin 8 (GND)"
+vs_buff = "VS_BUFF (J4)"
+buffer_input = "VIN_FG (J3)"
+buffer_jumpers = ['JP4 1-2 "FG" (VIN from U2; nothing on VIN_DC (J7))']
+enable_in = "J13 pin 12 (EN)"
+enable_in_n = "J13 pin 10 (~EN)"
+enable_vio = "J13 pin 14 (VIO)"
+enable_jumpers = [
+    'J6 7-8 "EN" (EN_AIN from the AD2; nothing else on J6)',
+    'J8 1-2 "LDO" (EN_OUT -> EN_IN)',
+    'J8 9-10 "LDO" (~EN_OUT -> ~EN_IN)',
+]
+static_enable_jumpers = [
+    'J6 1-2 "HI" (EN_AIN = VIN; nothing else on J6)',
+    'J8 1-2 "LDO" (EN_OUT -> EN_IN)',
+    'J8 9-10 "LDO" (~EN_OUT -> ~EN_IN)',
+]
+
 [enable]                     # how the AD2 drives the enable path (J13)
 dio_pin = 5                  # AD2 DIO 5 -> J13.12 EN_CTRL_33 -> U6 -> EN_CTRL_18
 dio_pin_n = 6                # AD2 DIO 6 -> J13.10 ~EN_CTRL_33 -> U5 -> ~EN_CTRL_18 (driven inverted)

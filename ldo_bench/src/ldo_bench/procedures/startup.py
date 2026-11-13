@@ -30,6 +30,7 @@ from dataclasses import dataclass, field, replace
 import numpy as np
 
 from ldo_bench import plotting
+from ldo_bench import wiring as w
 from ldo_bench.analysis import StepMetrics, step_metrics
 from ldo_bench.bench import Bench
 from ldo_bench.config import StartupConfig
@@ -167,26 +168,23 @@ class StartupResult:
 
 
 def wiring(bench: Bench, su: StartupConfig) -> list[str]:
-    """Wiring lines shown before the run; the ch2 line depends on su.ch2."""
-    a, e, lb = bench.cfg.ad2, bench.cfg.enable, bench.cfg.loadbank
+    """Wiring lines shown before the run, one connection per line; the scope 2 line depends on su.ch2."""
+    cfg = bench.cfg
     ch2 = {
-        "vref": f"Scope {a.ref_channel}+ -> TP3 (VREF, the BGR output), {a.ref_channel}- -> GND; JP2 closed",
-        "iin": f"Scope {a.ref_channel}+ -> J13.1 (VIN), {a.ref_channel}- -> J13.2 (INB): across R13, input current",
-        "iout": f"Scope {a.ref_channel}+ -> J13.4 (OUTA), {a.ref_channel}- -> J13.3 (VOUT): across R1, output current",
+        "vref": [w.scope(cfg, "ref", "VREF (TP3)", note="the BGR output"), "Fit JP2 (VREF_OUT -> VREF_IN)"],
+        "iin": [w.scope(cfg, "ref", "J13 pin 1 (INA)", "J13 pin 2 (INB)", "across R13: input current")],
+        "iout": [w.scope(cfg, "ref", "J13 pin 4 (OUTA)", "J13 pin 3 (OUTB)", "across R1: output current")],
     }[su.ch2]
     lines = [
-        "PSU -> VIN_DC (JP4 to DC); J1: each rail you want powered (BGR_VDD 1-3, VDD 5-7, EN_VDD 9-11, OTA_VDD 13-15)",
-        "Enable path: J6 7-8 (EN_CTRL_18 -> EN_AIN), J8 1-2 (EN_OUT -> EN_IN), J8 9-10 (~EN_OUT -> ~EN_IN)",
-        f"AD2 DIO {e.dio_pin} -> J13.12 (EN_CTRL_33)"
-        + (f", DIO {e.dio_pin_n} -> J13.10 (~EN_CTRL_33)" if e.dio_pin_n is not None else ""),
-        ("AD2 V+ -> J13.14 (V_33)" if e.v33 is not None else "3.3 V supply -> J13.14 (V_33)")
-        + ", AD2 GND -> board GND",
-        f"Scope {a.vout_channel}+ -> J13.3 (VOUT), {a.vout_channel}- -> GND",
-        ch2,
+        *w.psu_on_vin(cfg),
+        *w.j1_rails(),
+        *w.enable_dio(cfg),
+        w.scope_vout(cfg),
+        *ch2,
     ]
     if su.load_code:
-        lines.append(f"DIO {lb.dio_pins} -> load bank bits B0..B{len(lb.dio_pins) - 1}")
-    return lines
+        lines += w.load_bank(cfg)
+    return [*lines, w.ad2_gnd(cfg)]
 
 
 def _capture_edge(bench: Bench, su: StartupConfig, setups, edge: str) -> tuple[Capture, list[str]]:

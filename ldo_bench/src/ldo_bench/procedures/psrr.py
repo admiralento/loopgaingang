@@ -52,8 +52,8 @@ from ldo_bench.procedures.line_tran import (
     _vin_limit,
     buffer_down,
     buffer_up,
+    buffer_wiring,
     input_idle,
-    split_wiring,
 )
 
 log = logging.getLogger(__name__)
@@ -318,29 +318,8 @@ class PsrrResult:
 
 
 def wiring(bench: Bench, ps: PsrrConfig) -> list[str]:
-    """Wiring lines shown before the run (the load bank line only if a load code is set)."""
-    a, lb = bench.cfg.ad2, bench.cfg.loadbank
-    if bench.cfg.buffer is not None:
-        lines = [
-            *split_wiring(bench),
-            f"Scope {a.vout_channel}+ -> J13 pin 4 (OUTA) (short ground lead), Scope {a.ref_channel}+ -> J13 pin 1 "
-            f"(INA); both - -> J13 pin 6 (GND)",
-        ]
-        if ps.load_code:
-            lines.append(
-                f'DIO {lb.dio_pins} -> J13 pins 7..15 (B0..B4); J10 "LOAD" fitted (VS_BUFF is up first)'
-            )
-        return lines
-    lines = [
-        f"PSU OUT{bench.cfg.psu.channel} -> buffer rail VS_BUFF / VDD_BUF and GND. NOT on VIN: "
-        "the rail goes above the LDO's VIN limit",
-        f"AD2 W{a.wavegen_channel} -> buffer input SMA (VIN_FG / V_SIG); buffer output onto VIN (JP4)",
-        f"Scope {a.vout_channel}+ -> VOUT at the output pins, {a.vout_channel}- -> GND (short ground lead)",
-        f"Scope {a.ref_channel}+ -> VIN at the LDO input pins, {a.ref_channel}- -> GND",
-    ]
-    if ps.load_code:
-        lines.append(f"DIO {lb.dio_pins} -> load bank bits B0..B{len(lb.dio_pins) - 1}, AD2 GND -> board GND")
-    return lines
+    """Wiring lines shown before the run."""
+    return buffer_wiring(bench, ps.load_code, "short ground lead")
 
 
 def _check_peak(bench: Bench, tone: Tone, f: float) -> None:

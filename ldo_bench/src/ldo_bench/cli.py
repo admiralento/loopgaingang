@@ -33,6 +33,7 @@ from typing import Annotated
 import typer
 from pydantic import ValidationError
 
+from ldo_bench import wiring
 from ldo_bench.bench import Bench, open_bench
 from ldo_bench.config import BenchConfig, load_config
 from ldo_bench.instruments.base import InstrumentError
@@ -294,13 +295,16 @@ def _smoke(bench: Bench, vin: float) -> None:
     """Body of `smoke`: VIN on, print a table at code 0 and at the heaviest allowed code, load off."""
     if bench.is_sim:
         typer.secho(SIM_BANNER, fg="magenta", bold=True)
-    a = bench.cfg.ad2
+    cfg = bench.cfg
     bench.confirm_wiring(
         "smoke test",
         [
-            "PSU -> VIN",
-            f"Scope {a.vout_channel}+ -> VOUT, Scope {a.ref_channel}+ -> VIN, both - -> GND",
-            f"DIO {bench.cfg.loadbank.dio_pins} -> load bank B0..B{len(bench.cfg.loadbank.dio_pins) - 1}",
+            *wiring.psu_on_vin(cfg),
+            wiring.scope_vout(cfg),
+            wiring.scope_vin(cfg),
+            *([] if bench.enable_dio else wiring.enable_static(cfg)),
+            *wiring.load_bank(cfg),
+            wiring.ad2_gnd(cfg),
         ],
         ref_probe=("vin", 0),
     )

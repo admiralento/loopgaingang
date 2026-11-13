@@ -19,6 +19,7 @@ from typing import Literal
 
 import numpy as np
 
+from ldo_bench import wiring
 from ldo_bench.config import AD2_WAVEGEN_MAX_V, BenchConfig
 from ldo_bench.instruments.base import (
     ChannelSetup,
@@ -192,14 +193,6 @@ class Bench:
             out["xscope"] = self.xscope.idn
         return out
 
-    def vout_wiring(self) -> str:
-        """Wiring line for whatever measures VOUT in the DC tests."""
-        a = self.cfg.ad2
-        line = f"Scope {a.vout_channel}+ -> VOUT at the output pins, {a.vout_channel}- -> GND"
-        if self.dmm is not None:
-            line += "; DMM V+/COM -> VOUT / GND at the output pins (DMM is the VOUT reference)"
-        return line
-
     # --- Wiring -------------------------------------------------------------
     def confirm_wiring(
         self,
@@ -221,7 +214,7 @@ class Bench:
         Raises KeyboardInterrupt if the user answers no, so the run aborts like Ctrl-C.
         """
         if self.enable_dio:
-            lines = [*lines, *self.enable_wiring()]
+            lines = [*lines, *wiring.enable_dio(self.cfg)]
             if en_pin is None:  # the simulated LDO now follows the enable DIO
                 en_pin = self.cfg.enable.dio_pin
         if self.sim_model is not None:
@@ -249,26 +242,13 @@ class Bench:
         if self.vref_external and not self.is_sim:
             self._confirm_jp2()
 
-    def enable_wiring(self) -> list[str]:
-        """Wiring lines for --enable dio (JAFWAK J13 / J6 / J8 labels)."""
-        e = self.cfg.enable
-        pins = f"AD2 DIO {e.dio_pin} -> J13 pin 12 (EN)"
-        if e.dio_pin_n is not None:
-            pins += f", DIO {e.dio_pin_n} -> J13 pin 10 (~EN)"
-        v33 = "AD2 V+ -> J13 pin 14 (VIO)" if e.v33 is not None else "3.3 V on J13 pin 14 (VIO)"
-        return [
-            f"Enable from the AD2: {pins}; {v33}",
-            'Enable path: J6 7-8 "EN" (EN_CTRL_18 -> EN_AIN), J8 1-2 and 9-10 "LDO" '
-            "(EN_OUT -> EN_IN, ~EN_OUT -> ~EN_IN); nothing else on J6",
-        ]
-
     def vref_wiring(self) -> list[str]:
         """Wiring lines for the external reference."""
         n = self.cfg.vref.psu_channel
         return [
-            "JP2 (VREF) REMOVED: VREF_OUT (the BGR) must not be joined to VREF_IN",
-            f"PSU OUT{n} + -> VREF_IN (JP2's VREF_IN pin), OUT{n} - -> GND "
-            f"({self.cfg.vref.external_v} V, set by this run)",
+            "Remove JP2 (VREF): VREF_OUT (the BGR) must not be joined to VREF_IN",
+            f"PSU OUT{n} + -> JP2 pin 1 (VREF_IN) ({self.cfg.vref.external_v} V, set by this run)",
+            f"PSU OUT{n} - -> GND",
         ]
 
     def _confirm_jp2(self) -> None:

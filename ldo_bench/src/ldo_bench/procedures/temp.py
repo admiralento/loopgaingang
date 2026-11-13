@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from ldo_bench import plotting
+from ldo_bench import wiring as w
 from ldo_bench.bench import Bench
 from ldo_bench.config import TempConfig
 from ldo_bench.instruments.base import ChannelSetup
@@ -124,20 +125,23 @@ class TempResult:
 
 
 def wiring(bench: Bench, tc: TempConfig) -> list[str]:
-    """Wiring lines shown before the run (JAFWAK silkscreen labels)."""
-    a = bench.cfg.ad2
+    """Wiring lines shown before the run, one connection per line (JAFWAK)."""
+    cfg = bench.cfg
     lines = [
-        'PSU + -> VIN_DC (J7), PSU - -> GND (J11); JP4 2-3 "DC"; JP2 closed',
-        'VS_BUFF (J4) at 5.0 V from a separate supply (powers the TMP235 on TEMP (TP7)); J10 "LOAD" '
-        "only after VS_BUFF is up",
-        f"Scope {a.ref_channel}+ -> J13 pin 5 (TMP), Scope {a.vout_channel}+ -> J13 pin 4 (OUTA); both - -> J13 pin 6 (GND)",
+        *w.psu_on_vin(cfg),
+        "Fit JP2 (the BGR drives VREF_IN)",
+        *cfg.board.bank_supply,  # VS_BUFF: powers the TMP235 on TEMP (TP7)
+        w.scope(cfg, "ref", "J13 pin 5 (TMP)"),
+        w.scope_vout(cfg),
     ]
     if bench.dmm is not None:
-        lines.append("DMM V / COM -> VREF (TP3) / GND (TP2); Hi-Z input (10 GOhm) if the meter has it")
+        lines.append(w.dmm("VREF (TP3)", "GND (TP2)", "the run sets its input to 10 GOhm"))
     if not bench.enable_dio:
-        lines.append('LDO enabled: J6 1-2 "HI" (EN_AIN = VIN), J8 1-2 and 9-10 "LDO" (or use --enable dio)')
+        lines += w.enable_static(cfg)
+    if tc.load_code:
+        lines += w.load_bank(cfg, supply_given=True)
     lines.append("Optional 1 mA load: 1.2 kOhm from VOUT (J5) to GND (J12)")
-    return lines
+    return [*lines, w.ad2_gnd(cfg)]
 
 
 def run(bench: Bench, tc: TempConfig) -> TempResult:

@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from ldo_bench import plotting
+from ldo_bench import wiring as w
 from ldo_bench.analysis import LineRegulation, dropout_strays, line_regulation
 from ldo_bench.analysis import sweep_points as analysis_sweep
 from ldo_bench.bench import Bench
@@ -117,23 +118,20 @@ def sweep_points(vl: VrefLineConfig) -> np.ndarray:
 
 
 def wiring(bench: Bench, vl: VrefLineConfig) -> list[str]:
-    """Wiring lines shown before the run (JAFWAK silkscreen labels)."""
-    a, lb = bench.cfg.ad2, bench.cfg.loadbank
+    """Wiring lines shown before the run, one connection per line (JAFWAK)."""
+    cfg = bench.cfg
     lines = [
-        'PSU + -> VIN_DC (J7), PSU - -> GND (J11); JP4 2-3 "DC"; JP2 closed (BGR drives VREF_IN)',
-        "DMM V / COM -> VREF (TP3) / GND (TP2); Hi-Z input (10 GOhm) if the meter has it",
+        *w.psu_on_vin(cfg),
+        "Fit JP2 (the BGR drives VREF_IN)",
+        w.dmm("VREF (TP3)", "GND (TP2)", "the run sets its input to 10 GOhm"),
     ]
     if vl.vin_source == "ad2":
-        lines += [
-            f"Scope {a.vout_channel}+ -> J13 pin 4 (OUTA), Scope {a.ref_channel}+ -> J13 pin 1 (INA); both - -> J13 pin 6 (GND)",
-        ]
+        lines += [w.scope_vout(cfg), w.scope_vin(cfg)]
     if not bench.enable_dio:
-        lines.append('LDO enabled: J6 1-2 "HI" (EN_AIN = VIN), J8 1-2 and 9-10 "LDO" (or use --enable dio)')
+        lines += w.enable_static(cfg)
     if vl.load_code:
-        lines.append(
-            f'DIO {lb.dio_pins} -> J13 pins 7..15 (B0..B4), VS_BUFF (J4) at 5 V, then J10 "LOAD" fitted'
-        )
-    return lines
+        lines += w.load_bank(cfg)
+    return [*lines, w.ad2_gnd(cfg)]
 
 
 def run(bench: Bench, vl: VrefLineConfig) -> VrefLineResult:

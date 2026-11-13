@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from ldo_bench import plotting
+from ldo_bench import wiring as w
 from ldo_bench.bench import Bench
 from ldo_bench.config import AD2_MAX_SAMPLE_RATE, BufferConfig
 from ldo_bench.instruments.base import InstrumentError
@@ -113,15 +114,18 @@ class BufferCheckResult:
 
 
 def wiring(bench: Bench, bu: BufferConfig) -> list[str]:
-    """Wiring lines shown before the run (JAFWAK silkscreen labels)."""
-    a, n = bench.cfg.ad2, bench.cfg.psu.channel
+    """Wiring lines shown before the run, one connection per line (JAFWAK, chip disconnected)."""
+    cfg = bench.cfg
     return [
-        "CHIP DISCONNECTED: JP4 open (no jumper); nothing on VIN_DC (J7)",
-        "100 Ohm dummy load from JP4 pin 1 (U2 output) to GND (TP8)",
-        f"PSU OUT{n} + -> VS_BUFF (J4), OUT{n} - -> GND (J11)",
-        f"PSU OUT{bu.channel} REVERSED: OUT{bu.channel} + -> GND, OUT{bu.channel} - -> U2 pin 4 (-{bu.v_minus:g} V)",
-        f"AD2 W{a.wavegen_channel} -> VIN_FG (J3)",
-        f"Scope {a.ref_channel}+ -> JP4 pin 1, {a.ref_channel}- -> GND (TP8)",
+        "CHIP DISCONNECTED: JP4 open (no jumper)",
+        "Nothing on VIN_DC (J7)",
+        "100 Ohm dummy load: JP4 pin 1 (U2 output) -> GND (TP8)",
+        *w.psu(cfg, cfg.board.vs_buff),
+        f"PSU OUT{bu.channel} + -> GND (REVERSED: OUT + to GND)",
+        f"PSU OUT{bu.channel} - -> U2 pin 4 (-{bu.v_minus:g} V)",
+        f"AD2 W{cfg.ad2.wavegen_channel} -> {cfg.board.buffer_input}",
+        w.scope(cfg, "ref", "JP4 pin 1", "GND (TP8)", "U2 output"),
+        w.ad2_gnd(cfg),
     ]
 
 

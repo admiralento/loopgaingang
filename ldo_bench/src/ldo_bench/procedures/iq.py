@@ -47,6 +47,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from ldo_bench import plotting
+from ldo_bench import wiring as w
 from ldo_bench.analysis import sweep_points
 from ldo_bench.bench import Bench
 from ldo_bench.config import IqConfig
@@ -55,12 +56,7 @@ from ldo_bench.instruments.base import InstrumentError
 log = logging.getLogger(__name__)
 
 NAME = "iq"
-J1_RAIL = {
-    "bgr": ("BGR_VDD", "1-3"),
-    "vdd": ("VDD", "5-7"),
-    "en": ("EN_VDD", "9-11"),
-    "ota": ("OTA_VDD", "13-15"),
-}
+J1_RAIL = w.J1_RAILS  # rail -> (name, J1 pins)
 # 34401A resolution (one count, x range) by integration time, from its manual's resolution table
 # (recalled, not yet checked against the manual): 6.5 digits only at 10 NPLC and above.
 RESOLUTION = {0.02: 1e-4, 0.2: 1e-5, 1: 3e-6, 10: 1e-6, 100: 3e-7}
@@ -198,36 +194,36 @@ def fmt_a(i: float) -> str:
 
 
 def wiring(bench: Bench, iq: IqConfig) -> list[str]:
-    """Wiring lines for the chosen method / rail; the enable lines only if "disabled" is measured."""
-    a, e = bench.cfg.ad2, bench.cfg.enable
+    """Wiring lines for the chosen method / rail, one connection per line; the enable lines only if
+    "disabled" is measured."""
+    cfg = bench.cfg
     if iq.method == "shunt":
-        meter = (
-            "DMM V (HI) -> J13.1 (VIN), COM -> J13.2 (INB): across R13. The DMM floats, so no ground "
-            "lead; nothing else on the V terminals"
-        )
-        j1 = "J1: every rail you want powered (BGR_VDD 1-3, VDD 5-7, EN_VDD 9-11, OTA_VDD 13-15)"
-    elif iq.rail == "total":
-        meter = "PSU + -> DMM I (3A/mA jack); DMM LO (COM) -> VIN_DC: the DMM in series with the supply"
-        j1 = "J1: every rail you want powered (BGR_VDD 1-3, VDD 5-7, EN_VDD 9-11, OTA_VDD 13-15)"
-    else:
-        name, pins = J1_RAIL[iq.rail]
-        meter = f"Remove the J1 {pins} jumper ({name}); DMM I (3A/mA jack) and LO (COM) on J1 {pins}"
-        j1 = f"J1: the other rails' jumpers in place; {pins} open with the DMM across it"
-    lines = [
-        "PSU -> VIN_DC (JP4 to DC); nothing on the load bank (it stays off)",
-        meter,
-        j1,
-        f"Scope {a.vout_channel}+ -> J13.3 (VOUT), {a.vout_channel}- -> GND (VOUT check; draws ~1 uA)",
-    ]
-    if "disabled" in iq.states:
-        lines += [
-            "Enable path: J6 7-8 (EN_CTRL_18 -> EN_AIN), J8 1-2 (EN_OUT -> EN_IN), J8 9-10 (~EN_OUT -> ~EN_IN)",
-            f"AD2 DIO {e.dio_pin} -> J13.12 (EN_CTRL_33)"
-            + (f", DIO {e.dio_pin_n} -> J13.10 (~EN_CTRL_33)" if e.dio_pin_n is not None else "")
-            + ("; AD2 V+ -> J13.14 (V_33)" if e.v33 is not None else "; 3.3 V -> J13.14 (V_33)"),
+        lines = [
+            *w.psu_on_vin(cfg),
+            w.dmm("J13 pin 1 (INA)", "J13 pin 2 (INB)", "across R13; the DMM floats, so no ground lead"),
+            *w.j1_rails(),
         ]
-    lines.append("AD2 GND -> board GND")
-    return lines
+    elif iq.rail == "total":
+        lines = [
+            f"PSU OUT{cfg.psu.channel} + -> DMM I (3A/mA jack)",
+            f"DMM LO (COM) -> {cfg.board.vin_dc} (the DMM in series with the supply)",
+            f"PSU OUT{cfg.psu.channel} - -> {cfg.board.supply_gnd}",
+            *w.fit(cfg.board.dc_jumpers),
+            *w.j1_rails(),
+        ]
+    else:
+        name, pins = w.J1_RAILS[iq.rail]
+        a, b = pins.split("-")
+        lines = [
+            *w.psu_on_vin(cfg),
+            f"Remove the J1 {pins} jumper ({name})",
+            f"DMM I (3A/mA jack) -> J1 pin {a}, DMM LO (COM) -> J1 pin {b} (in place of the jumper)",
+            *w.j1_rails(skip=iq.rail),
+        ]
+    lines.append(w.scope_vout(cfg, "VOUT check"))
+    if "disabled" in iq.states:
+        lines += w.enable_dio(cfg)
+    return [*lines, w.ad2_gnd(cfg)]
 
 
 def run(bench: Bench, iq: IqConfig) -> IqResult:

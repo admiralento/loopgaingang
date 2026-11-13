@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from ldo_bench import plotting
+from ldo_bench import wiring as w
 from ldo_bench.analysis import LoadRegulation, load_regulation
 from ldo_bench.bench import Bench
 from ldo_bench.config import LoadRegConfig
@@ -85,14 +86,14 @@ class LoadRegResult:
 
 
 def wiring(bench: Bench) -> list[str]:
-    """Wiring lines shown before the run."""
-    a, lb = bench.cfg.ad2, bench.cfg.loadbank
-    return [
-        "PSU -> VIN (DC input, not through the buffer)",
-        bench.vout_wiring(),
-        f"Scope {a.ref_channel}+ -> VIN at the board, {a.ref_channel}- -> GND",
-        f"DIO {lb.dio_pins} -> load bank bits B0..B{len(lb.dio_pins) - 1}",
-    ]
+    """Wiring lines shown before the run, one connection per line."""
+    cfg = bench.cfg
+    lines = [*w.psu_on_vin(cfg), w.scope_vout(cfg), w.scope_vin(cfg)]
+    if bench.dmm is not None:
+        lines.append(w.dmm_vout(cfg))
+    if not bench.enable_dio:
+        lines += w.enable_static(cfg)
+    return [*lines, *w.load_bank(cfg), w.ad2_gnd(cfg)]
 
 
 def run(bench: Bench, lr: LoadRegConfig) -> LoadRegResult:

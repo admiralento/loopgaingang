@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from ldo_bench import plotting
+from ldo_bench import wiring as w
 from ldo_bench.analysis import LineRegulation, dropout_strays, line_regulation
 from ldo_bench.analysis import sweep_points as analysis_sweep
 from ldo_bench.bench import Bench
@@ -112,18 +113,20 @@ def sweep_points(lr: LineRegConfig) -> np.ndarray:
 
 
 def wiring(bench: Bench, lr: LineRegConfig) -> list[str]:
-    """Wiring lines shown before the run; the scope lines depend on vin_source and the DMM."""
-    a, lb = bench.cfg.ad2, bench.cfg.loadbank
-    lines = ["PSU -> VIN (DC input, not through the buffer)"]
-    if lr.vin_source == "psu" and bench.dmm is not None:
-        lines.append("DMM V+/COM -> VOUT / GND at the output pins (no scope probes needed)")
-    else:
-        lines.append(bench.vout_wiring())
+    """Wiring lines shown before the run, one connection per line; the scopes depend on vin_source and the DMM."""
+    cfg = bench.cfg
+    lines = w.psu_on_vin(cfg)
+    if not (lr.vin_source == "psu" and bench.dmm is not None):  # with the PSU readback and a DMM, no scopes
+        lines.append(w.scope_vout(cfg))
     if lr.vin_source == "ad2":
-        lines.append(f"Scope {a.ref_channel}+ -> VIN at the board, {a.ref_channel}- -> GND")
+        lines.append(w.scope_vin(cfg))
+    if bench.dmm is not None:
+        lines.append(w.dmm_vout(cfg))
+    if not bench.enable_dio:
+        lines += w.enable_static(cfg)
     if lr.load_code:
-        lines.append(f"DIO {lb.dio_pins} -> load bank bits B0..B{len(lb.dio_pins) - 1}, AD2 GND -> board GND")
-    return lines
+        lines += w.load_bank(cfg)
+    return [*lines, w.ad2_gnd(cfg)]
 
 
 def run(bench: Bench, lr: LineRegConfig) -> LineRegResult:

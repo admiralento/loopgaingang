@@ -40,6 +40,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from ldo_bench import plotting
+from ldo_bench import wiring as w
 from ldo_bench.analysis import PropagationDelays, SchmittResult, propagation_delays, schmitt_analysis
 from ldo_bench.bench import Bench
 from ldo_bench.config import AD2_MAX_SAMPLE_RATE, EnSineConfig
@@ -221,13 +222,16 @@ class EnSineResult:
 
 
 def wiring(bench: Bench, es: EnSineConfig) -> list[str]:
-    """Wiring lines shown before the run."""
-    a = bench.cfg.ad2
+    """Wiring lines shown before the run, one connection per line (JAFWAK)."""
+    cfg = bench.cfg
     return [
-        "PSU -> VIN_DC (JP4 to DC); J1 9-11: EN_VDD from INB (other J1 rails as you like)",
-        f"AD2 W{es.wavegen_channel} -> EN_FG SMA (J2); J6 5-6: EN_FG -> EN_AIN",
-        f"Scope {a.ref_channel}+ -> TP6 (EN_AIN) (trigger), Scope {a.vout_channel}+ -> J8.2 (EN_OUT); both - -> GND",
-        "AD2 GND -> board GND",
+        *w.psu_on_vin(cfg),
+        "Fit J1 9-11 (EN_VDD from INB; the other J1 rails as you like)",
+        'Fit J6 5-6 "FG" (EN_FG -> EN_AIN; nothing else on J6)',
+        f"AD2 W{es.wavegen_channel} -> EN_FG (J2)",
+        w.scope(cfg, "ref", "EN_AIN (TP6)", note="the trigger"),
+        w.scope(cfg, "vout", "J8 pin 2 (EN_OUT)", note="J8 pin 10 for ~EN_OUT"),
+        w.ad2_gnd(cfg),
     ]
 
 

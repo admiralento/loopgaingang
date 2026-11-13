@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from ldo_bench import plotting
+from ldo_bench import wiring as w
 from ldo_bench.bench import Bench
 from ldo_bench.config import PsuCheckConfig
 from ldo_bench.instruments.base import InstrumentError
@@ -105,8 +106,8 @@ def run(bench: Bench, pc: PsuCheckConfig) -> PsuCheckResult:
     bench.confirm_wiring(
         "PSU check",
         [
-            f"DMM V+ / COM -> PSU OUT{ch} + / -, directly",
-            "Nothing else connected to the PSU output",
+            w.dmm(f"PSU OUT{ch} +", f"PSU OUT{ch} -", "straight on the terminals"),
+            "Nothing else on the PSU output",
         ],
         ref_probe=("vin", 0),
         dmm_probe="psu",
