@@ -163,3 +163,20 @@ def test_iq_load_check_tolerance_boundary(jafwak, seen_frac, flagged):
         b.dmm.read = scaled
         res = iq.run(b, jafwak.iq)
     assert any("load code" in i for i in res.issues) == flagged
+
+
+def test_plot_shows_vout_at_outa_for_every_point(jafwak):
+    """Beside each current panel, VOUT (scope on OUTA) at the same points: ~nominal when enabled
+    shows the rail was powered through the meter; ~0 V when disabled shows the enable worked."""
+    from ldo_bench import plotting
+
+    res, _ = run_iq(jafwak, method="series", rail="en", check_code=0)
+    fig = iq.plot(res, "x")
+    vout_axes = [ax for ax in fig.axes if ax.get_ylabel().startswith("VOUT at OUTA")]
+    assert len(vout_axes) == len(res.states) == 2
+    for ax, state in zip(vout_axes, res.states, strict=True):
+        pts = [p for p in res.points if p.state == state]
+        line = ax.lines[0]
+        assert np.allclose(line.get_xdata(), [p.vin for p in pts])
+        assert np.allclose(line.get_ydata(), [p.vout for p in pts])
+    plotting.close(fig)

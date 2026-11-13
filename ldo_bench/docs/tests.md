@@ -181,6 +181,7 @@ First bring-up plan, steps I.1–I.5. **Run it before `line-tran` or `psrr`, wit
   2. Shunt method: switches in a known load (`check_code`, 4.8 mA) once, to prove the DMM sees the current through R13.
   3. Sweeps VIN (1.4–1.9 V) with the LDO enabled, then disabled through the enable path.
 - **Reports:** current per point. Points under the floor are shown as "< floor", not as a number.
+- **Plot:** current against VIN (left) and VOUT at OUTA against VIN (right), one row per state. Enabled, VOUT at nominal shows the LDO regulated, so the rail under test was powered (in the series method, through the meter: an open meter leaves that rail unpowered). Disabled, VOUT near 0 V shows the enable turned it off. What it can't show is a meter shorted out by a J1 jumper left fitted: the rail is still powered and the meter reads ~0.
 - **Setup checks:**
   - the load check misses by more than 15 %
   - an enabled current under the floor (meter not across R13 / not in series, or the jumper still shorting it)

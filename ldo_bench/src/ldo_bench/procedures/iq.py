@@ -420,18 +420,52 @@ def _unit(values: list[float]) -> tuple[float, str]:
     return 1e9, "nA"
 
 
+def _vout_panel(ax, pts: list[IqPoint], state: str, nominal: float) -> None:
+    """VOUT on the scope (OUTA) at each point of one state, against VIN.
+
+    Enabled, VOUT near nominal shows the LDO regulated, so the rail under test was powered (through
+    the meter, in the series method). Disabled, VOUT under 20 % of nominal shows the enable turned
+    it off. A current that is small but real looks like this; an open meter or a dead enable doesn't.
+    """
+    color = plotting.SERIES[0] if state == "enabled" else plotting.SERIES[1]
+    ax.plot([p.vin for p in pts], [p.vout for p in pts], "o-", color=color, ms=4, lw=1.2)
+    level, label = (
+        (nominal, f"nominal {nominal:g} V") if state == "enabled" else (0.2 * nominal, "20 % of nominal")
+    )
+    ax.axhline(level, color=plotting.INK_2, lw=0.9, ls=(0, (3, 2)))
+    ax.annotate(
+        label,
+        (0.99, level),
+        xycoords=("axes fraction", "data"),
+        xytext=(0, 3),
+        textcoords="offset points",
+        ha="right",
+        fontsize=7.5,
+        color=plotting.INK_2,
+    )
+    ax.set_ylim(-0.05 * nominal, 1.25 * nominal)
+    ax.set_ylabel("VOUT at OUTA (V)")
+    ax.set_title(f"{state.capitalize()}: VOUT", fontsize=10, pad=6)
+
+
 def plot(res: IqResult, dut: str):
-    """Current vs VIN, one panel per state. The shaded band is +/- the floor; points under it are
-    hollow (not resolved). Issues go in a red box on the top panel.
+    """Current vs VIN (left) and VOUT at OUTA vs VIN (right), one row per state. The shaded band is
+    +/- the floor; points under it are hollow (not resolved). Issues go in a red box on the top panel.
     """
     states = res.states or ["enabled"]
     fig, axes = plotting.figure(
-        len(states), 1, size=(7.4, 3.0 * len(states) + 0.6), squeeze=False, sharex=True
+        len(states),
+        2,
+        size=(11.0, 3.0 * len(states) + 0.6),
+        squeeze=False,
+        sharex=True,
+        gridspec_kw={"width_ratios": [1.6, 1]},
     )
     valid = not res.issues
     for row, state in enumerate(states):
         ax = axes[row][0]
         pts = [p for p in res.points if p.state == state]
+        _vout_panel(axes[row][1], pts, state, res.vout_nominal)
         scale, unit = _unit([p.current for p in pts] + [res.floor])
         x = np.array([p.vin for p in pts])
         y = np.array([p.current for p in pts]) * scale
@@ -458,7 +492,8 @@ def plot(res: IqResult, dut: str):
         ax.set_title(state.capitalize(), fontsize=10, pad=6)
         if row == 0 and not valid:
             plotting.issue_box(ax, res.issues)
-    axes[-1][0].set_xlabel("VIN (V)")
+    for ax in axes[-1]:
+        ax.set_xlabel("VIN (V)")
     title = f"Quiescent current: {dut}  ·  {res.what}"
     plotting.suptitle(fig, title, invalid=not valid)
     return fig

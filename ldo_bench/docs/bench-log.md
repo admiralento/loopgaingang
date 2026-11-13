@@ -5,6 +5,7 @@ What was built, what was measured, and what went wrong along the way. Newest ses
 ## 2026-11-13: default config and enable edge plots (no hardware run)
 
 - **Default config:** every command uses `configs/jafwak.toml` unless `-c` or `LDO_BENCH_CONFIG` names another, and prints the config it loaded first. Demo-board runs need `-c configs/demo_board.toml`.
+- **iq plot:** VOUT at OUTA against VIN beside each current panel, so a small current can be told apart from a meter that isn't in the path (the LDO doesn't come up) or an enable that doesn't work.
 - **enable-sine edges:** the plot adds one rising and one falling output edge close up, every sample marked, with the 10 % / 90 % levels. A sine or triangle run whose rise / fall times are only bounds (2 kS/s at 1 Hz, 2 MS/s at 1 kHz) says so and points to `--shape square --freq 1e5` (100 MS/s), which resolves them to 20 ns.
 
 ## 2026-11-13: code review and clean-up (no hardware run)
