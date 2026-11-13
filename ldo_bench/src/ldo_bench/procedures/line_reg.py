@@ -148,10 +148,11 @@ def run(bench: Bench, lr: LineRegConfig) -> LineRegResult:
     bad = []  # (VIN, VOUT, source) where VOUT should be regulated but isn't near nominal
     vin_bad: list[str] = []  # VIN measured off its setpoint
     agree_bad: list[str] = []  # AD2 VOUT disagrees with the DMM (scope 1 off VOUT)
-    if bench.vref_external:
-        # --vref ext: turn the reference on (and prove it) with full headroom, then sweep
-        bench.vin_from_psu(float(max(vins)))
-        bench.reference_on()
+    bench.ldo_enable(False)  # --enable dio only: EN held low while VIN comes up
+    # --vref ext: turn the reference on (and prove it) with full headroom, then sweep
+    bench.vin_from_psu(float(max(vins)) if bench.vref_external else float(vins[0]))
+    bench.ldo_enable(True)
+    bench.reference_on()
     for k, v in enumerate(vins):
         bench.vin_from_psu(float(v))
         p = bench.measure_point(lr.dc_window, vin_source=lr.vin_source)
@@ -180,6 +181,7 @@ def run(bench: Bench, lr: LineRegConfig) -> LineRegResult:
             row["i_psu_a"] = bench.psu.measure_current()
         rows.append(row)
         log.info("[%2d/%d] VIN %.3f V  VOUT %.5f V", k + 1, len(vins), p.vin, p.vout)
+    bench.ldo_enable(False)
     bank.off()
 
     x = np.array([r["vin_v"] for r in rows])

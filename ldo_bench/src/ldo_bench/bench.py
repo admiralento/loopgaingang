@@ -85,8 +85,13 @@ class Bench:
     wavegen that drives VIN) ramps the reference to 0 V first. `reference_on()` does nothing in the
     normal (BGR) mode, so procedures call it unconditionally.
 
+    Enable from the AD2 (`enable_dio=True`, `--enable dio`): the DC and transient tests drive the LDO's
+    enable through [enable] (DIO -> level shifters -> EN_AIN) instead of having it tied on with jumpers.
+    They call `ldo_enable(False)` before VIN comes up, `ldo_enable(True)` once it is up, and
+    `ldo_enable(False)` when they finish; with the enable tied on (the default) these do nothing.
+
     `shutdown()` (also run on leaving `with Bench`) turns things off in this order: external
-    reference 0 V -> wavegen (both channels) -> AD2 V+ -> load bank -> DIO released -> PSU output
+    reference 0 V -> LDO enable low (--enable dio) -> wavegen (both channels) -> AD2 V+ -> load bank -> DIO released -> PSU output
     off and 0 V -> close the instruments. Signals into the board go first, so nothing drives an
     unpowered DUT.
 
@@ -106,9 +111,12 @@ class Bench:
         assume_yes: bool = False,
         confirm: ConfirmFn | None = None,
         vref_external: bool = False,
+        enable_dio: bool = False,
     ) -> None:
         if vref_external and cfg.vref is None:
             raise InstrumentError("an external reference needs a [vref] section in the config")
+        if enable_dio:
+            _check_enable_pins(cfg)
         self.cfg = cfg
         self.psu = psu
         self.dmm = dmm
@@ -134,6 +142,10 @@ class Bench:
         # what VIN is now (V) and what drives it, so the reference never sits above it
         self._vin_level: float | None = None
         self._vin_from: Literal["psu", "wavegen"] | None = None
+        # enable from the AD2 (see the class docstring)
+        self.enable_dio = enable_dio
+        self._enable_driven = False  # V_33 on and the enable DIO driven by ldo_enable()
+        self.last_wiring: list[str] = []  # the wiring lines last shown by confirm_wiring()
 
     @property
     def is_sim(self) -> bool:
@@ -188,6 +200,10 @@ class Bench:
         Not asked with --sim, --yes or no confirm function (the wiring is logged instead).
         Raises KeyboardInterrupt if the user answers no, so the run aborts like Ctrl-C.
         """
+        if self.enable_dio:
+            lines = [*lines, *self.enable_wiring()]
+            if en_pin is None:  # the simulated LDO now follows the enable DIO
+                en_pin = self.cfg.enable.dio_pin
         if self.sim_model is not None:
             self.sim_model.ref_probe = ref_probe
             self.sim_model.dmm_probe = dmm_probe
@@ -201,6 +217,7 @@ class Bench:
             if self.sim_model is not None:  # the simulated operator followed the instructions
                 self.sim_model.vref_wired = True
                 self.sim_model.jp2_fitted = False
+        self.last_wiring = list(lines)
         text = "\n".join([f"Wiring for {title}:", *(f"  - {s}" for s in lines)])
         if self.is_sim or self.assume_yes or self._confirm is None:
             log.info(text)  # not asking: still record what the run assumed
@@ -208,6 +225,19 @@ class Bench:
             raise KeyboardInterrupt("wiring not confirmed")
         if self.vref_external and not self.is_sim:
             self._confirm_jp2()
+
+    def enable_wiring(self) -> list[str]:
+        """Wiring lines for --enable dio (JAFWAK J13 / J6 / J8 labels)."""
+        e = self.cfg.enable
+        pins = f"AD2 DIO {e.dio_pin} -> J13 pin 12 (EN)"
+        if e.dio_pin_n is not None:
+            pins += f", DIO {e.dio_pin_n} -> J13 pin 10 (~EN)"
+        v33 = "AD2 V+ -> J13 pin 14 (VIO)" if e.v33 is not None else "3.3 V on J13 pin 14 (VIO)"
+        return [
+            f"Enable from the AD2: {pins}; {v33}",
+            'Enable path: J6 7-8 "EN" (EN_CTRL_18 -> EN_AIN), J8 1-2 and 9-10 "LDO" '
+            "(EN_OUT -> EN_IN, ~EN_OUT -> ~EN_IN); nothing else on J6",
+        ]
 
     def vref_wiring(self) -> list[str]:
         """Wiring lines for the external reference."""
@@ -350,6 +380,22 @@ class Bench:
         if e.dio_pin_n is not None:
             levels[e.dio_pin_n] = not on
         self.dio.write_pins(levels)
+
+    def ldo_enable(self, on: bool) -> None:
+        """--enable dio: drive the LDO's enable through [enable]; does nothing when EN is tied on.
+
+        The first call turns on V_33 (AD2 V+) for the level shifters. on=True then waits
+        enable.settle_time (s) for the LDO to start. Call with on=False before VIN comes up, so EN
+        is held low (not floating) while it rises.
+        """
+        if not self.enable_dio:
+            return
+        if not self._enable_driven:
+            self.enable_logic(True)
+            self._enable_driven = True
+        self.set_enable(on)
+        if on:
+            self.sleep(self.cfg.enable.settle_time)
 
     def en_ain_sine(
         self, channel: int, *, frequency: float, low: float, high: float, shape: WaveShape = "sine"
@@ -586,6 +632,7 @@ class Bench:
         earlier one fails (failures are logged). Safe to call more than once."""
         steps: list[tuple[str, Callable[[], None]]] = [
             ("external reference 0 V", lambda: self.vref_out.set_voltage(0.0) if self.vref_out else None),
+            ("LDO enable low", lambda: self.set_enable(False) if self._enable_driven else None),
             ("wavegen off", lambda: self.awg.off(self.cfg.ad2.wavegen_channel)),
             ("wavegen 2 off", lambda: self.awg.off(2 if self.cfg.ad2.wavegen_channel == 1 else 1)),
             ("AD2 V+ off", lambda: self.scope.set_vplus(None) if hasattr(self.scope, "set_vplus") else None),
@@ -604,8 +651,18 @@ class Bench:
             except Exception as e:  # keep going: the remaining steps matter more
                 log.error("shutdown: %s failed: %s", name, e)
                 self.shutdown_errors.append(f"{name}: {e}")
-        self._psu_on = self._awg_on = self._psu_ready = self._vref_on = False
+        self._psu_on = self._awg_on = self._psu_ready = self._vref_on = self._enable_driven = False
         self._vin_level, self._vin_from = None, None
+
+
+def _check_enable_pins(cfg: BenchConfig) -> None:
+    """--enable dio: the enable DIO pins mustn't also switch the load bank."""
+    e = cfg.enable
+    clash = ({e.dio_pin} | ({e.dio_pin_n} - {None})) & set(cfg.loadbank.dio_pins)
+    if clash:
+        raise InstrumentError(
+            f"--enable dio: enable DIO pins {sorted(clash)} are also load bank pins {cfg.loadbank.dio_pins}"
+        )
 
 
 def open_bench(
@@ -619,6 +676,7 @@ def open_bench(
     use_dmm: bool = True,
     use_xscope: bool = False,
     vref_external: bool = False,
+    enable_dio: bool = False,
 ) -> Bench:
     """Open every instrument the config asks for and return a Bench (use it in a `with` block).
 
@@ -628,11 +686,14 @@ def open_bench(
     use_xscope: also open the [xscope] cross-check scope (only the transient tests use it). If it
     can't be opened, the run continues without it and Bench.xscope_issue says why.
     vref_external: drive VREF_IN from the PSU's other output ([vref]) instead of the BGR.
+    enable_dio: the tests drive the LDO's enable from the AD2 ([enable]) instead of it being tied on.
     If any required instrument fails to open, the ones already opened are closed and the error
     is re-raised.
     """
     if vref_external and cfg.vref is None:  # before anything is opened
         raise InstrumentError("an external reference needs a [vref] section in the config")
+    if enable_dio:
+        _check_enable_pins(cfg)
     want_dmm = use_dmm and cfg.dmm is not None and cfg.dmm.enabled
     want_xscope = use_xscope and cfg.xscope is not None and cfg.xscope.enabled
     if sim:
@@ -652,6 +713,7 @@ def open_bench(
             sim_model=model,
             assume_yes=True,
             vref_external=vref_external,
+            enable_dio=enable_dio,
         )
 
     from ldo_bench.instruments import discovery
@@ -709,6 +771,7 @@ def open_bench(
         assume_yes=assume_yes,
         confirm=confirm,
         vref_external=vref_external,
+        enable_dio=enable_dio,
     )
     bench.xscope_issue = xscope_issue
     return bench

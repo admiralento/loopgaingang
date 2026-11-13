@@ -240,8 +240,10 @@ def run(bench: Bench, lt: LoadTranConfig, an: AnalysisConfig) -> LoadTranResult:
         a.vout_channel: ChannelSetup(a.vout.range, a.vout.offset),
         a.ref_channel: ChannelSetup(a.ref.range, a.ref.offset),
     }
+    bench.ldo_enable(False)  # --enable dio only: EN held low while VIN comes up
     bank.set(lt.code_low)
     bench.vin_from_psu(lt.vin)
+    bench.ldo_enable(True)
     bench.reference_on()  # --vref ext only
     vout_est, _ = bench.measure_dc(0.05)
     setup_issues = [i for i in [bench.vout_issue(vout_est.mean, source=f"scope {a.vout_channel}")] if i]
@@ -318,6 +320,7 @@ def run(bench: Bench, lt: LoadTranConfig, an: AnalysisConfig) -> LoadTranResult:
             log.warning("load step %s: %d setup issue(s), see the plot", edge, len(issues))
         else:
             log.info("%s: peak %+.2f mV, settling %.2f us", edge, m.deviation * 1e3, m.settling_time * 1e6)
+    bench.ldo_enable(False)
     bank.off()
     return LoadTranResult(
         lt.vin, pin, lt.averages, results, bench.cfg.dut.vout_nominal, setup_issues, lt.plot_window, supply

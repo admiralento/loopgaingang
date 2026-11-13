@@ -104,8 +104,10 @@ def run(bench: Bench, lr: LoadRegConfig) -> LoadRegResult:
     codes = lr.codes or bank.allowed_codes()  # [] = every code within dut.i_max
     bench.confirm_wiring("load regulation", wiring(bench), ref_probe=("vin", 0))
 
+    bench.ldo_enable(False)  # --enable dio only: EN held low while VIN comes up
     bank.off()
     bench.vin_from_psu(lr.vin)
+    bench.ldo_enable(True)
     bench.reference_on()  # --vref ext only: external reference on VREF_IN, proven to set VOUT
     rows = []
     for k, code in enumerate(codes):
@@ -143,6 +145,7 @@ def run(bench: Bench, lr: LoadRegConfig) -> LoadRegResult:
             row["i_est_a"] * 1e3,
             p.vout,
         )
+    bench.ldo_enable(False)
     bank.off()
 
     bad = [r for r in rows if not r["vout_ok"]]

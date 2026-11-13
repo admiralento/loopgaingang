@@ -79,6 +79,14 @@ VrefOpt = Annotated[
         "VREF_IN, JP2 removed; asks you to confirm JP2 every run)",
     ),
 ]
+EnableOpt = Annotated[
+    str,
+    typer.Option(
+        "--enable",
+        help="LDO enable: 'static' (tied on with jumpers, e.g. J6 1-2) or 'dio' (driven from the AD2 "
+        "through [enable]: J6 7-8, J13 pins 12 / 10 / 14; held low while VIN rises)",
+    ),
+]
 VerboseOpt = Annotated[bool, typer.Option("--verbose", "-v", help="Debug logging")]
 
 
@@ -131,10 +139,11 @@ def _bench(
     use_dmm: bool = True,
     use_xscope: bool = False,
     vref: str = "bgr",
+    enable: str = "static",
 ):
     """Open the bench and turn instrument errors and Ctrl-C into clean exits.
 
-    vref: 'bgr' or 'ext' (already checked by _vref_mode).
+    vref: 'bgr' or 'ext' (already checked by _vref_mode). enable: 'static' or 'dio' (_enable_mode).
 
     InstrumentError -> exit 1; KeyboardInterrupt (Ctrl-C or wiring not confirmed) -> exit 130.
     Bench.shutdown has already run by the time either is reported.
@@ -151,6 +160,7 @@ def _bench(
             use_dmm=use_dmm,
             use_xscope=use_xscope,
             vref_external=vref == "ext",
+            enable_dio=enable == "dio",
         ) as bench:
             yield bench
     except InstrumentError as e:
@@ -177,6 +187,22 @@ def _shutdown_failed(bench: Bench | None) -> bool:
         for e in errors:
             typer.secho(f"  - {e}", fg="red", err=True)
     return bool(errors)
+
+
+def _enable_mode(cfg: BenchConfig, enable: str) -> str:
+    """Check --enable: 'static' or 'dio', and 'dio' needs enable pins clear of the load bank. Exit 2 otherwise."""
+    if enable not in ("static", "dio"):
+        typer.secho("--enable must be 'static' or 'dio'", fg="red", err=True)
+        raise typer.Exit(2)
+    if enable == "dio":
+        e = cfg.enable
+        clash = ({e.dio_pin} | ({e.dio_pin_n} - {None})) & set(cfg.loadbank.dio_pins)
+        if clash:
+            typer.secho(
+                f"--enable dio: enable DIO pins {sorted(clash)} are also load bank pins", fg="red", err=True
+            )
+            raise typer.Exit(2)
+    return enable
 
 
 def _vref_mode(cfg: BenchConfig, vref: str) -> str:
@@ -231,6 +257,7 @@ def smoke(
     psu: PsuOpt = None,
     ad_serial: AdOpt = None,
     vref: VrefOpt = "bgr",
+    enable: EnableOpt = "static",
     yes: YesOpt = False,
     verbose: VerboseOpt = False,
 ) -> None:
@@ -240,7 +267,7 @@ def smoke(
     vref = _vref_mode(cfg, vref)
     # --vin isn't re-validated here; Bench.vin_from_psu still refuses anything above the ceilings.
     vin = vin if vin is not None else (cfg.load_reg.vin if cfg.load_reg else cfg.dut.vout_nominal + 0.6)
-    with _bench(cfg, sim, psu, ad_serial, yes, vref=vref) as bench:
+    with _bench(cfg, sim, psu, ad_serial, yes, vref=vref, enable=_enable_mode(cfg, enable)) as bench:
         _smoke(bench, vin)
 
 
@@ -258,8 +285,10 @@ def _smoke(bench: Bench, vin: float) -> None:
         ],
         ref_probe=("vin", 0),
     )
+    bench.ldo_enable(False)  # --enable dio only: EN held low while VIN comes up
     bench.loadbank.off()
     bench.vin_from_psu(vin)
+    bench.ldo_enable(True)
     bench.reference_on()  # --vref ext only
     typer.echo(f"{'code':>4} {'I_est mA':>9} {'VOUT V':>9} {'VIN V':>8} {'V_psu V':>8} {'I_psu mA':>9}")
     for code in (0, bench.loadbank.max_allowed_code):
@@ -271,6 +300,7 @@ def _smoke(bench: Bench, vin: float) -> None:
             f"{code:>4} {i_est * 1e3:>9.2f} {vout.mean:>9.4f} {ref.mean:>8.3f} "
             f"{bench.psu.measure_voltage():>8.3f} {bench.psu.measure_current() * 1e3:>9.2f}"
         )
+    bench.ldo_enable(False)
     bench.loadbank.off()
 
 
@@ -333,7 +363,11 @@ def _save(
             run.write_csv(name, rows)
         # which reference VOUT followed: the BGR, or the external one and its proof (compare uses it)
         run.write_json("summary.json", {**res.summary(), "vref": bench.vref_info()})
-        run.write_meta(idns=bench.idns(), sim=bench.is_sim, extra={"vref": bench.vref_info()})
+        run.write_meta(
+            idns=bench.idns(),
+            sim=bench.is_sim,
+            extra={"vref": bench.vref_info(), "enable": "dio" if bench.enable_dio else "static"},
+        )
         figs = {"plot.png": module.plot(res, cfg.dut.name)}
         figs.update(getattr(module, "extra_plots", lambda r, d: {})(res, cfg.dut.name))
         for name, fig in figs.items():
@@ -401,6 +435,7 @@ def load_tran(
     ad_serial: AdOpt = None,
     no_xscope: NoXScopeOpt = False,
     vref: VrefOpt = "bgr",
+    enable: EnableOpt = "static",
     yes: YesOpt = False,
     verbose: VerboseOpt = False,
 ) -> None:
@@ -437,7 +472,17 @@ def load_tran(
     if update:
         cfg = _load_with(cfg, load_tran=lt.model_copy(update=update))
         lt = cfg.load_tran
-    with _bench(cfg, sim, psu, ad_serial, yes, use_dmm=False, use_xscope=not no_xscope, vref=vref) as bench:
+    with _bench(
+        cfg,
+        sim,
+        psu,
+        ad_serial,
+        yes,
+        use_dmm=False,
+        use_xscope=not no_xscope,
+        vref=vref,
+        enable=_enable_mode(cfg, enable),
+    ) as bench:
         res = proc.run(bench, lt, cfg.analysis)
         path = _save(bench, cfg, config, out, proc, res, save_sim)
     _echo_report(bench, res)
@@ -777,6 +822,7 @@ def line_reg(
     ad_serial: AdOpt = None,
     no_dmm: NoDmmOpt = False,
     vref: VrefOpt = "bgr",
+    enable: EnableOpt = "static",
     yes: YesOpt = False,
     verbose: VerboseOpt = False,
 ) -> None:
@@ -802,7 +848,9 @@ def line_reg(
             raise typer.Exit(2)
         cfg = _load_with(cfg, line_reg=lr.model_copy(update={"vin_source": vin_from}))
         lr = cfg.line_reg
-    with _bench(cfg, sim, psu, ad_serial, yes, use_dmm=not no_dmm, vref=vref) as bench:
+    with _bench(
+        cfg, sim, psu, ad_serial, yes, use_dmm=not no_dmm, vref=vref, enable=_enable_mode(cfg, enable)
+    ) as bench:
         res = proc.run(bench, lr)
         path = _save(bench, cfg, config, out, proc, res, save_sim)
     _echo_report(bench, res)
@@ -820,6 +868,7 @@ def load_reg(
     ad_serial: AdOpt = None,
     no_dmm: NoDmmOpt = False,
     vref: VrefOpt = "bgr",
+    enable: EnableOpt = "static",
     yes: YesOpt = False,
     verbose: VerboseOpt = False,
 ) -> None:
@@ -833,7 +882,9 @@ def load_reg(
     if vin is not None:
         cfg = _load_with(cfg, load_reg=lr.model_copy(update={"vin": vin}))
         lr = cfg.load_reg
-    with _bench(cfg, sim, psu, ad_serial, yes, use_dmm=not no_dmm, vref=vref) as bench:
+    with _bench(
+        cfg, sim, psu, ad_serial, yes, use_dmm=not no_dmm, vref=vref, enable=_enable_mode(cfg, enable)
+    ) as bench:
         res = proc.run(bench, lr)
         path = _save(bench, cfg, config, out, proc, res, save_sim)
     _echo_report(bench, res)

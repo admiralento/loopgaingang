@@ -418,6 +418,14 @@ class EnableConfig(_Model):
         le=5.0,
         description="AD2 V+ on V_33 (J13.14) for the level shifters; None = supplied externally",
     )
+    settle_time: float = Field(
+        0.2,
+        ge=0,
+        description=(
+            "--enable dio: wait after setting EN high before measuring (s); JAFWAK's simulated startup "
+            "is up to 64 ms (PEX corners)"
+        ),
+    )
 
     @model_validator(mode="after")
     def _distinct(self) -> EnableConfig:
