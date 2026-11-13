@@ -554,7 +554,10 @@ def enable_sine(
     config: ConfigOpt,
     shape: Annotated[
         str | None,
-        typer.Option("--shape", help="Input wave: sine, or triangle (a slow linear ramp up and down)"),
+        typer.Option(
+            "--shape",
+            help="Input wave: sine, triangle (a slow linear ramp up and down) or square (propagation delay)",
+        ),
     ] = None,
     freq: Annotated[
         float | None, typer.Option("--freq", help="Wave frequency (Hz), e.g. 1 for a slow ramp")
@@ -578,7 +581,7 @@ def enable_sine(
     es = _section(cfg, "en-sine")
     update: dict = {}
     if shape is not None:
-        update["shape"] = shape  # checked by _load_with (sine or triangle)
+        update["shape"] = shape  # checked by _load_with (sine, triangle or square)
     if freq is not None:
         update["frequency"] = freq
     if captures is not None:

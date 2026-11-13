@@ -163,7 +163,7 @@ def test_en_sine_shape_triangle_accepted_square_rejected(jafwak):
     d = jafwak.model_dump()
     d["en_sine"]["shape"] = "triangle"
     assert BenchConfig.model_validate(d).en_sine.shape == "triangle"
-    d["en_sine"]["shape"] = "square"
+    d["en_sine"]["shape"] = "sawtooth"
     with pytest.raises(ValueError, match="shape"):
         BenchConfig.model_validate(d)
 
@@ -180,7 +180,7 @@ def test_cli_enable_sine_shape_option(tmp_path):
     r = CliRunner().invoke(app, [*base, "--shape", "triangle", "--freq", "1"])
     assert r.exit_code == 0, r.output
     assert "triangle 0.00-1.80 V at 1 Hz" in r.output
-    assert CliRunner().invoke(app, [*base, "--shape", "square"]).exit_code == 2
+    assert CliRunner().invoke(app, [*base, "--shape", "sawtooth"]).exit_code == 2
 
 
 def test_en_sine_edge_times_under_one_sample_are_a_bound(jafwak):

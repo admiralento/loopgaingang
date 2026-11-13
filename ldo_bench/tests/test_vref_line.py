@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 from pydantic import ValidationError
 
+from ldo_bench import plotting
 from ldo_bench.bench import open_bench
 from ldo_bench.config import BenchConfig
 from ldo_bench.instruments.base import InstrumentError
@@ -27,7 +28,7 @@ def test_vref_line_on_sim(jafwak):
     vins = [r["vin_set_v"] for r in res.rows]
     assert vins[0] == pytest.approx(vl.vin_high) and vins[-1] == pytest.approx(vl.vin_low)
     assert all(np.diff(vins) < 0)  # downward, as in the first plan
-    vref_line.plot(res, "x")
+    plotting.close(vref_line.plot(res, "x"))
 
 
 def test_dmm_not_on_vref_is_flagged(jafwak):
@@ -36,7 +37,7 @@ def test_dmm_not_on_vref_is_flagged(jafwak):
         b.confirm_wiring = lambda *a, **k: (real(*a, **k), setattr(b.sim_model, "dmm_probe", "open"))
         res = vref_line.run(b, jafwak.vref_line)
     assert any("TP3" in i for i in res.issues)
-    vref_line.plot(res, "x")  # the invalid plot draws too
+    plotting.close(vref_line.plot(res, "x"))  # the invalid plot draws too
 
 
 def test_ldo_not_enabled_is_flagged(jafwak):

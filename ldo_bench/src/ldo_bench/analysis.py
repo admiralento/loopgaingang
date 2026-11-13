@@ -434,6 +434,71 @@ def _edge_time(x: np.ndarray, k: float, lo: float, hi: float, rising: bool, fs: 
     return abs(b - a) / fs
 
 
+@dataclass(frozen=True)
+class PropagationDelays:
+    """Delays from the input's midpoint crossings to the output's (s), from a square-wave capture.
+
+    lh / hl name the OUTPUT edge: lh = output low -> high, hl = output high -> low (mean over the
+    capture's edges; _std is their spread). `inverting`: the output rises when the input falls
+    (e.g. ~EN_OUT). NaN when the output never switched after an input edge.
+    """
+
+    lh: float
+    hl: float
+    lh_std: float
+    hl_std: float
+    n_lh: int
+    n_hl: int
+    inverting: bool
+
+    def as_dict(self) -> dict:
+        """Fields as a dict, for data.csv / summary.json."""
+        return asdict(self)
+
+
+def _two_levels(x: np.ndarray) -> tuple[float, float]:
+    """(low, high) of a two-level signal: medians either side of the 0.5 / 99.5 % midpoint."""
+    lo_x, hi_x = float(np.percentile(x, 0.5)), float(np.percentile(x, 99.5))
+    split = (lo_x + hi_x) / 2
+    lows, highs = x[x <= split], x[x > split]
+    return (float(np.median(lows)) if len(lows) else lo_x, float(np.median(highs)) if len(highs) else hi_x)
+
+
+def propagation_delays(ain, aout, sample_rate: float) -> PropagationDelays:
+    """Input-to-output delay of a logic block driven by a square wave (ain, aout in V; Hz).
+
+    Each input midpoint crossing (sub-sample interpolated) is paired with the output's first
+    midpoint crossing after it and before the next input crossing; an input edge the output
+    doesn't follow is skipped. The delays are split by the output's direction.
+    """
+    vin, vout = np.asarray(ain, float), np.asarray(aout, float)
+    in_mid, out_mid = sum(_two_levels(vin)) / 2, sum(_two_levels(vout)) / 2
+    ins = sorted(
+        [(k, True) for k in _crossings(vin, in_mid, True)]
+        + [(k, False) for k in _crossings(vin, in_mid, False)]
+    )
+    outs = sorted(
+        [(k, True) for k in _crossings(vout, out_mid, True)]
+        + [(k, False) for k in _crossings(vout, out_mid, False)]
+    )
+    out_idx = np.array([k for k, _ in outs])
+    lh, hl, flips = [], [], []
+    for n, (k, rising_in) in enumerate(ins):
+        nxt = ins[n + 1][0] if n + 1 < len(ins) else np.inf
+        j = int(np.searchsorted(out_idx, k, side="right"))
+        if j >= len(outs) or outs[j][0] >= nxt:
+            continue
+        k_out, rising_out = outs[j]
+        (lh if rising_out else hl).append((k_out - k) / sample_rate)
+        flips.append(rising_out != rising_in)
+
+    def stat(v: list[float]) -> tuple[float, float]:
+        return (float(np.mean(v)), float(np.std(v))) if v else (float("nan"), float("nan"))
+
+    (m_lh, s_lh), (m_hl, s_hl) = stat(lh), stat(hl)
+    return PropagationDelays(m_lh, m_hl, s_lh, s_hl, len(lh), len(hl), bool(flips) and np.mean(flips) > 0.5)
+
+
 def schmitt_analysis(ain, aout, sample_rate: float, frequency: float) -> SchmittResult:
     """Comparator thresholds from one capture of its sine input `ain` and output `aout` (V).
 

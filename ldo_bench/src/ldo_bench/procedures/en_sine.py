@@ -6,10 +6,14 @@ between 0 V and EN_VDD sweeps the input through both thresholds every cycle, so 
 crossings give VT+ and VT- (and their difference, the hysteresis), its levels VOH / VOL, its edge
 times and whether it chatters. Several separate captures give the spread of the thresholds.
 
-`shape` is a sine (default) or a triangle. The triangle ramps up and down linearly at
+`shape` is a sine (default), a triangle or a square. The triangle ramps up and down linearly at
 2 (high - low) frequency V/s, so both thresholds are crossed at the same, known slope; a 1 Hz
 triangle (3.6 V/s for 0-1.8 V) is about 1500x slower than the 1 kHz sine at its midpoint, which
-shows how much the comparator's delay moves the thresholds.
+shows how much the comparator's delay moves the thresholds. The square jumps straight through both
+thresholds, so it gives no thresholds; instead it gives the propagation delay from EN_AIN's
+midpoint crossing to EN_OUT's (first bring-up plan, Test 1.8), for each output edge. A delay
+within two sample intervals is reported as "under" that, like the edge times: use a high
+frequency (e.g. 100 kHz) so the capture runs at the AD2's 100 MS/s.
 
 Scope ref channel on TP6 (EN_AIN, also the trigger), scope vout channel on J8.2 (EN_OUT); both on
 the 5 V range. The thresholds are read from EN_AIN as measured at the pin, so R23 and the
@@ -20,7 +24,7 @@ run() steps:
 2. `captures` captures, each triggered on EN_AIN rising through the wave's midpoint and spanning
    `cycles` periods. Each waits up to `timeout` plus one window for its trigger and data. If one
    never triggers, a forced capture is recorded with an issue and the loop stops.
-3. W1 off. `analysis.schmitt_analysis` on every capture.
+3. W1 off. `analysis.schmitt_analysis` on every capture (and `analysis.propagation_delays` for a square).
 4. Validity checks on every capture: the EN_AIN swing within SWING_TOLERANCE of the wave's
    (scope on TP6, J6 at 5-6), and EN_OUT swinging at least 30 % of VIN with at least one rising
    edge (scope on EN_OUT, EN_VDD powered). These are issues (the run is invalid).
@@ -36,9 +40,9 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from ldo_bench import plotting
-from ldo_bench.analysis import SchmittResult, schmitt_analysis
+from ldo_bench.analysis import PropagationDelays, SchmittResult, propagation_delays, schmitt_analysis
 from ldo_bench.bench import Bench
-from ldo_bench.config import EnSineConfig
+from ldo_bench.config import AD2_MAX_SAMPLE_RATE, EnSineConfig
 from ldo_bench.instruments.base import Capture, ChannelSetup, InstrumentError
 
 log = logging.getLogger(__name__)
@@ -70,10 +74,16 @@ class EnSineResult:
     t: np.ndarray  # first capture, for plotting / CSV
     ain: np.ndarray
     aout: np.ndarray
-    shape: str = "sine"  # "sine" or "triangle"
+    shape: str = "sine"  # "sine", "triangle" or "square"
     sample_rate: float = float("nan")  # Hz, as the AD2 reported it (first capture)
     issues: list[str] = field(default_factory=list)  # setup problems: the run isn't a valid measurement
     notes: list[str] = field(default_factory=list)  # real findings worth a look (chatter, weak VOH)
+    delays: list[PropagationDelays] = field(default_factory=list)  # square only: one per capture
+
+    @property
+    def square(self) -> bool:
+        """A square input: delays are measured, thresholds are not."""
+        return self.shape == "square"
 
     def _stat(self, key: str) -> tuple[float, float]:
         """(mean, std) of one SchmittResult field over the captures, ignoring NaNs."""
@@ -93,9 +103,24 @@ class EnSineResult:
             return "n/a"
         return f"under {_seconds(floor)}" if t <= floor else _seconds(t)
 
+    def _delay(self, key: str) -> str:
+        """Mean propagation delay (s) as text, or a bound when within two sample intervals."""
+        v = np.array([getattr(d, key) for d in self.delays], float)
+        v = v[np.isfinite(v)]
+        if not len(v):
+            return "n/a (EN_OUT didn't follow)"
+        floor = 2 / self.sample_rate
+        t = float(v.mean())
+        return (
+            f"under {_seconds(floor)}" if t <= floor else f"{_seconds(t)} (spread {_seconds(float(v.std()))})"
+        )
+
     @property
     def rows(self) -> list[dict]:
-        return [{"capture": k + 1, **c.as_dict()} for k, c in enumerate(self.captures)]
+        rows = [{"capture": k + 1, **c.as_dict()} for k, c in enumerate(self.captures)]
+        for row, d in zip(rows, self.delays, strict=False):
+            row.update({f"tpd_{k}": v for k, v in d.as_dict().items()})
+        return rows
 
     def extra_csvs(self) -> dict[str, list[dict]]:
         return {
@@ -129,6 +154,17 @@ class EnSineResult:
             else:
                 m, s = self._stat(k)
                 stats[k] = {"mean": m, "std": s}
+        if self.square:  # the input jumps through both thresholds: no threshold is measured
+            for k in ("vt_rise", "vt_fall", "hysteresis"):
+                stats[k] = None
+            for k in ("lh", "hl"):
+                v = np.array([getattr(d, k) for d in self.delays], float)
+                v = v[np.isfinite(v)]
+                stats[f"tpd_{k}"] = {
+                    "mean": float(v.mean()) if len(v) else None,
+                    "std": float(v.std()) if len(v) else None,
+                }
+            stats["inverting"] = bool(self.delays and self.delays[0].inverting)
         return {
             "valid": not self.issues,
             "issues": self.issues,
@@ -159,11 +195,21 @@ class EnSineResult:
             return f"{m * 1e3:8.1f} mV  (spread {s * 1e3:.1f} mV)"
 
         h = np.array([c.hysteresis for c in self.captures])
-        lines = [
-            head,
-            f"  VT+ (rising)  {mv('vt_rise')}",
-            f"  VT- (falling) {mv('vt_fall')}",
-            f"  hysteresis    {np.nanmean(h) * 1e3:8.1f} mV  (spread {np.nanstd(h) * 1e3:.1f} mV)",
+        if self.square:
+            inv = " (output inverted)" if self.delays and self.delays[0].inverting else ""
+            lines = [
+                head,
+                f"  propagation delay  output rising {self._delay('lh')} / falling {self._delay('hl')}{inv}",
+                "                     (EN_AIN midpoint -> output midpoint; thresholds aren't measured with a square)",
+            ]
+        else:
+            lines = [
+                head,
+                f"  VT+ (rising)  {mv('vt_rise')}",
+                f"  VT- (falling) {mv('vt_fall')}",
+                f"  hysteresis    {np.nanmean(h) * 1e3:8.1f} mV  (spread {np.nanstd(h) * 1e3:.1f} mV)",
+            ]
+        lines += [
             f"  VOH / VOL     {self._stat('voh')[0]:.3f} V / {self._stat('vol')[0]:.3f} V",
             f"  rise / fall   {self._edge('t_rise')} / {self._edge('t_fall')} "
             f"(10-90 %, sample interval {_seconds(1 / self.sample_rate)})",
@@ -200,9 +246,10 @@ def run(bench: Bench, es: EnSineConfig) -> EnSineResult:
     bench.vin_from_psu(es.vin)
     bench.en_ain_sine(es.wavegen_channel, frequency=es.frequency, low=lo, high=hi, shape=es.shape)
     bench.sleep(0.05)  # let the wavegen output start
-    rate = es.n_samples / (es.cycles / es.frequency)  # n_samples spread over `cycles` periods
+    # n_samples spread over `cycles` periods, at most the AD2's 100 MS/s (then more cycles fit in the window)
+    rate = min(es.n_samples / (es.cycles / es.frequency), AD2_MAX_SAMPLE_RATE)
     level = (lo + hi) / 2  # trigger at the wave's midpoint (V)
-    window = es.cycles / es.frequency  # s, one capture (4 s for a 1 Hz triangle over 4 cycles)
+    window = es.n_samples / rate  # s, one capture (4 s for a 1 Hz triangle over 4 cycles)
     issues: list[str] = []
     caps: list[Capture] = []
     for k in range(es.captures):
@@ -231,10 +278,12 @@ def run(bench: Bench, es: EnSineConfig) -> EnSineResult:
             break
     bench.wavegen_off(es.wavegen_channel)
 
-    results = []
+    results, delays = [], []
     for cap in caps:
         ain, aout = cap.channel(a.ref_channel), cap.channel(a.vout_channel)
         results.append(schmitt_analysis(ain, aout, cap.sample_rate, es.frequency))
+        if es.shape == "square":
+            delays.append(propagation_delays(ain, aout, cap.sample_rate))
     first = caps[0]
     ain, aout = first.channel(a.ref_channel), first.channel(a.vout_channel)
     r0 = results[0]
@@ -273,7 +322,7 @@ def run(bench: Bench, es: EnSineConfig) -> EnSineResult:
             notes.append(f"EN_OUT toggles {epc:.1f} times per input cycle: it chatters around the threshold")
         if r0.voh < 0.8 * es.vin:
             notes.append(f"VOH {r0.voh:.2f} V is below 80 % of EN_VDD ({es.vin:.2f} V)")
-        if np.isfinite(r0.hysteresis) and r0.hysteresis <= 0:
+        if es.shape != "square" and np.isfinite(r0.hysteresis) and r0.hysteresis <= 0:
             notes.append("no hysteresis: VT+ is not above VT-")
     t = first.time
     return EnSineResult(
@@ -289,6 +338,7 @@ def run(bench: Bench, es: EnSineConfig) -> EnSineResult:
         sample_rate=first.sample_rate,
         issues=list(dict.fromkeys(issues)),
         notes=notes,
+        delays=delays,
     )
 
 
@@ -310,7 +360,9 @@ def plot(res: EnSineResult, dut: str):
     ax_in.plot(ms, res.ain, color=plotting.SERIES[1], lw=1.2)
     ax_out.plot(ms, res.aout, color=plotting.SERIES[0], lw=1.2)
     ax_tr.plot(res.ain, res.aout, color=plotting.SERIES[0], lw=0.8, alpha=0.7)
-    if valid:
+    if valid and res.square:
+        ax_tr.set_title("Transfer (square: no thresholds measured)", fontsize=10, pad=6)
+    elif valid:
         for v, name in ((r.vt_rise, "VT+"), (r.vt_fall, "VT-")):
             ax_in.axhline(v, color=plotting.INK_2, lw=0.9, ls=(0, (3, 2)))
             ax_in.annotate(

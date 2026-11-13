@@ -89,6 +89,7 @@ class LdoModel:
     en_vt_rise: float = 0.58  # fraction of EN_VDD (= VIN) where EN_OUT goes high
     en_vt_fall: float = 0.42  # fraction of EN_VDD where EN_OUT goes low (Schmitt hysteresis)
     en_t_rise: float = 30e-9  # EN_OUT edge time (s)
+    en_delay: float = 30e-9  # s, EN_AIN crossing a threshold -> EN_OUT switching (propagation delay)
     vref_nominal: float = 1.2  # BGR output (V) at VIN 1.8 V and 25 C
     bgr_line: float = 0.5e-3  # V/V, BGR line sensitivity while it has headroom
     bgr_min_vin: float = 1.56  # V, below this VIN the BGR runs out of headroom: VREF falls 1 V/V
@@ -472,16 +473,27 @@ class SimAnalogDiscovery:
         ratio = float(np.clip((level - mid) / amp, -1, 1))
         # phase so the wave crosses `level` with the right slope at t = 0 (the trigger).
         # The triangle is (2/pi) asin(sin(theta)): same phase as the sine, linear between its peaks.
-        start = math.asin(ratio) if shape == "sine" else math.pi / 2 * ratio
+        # The square jumps at theta = 0 / pi whatever the level.
+        start = {"sine": math.asin(ratio), "triangle": math.pi / 2 * ratio}.get(shape, 0.0)
         phase = start if edge == "rising" else math.pi - start
-        theta = 2 * math.pi * f * t + phase
-        unit = np.sin(theta) if shape == "sine" else 2 / math.pi * np.arcsin(np.sin(theta))
-        ain = mid + amp * unit
+
+        def wave(tt: np.ndarray) -> np.ndarray:
+            s = np.sin(2 * math.pi * f * tt + phase)
+            if shape == "sine":
+                return mid + amp * s
+            if shape == "triangle":
+                return mid + amp * 2 / math.pi * np.arcsin(s)
+            return mid + amp * np.where(s >= 0, 1.0, -1.0)
+
+        ain = wave(t)
+        ain_late = wave(t - m.en_delay)  # what the comparator acts on, en_delay later
         vdd = m.vin
         hi_th, lo_th = m.en_vt_rise * vdd, m.en_vt_fall * vdd
         out = np.zeros(n)
-        state = ain[0] > (hi_th + lo_th) / 2  # initial comparator state (unknown inside the hysteresis band)
-        for k, a in enumerate(ain):
+        state = (
+            ain_late[0] > (hi_th + lo_th) / 2
+        )  # initial comparator state (unknown inside the hysteresis band)
+        for k, a in enumerate(ain_late):
             if not state and a >= hi_th:
                 state = True
             elif state and a <= lo_th:
@@ -559,7 +571,7 @@ class SimAnalogDiscovery:
         self.set_wave(channel, shape="sine", frequency=frequency, low=low, high=high)
 
     def set_wave(self, channel: int, *, shape: WaveShape, frequency: float, low: float, high: float) -> None:
-        if shape not in ("sine", "triangle"):
+        if shape not in ("sine", "triangle", "square"):
             raise InstrumentError(f"unknown wavegen shape {shape!r}")
         if not (-5.0 <= low < high <= 5.0):
             raise InstrumentError("AD2 wavegen is limited to +/-5 V")

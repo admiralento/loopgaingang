@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 # AD2 limits
 AD2_DIO_PINS = 16  # DIO 0..15
 AD2_WAVEGEN_MAX_V = 5.0  # highest wavegen output used for VIN (V)
+AD2_MAX_SAMPLE_RATE = 100e6  # scope sample rate ceiling (Hz)
 
 
 # RS-232 handshake: 'dsr-pacing' = wait for DSR before each command (HP E36xxA / 34401A),
@@ -478,9 +479,12 @@ class EnSineConfig(_Model):
     """[en_sine] (enable-sine): a sine or triangle into the enable block's analog input, its output watched for the thresholds."""
 
     vin: float = Field(gt=0, description="PSU on VIN (feeds EN_VDD through J1 9-11) (V)")
-    shape: Literal["sine", "triangle"] = Field(
+    shape: Literal["sine", "triangle", "square"] = Field(
         "sine",
-        description="Input wave: sine, or triangle (a linear ramp up and down at 2 (high - low) f V/s)",
+        description=(
+            "Input wave: sine, triangle (a linear ramp up and down at 2 (high - low) f V/s) or square "
+            "(EN_AIN -> EN_OUT propagation delay; no thresholds)"
+        ),
     )
     frequency: float = Field(1e3, gt=0, description="Wave frequency (Hz)")
     low: float = Field(0.0, ge=-0.3, description="Wave minimum (V)")

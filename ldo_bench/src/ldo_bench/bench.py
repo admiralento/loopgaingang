@@ -407,11 +407,11 @@ class Bench:
     def en_ain_sine(
         self, channel: int, *, frequency: float, low: float, high: float, shape: WaveShape = "sine"
     ) -> None:
-        """Wavegen sine or triangle (`shape`, low..high V, Hz) into the enable block's EN_AIN (enable-sine).
+        """Wavegen sine, triangle or square (`shape`, low..high V, Hz) into the enable block's EN_AIN (enable-sine).
 
         EN_AIN is powered from VIN (EN_VDD), so the wave's top is held to dut.vin_max (and the
-        wavegen's 5 V); its bottom may go to -0.3 V, the usual input clamp limit. Both shapes
-        peak exactly at low and high, so the same limits apply to each.
+        wavegen's 5 V); its bottom may go to -0.3 V, the usual input clamp limit. Every shape
+        peaks exactly at low and high, so the same limits apply to each.
         """
         limit = min(self.cfg.dut.vin_max, AD2_WAVEGEN_MAX_V)
         if not -0.3 <= low < high <= limit + 1e-9:

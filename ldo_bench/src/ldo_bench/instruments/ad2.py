@@ -307,9 +307,13 @@ class AnalogDiscovery2:
         self.set_wave(channel, shape="sine", frequency=frequency, low=low, high=high)
 
     def set_wave(self, channel: int, *, shape: WaveShape, frequency: float, low: float, high: float) -> None:
-        """Continuous sine or triangle (Hz) between `low` and `high` volts (AD2 W1/W2: +/-5 V)."""
+        """Continuous sine, triangle or square (Hz) between `low` and `high` volts (AD2 W1/W2: +/-5 V)."""
         p, ao = self._p, self.dev.analogOut
-        functions = {"sine": p.DwfAnalogOutFunction.Sine, "triangle": p.DwfAnalogOutFunction.Triangle}
+        functions = {
+            "sine": p.DwfAnalogOutFunction.Sine,
+            "triangle": p.DwfAnalogOutFunction.Triangle,
+            "square": p.DwfAnalogOutFunction.Square,
+        }
         if shape not in functions:
             raise InstrumentError(f"unknown wavegen shape {shape!r} (one of {', '.join(functions)})")
         if not (-5.0 <= low < high <= 5.0):

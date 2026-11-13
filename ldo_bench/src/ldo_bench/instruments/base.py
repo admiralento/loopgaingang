@@ -22,7 +22,7 @@ from typing import Literal, Protocol, runtime_checkable
 import numpy as np
 
 Edge = Literal["rising", "falling"]
-WaveShape = Literal["sine", "triangle"]  # periodic wavegen shapes (Wavegen.set_wave)
+WaveShape = Literal["sine", "triangle", "square"]  # periodic wavegen shapes (Wavegen.set_wave)
 
 
 class InstrumentError(RuntimeError):
