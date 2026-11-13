@@ -38,7 +38,8 @@ ldo_bench/
 │   └── demo_board.toml     TPS7A7001 evaluation board (1.0 V out) + the Switched_R_Load_Bank board
 ├── docs/                   this folder
 ├── src/ldo_bench/
-│   ├── cli.py              one Typer command per test
+│   ├── cli.py              one Typer command per test (each: _override the options, then _run)
+│   ├── wiring.py           the wiring lines every command prints: one connection per line, from [board]
 │   ├── config.py           the TOML schema (pydantic models) and the cross-checks between sections
 │   ├── bench.py            Bench (safety layer) and open_bench()
 │   ├── loadbank.py         load bank: code ↔ DIO pins, current estimate, the dut.i_max limit
@@ -57,6 +58,9 @@ ldo_bench/
 │   │   └── sim.py          the simulated bench (LdoModel and fake instruments)
 │   └── procedures/         one module per test (see below), plus transient.py shared by the transient tests
 └── tests/                  pytest: drivers against fake serial/VISA links, every procedure on the simulator
+    ├── conftest.py         fixtures (configs, boards, both buffer paths) and the no-real-bus guard
+    ├── helpers.py          miswire(), spy(), config_path(), invoke() for the tests
+    └── test_cli_sim.py     every command end to end on the simulator (`poe sim-all`)
 ```
 
 ## Configuration (`config.py`)
@@ -67,10 +71,13 @@ Everything that depends on the board, the wiring or the test conditions is in th
 - **VIN ceilings:** any VIN a test can apply (sweep ends, step levels, sine peaks) must be within `dut.vin_max`, and within `psu.v_max` whenever the PSU drives VIN directly.
 - **Buffer tests:** in line-tran and psrr the PSU powers the BUF634 rail, which sits *above* `dut.vin_max`. The rail must be within `psu.v_max`, and must be at least 2 V (`buffer_headroom`) above the highest VIN, or the buffer clips.
 - **Load:** every load code a test uses must draw no more than `dut.i_max` at `vout_nominal`.
-- **Pins:** the enable DIO pins must not also be load-bank pins.
+- **Pins:** the enable DIO pins must not also be load-bank pins (`BenchConfig.enable_pin_clash()`, also used by `--enable dio`).
+- **Split buffer** (`[buffer]`): its output isn't `psu.channel`, `v_minus` covers the buffer tests' headroom, and the check levels stay within `dut.vin_max`.
 - **External reference** (`[vref]`, if present): it needs the PSU's other output, `vref.v_max` within `dut.vin_max`, and `vref.external_v` no more than `vref.above_vin` (0.3 V) above any test's lowest VIN (`BenchConfig.lowest_vin()`).
 
-CLI options never bypass this: `cli._load_with()` rebuilds the config with the changed section and validates it again.
+CLI options never bypass this: `cli._override()` validates the changed section, then rebuilds and validates the whole config (`_load_with`).
+
+`[board]` (`BoardConfig`) names the board points the wiring lines use: on JAFWAK the silkscreen label with its connector and pin (`J13 pin 4 (OUTA)`), on the demo board its own points. `wiring.py` builds every line from it: one connection per line, a scope channel's + and − on one line, the DMM's two leads on one line, one line per jumper. `tests/test_wiring.py` checks that rule for every command.
 
 ## The Bench (`bench.py`)
 
@@ -197,15 +204,18 @@ results/
 ## Tests and tooling
 
 ```
-uv run poe verify         # the gate: format check, lint, both configs validated, 386 tests (~15 s, no hardware)
-uv run poe test           # just the tests
+uv run poe verify         # the gate: format check, lint, both configs validated, the tests (~12 s, no hardware)
+uv run poe test           # just the tests (extra arguments go to pytest: a file, -k ...)
+uv run poe sim-all        # every command end to end on the simulator, both boards
+uv run poe test-last      # rerun the last failures, stop at the first
 uv run poe format         # format the code
 ```
 
 The tasks are defined in `[tool.poe.tasks]` in `pyproject.toml` (poethepoet, a dev dependency, so nothing is installed on the host and it works the same on Windows).
 
 - **Drivers** are tested against fake transports that record what was sent and answer like the instrument (`FakeSerial`, `FakeScope`).
-- **Procedures** run end to end on the simulator, including deliberately miswired cases.
+- **Procedures** run end to end on the simulator, including deliberately miswired cases. Miswire with `helpers.miswire(bench, ...)`: it runs the real wiring step first, then changes what the simulated bench has.
+- **No hardware:** an autouse fixture makes any real VISA / RS-232 / Prologix / AD2 search fail the test. Figures are closed after every test, and pytest treats warnings as errors.
 - **Before committing,** run `uv run poe verify` and check its exit code, not just the last lines of its output.
 
 ## Recipes

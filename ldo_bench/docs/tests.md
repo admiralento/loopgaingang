@@ -15,7 +15,7 @@ Every command also takes:
 - `--vref bgr|ext`: the reference VOUT follows. `ext` uses the supply's second output in place of the BGR (JAFWAK, JP2 removed). Not on the enable or bench-check tests; see [External reference](#external-reference-bgr-vs---vref-ext-jafwak).
 - `--enable static|dio` (smoke, load-reg, line-reg, load-tran, vref-line, temp): how the LDO is enabled. `static` (default): tied on with jumpers. `dio`: driven from the AD2; see [Enable from the AD2](#enable-from-the-ad2---enable-dio-jafwak).
 
-Before powering anything up, each command prints the wiring it expects and asks you to confirm it. The wiring lists below are exactly what the commands print. Option values in the examples are just examples; defaults come from the board's config section, which is named under each test.
+Before powering anything up, each command prints the wiring it expects and asks you to confirm it: one connection per line, scope 1+ and 1− on one line, scope 2 on its own, named by the board's silkscreen label and connector pin (`[board]` in the config). The lists below summarise it; run a command with `--sim` to see exactly what it prints. Option values in the examples are just examples; defaults come from the board's config section, which is named under each test.
 
 How a run decides it measured the board, and what `_INVALID` means, is covered in [architecture.md](architecture.md#real-data-only-the-validity-model).
 
@@ -107,7 +107,7 @@ First bring-up plan, steps I.1–I.5. **Run it before `line-tran` or `psrr`, wit
   - VIN at the board from AD2 scope 2, averaged over 0.1 s (a whole number of 50/60 Hz cycles)
   - optionally, the supply's V/I readback (about 0.8 s per point)
 - **Computes:**
-  - **Load current:** estimated as VOUT / R from the bank resistors. On JAFWAK, VOUT measured at J13.3 is after R1 (the 0.1 Ω output current-sense resistor; there's no feedback loop), so the output resistance includes R1's 0.1 Ω. Probe at OUTA (J13.4) to exclude it. On the demo board, R5 (100 mΩ, 2512) is in series between `/LDO_VOUT` (U1's output, where the feedback divider connects) and `/VOUT`. TP4 "OUT_S2" is on `/LDO_VOUT` (excludes R5); TP3 "OUT_S1", J8 (SMA) and J2 are on `/VOUT` (include it). Read from the PCB file on 2026-11-10; confirm on the board.
+  - **Load current:** estimated as VOUT / R from the bank resistors. On JAFWAK the probes are at OUTA (J13 pin 4, TP4), before R1, so R1 isn't in the result. VOUT measured at J13 pin 3 (OUTB) would be after R1 (the 0.1 Ω output current-sense resistor; there's no feedback loop), and the output resistance would include R1's 0.1 Ω. On the demo board, R5 (100 mΩ, 2512) is in series between `/LDO_VOUT` (U1's output, where the feedback divider connects) and `/VOUT`. TP4 "OUT_S2" is on `/LDO_VOUT` (excludes R5); TP3 "OUT_S1", J8 (SMA) and J2 are on `/VOUT` (include it). Read from the PCB file on 2026-11-10; confirm on the board.
   - **Output resistance:** the slope dVOUT/dI (mV/mA, equal to the output resistance).
   - **Total change:** ΔVOUT over the range (mV and %).
 - **Setup checks:**
@@ -169,7 +169,7 @@ First bring-up plan, steps I.1–I.5. **Run it before `line-tran` or `psrr`, wit
   - PSU -> VIN_DC (JP4 to DC); nothing on the load bank (it stays off)
   - DMM V (HI) -> J13.1 (VIN), COM -> J13.2 (INB): across R13. The DMM floats, so no ground lead; nothing else on the V terminals
   - J1: every rail you want powered (BGR_VDD 1-3, VDD 5-7, EN_VDD 9-11, OTA_VDD 13-15)
-  - Scope 1+ -> J13.3 (VOUT), 1- -> GND (VOUT check; draws ~1 uA)
+  - Scope 1+ -> J13 pin 4 (OUTA), Scope 1- -> J13 pin 6 (GND) (VOUT check; draws ~1 uA)
   - Enable path: J6 7-8 (EN_CTRL_18 -> EN_AIN), J8 1-2 (EN_OUT -> EN_IN), J8 9-10 (~EN_OUT -> ~EN_IN)
   - AD2 DIO 5 -> J13.12 (EN_CTRL_33), DIO 6 -> J13.10 (~EN_CTRL_33); AD2 V+ -> J13.14 (V_33)
   - AD2 GND -> board GND
@@ -350,7 +350,7 @@ Without `[buffer]` (the demo board) line-tran and psrr use the single-rail path 
   - Enable path: J6 7-8 (EN_CTRL_18 -> EN_AIN), J8 1-2 (EN_OUT -> EN_IN), J8 9-10 (~EN_OUT -> ~EN_IN)
   - AD2 DIO 5 -> J13.12 (EN_CTRL_33), DIO 6 -> J13.10 (~EN_CTRL_33)
   - AD2 V+ -> J13.14 (V_33), AD2 GND -> board GND
-  - Scope 1+ -> J13.3 (VOUT), 1- -> GND
+  - Scope 1+ -> J13 pin 4 (OUTA), Scope 1- -> J13 pin 6 (GND)
   - Scope 2+ -> TP3 (VREF, the BGR output), 2- -> GND; JP2 closed
 - **Enable path:** DIO 5 → EN_CTRL_33 → FXLP34 level shifter → EN_CTRL_18 → enable block → EN_OUT → EN_IN. DIO 6 drives ~EN_CTRL_33 inverted. The AD2's V+ supplies the level shifters' 3.3 V side.
 - **Does:** steps the enable line. The AD2 triggers on its own DIO edge (the Digital In trigger detector), so both scope channels are free. Each edge (enable, disable) is averaged.

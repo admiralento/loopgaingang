@@ -2,6 +2,26 @@
 
 What was built, what was measured, and what went wrong along the way. Newest session first.
 
+## 2026-11-13: code review and clean-up (no hardware run)
+
+Three reviewers went over the whole package; the fixes were made with a test each, and the gate stayed green after every commit.
+
+**Bugs fixed:**
+- **The test suite reached real hardware.** `test_missing_scope_is_not_fatal` let `open_bench` scan the real RS-232 ports, so `poe verify` on the bench Mac sent commands to the 34401A. Now any real bus search fails a test.
+- **EN high through shutdown after an error** in `iq` and `enable-startup`: they drove the enable without telling the Bench. Shutdown now drives EN low whenever anything drove it.
+- **A 34401A DC volts overload** came back as 9.9E+37 "V"; it now reads ±inf.
+- **`buffer-check`** recorded a Bench limit refusal as a setup issue; it now stops the run.
+- **The single-rail buffer interlock** lost its end-to-end tests when JAFWAK moved to the split supply; they now run on both paths (checked by disabling the proof: four tests fail).
+- **Smaller:** `wavegen_off` left VIN marked as driven; `_ensure_psu` ignored a different current limit silently; other exceptions skipped the SHUTDOWN FAILED banner; the `iq` sweep could stop short of `vin_stop`; `compare` refused runs saved under an older config.
+
+**Clean-up:**
+- **Wiring:** one line per connection, built from a new `[board]` section; `iq` and `enable-startup` probe VOUT at OUTA (J13 pin 4) like the rest.
+- **CLI:** one run helper and one override helper; choice options listed in `--help`; `LDO_BENCH_CONFIG`.
+- **Shared code** in the Bench, config, analysis, plotting and drivers; dead code removed.
+- **Tests:** shared helpers; every command run on the simulator (`poe sim-all`); regrouped by topic; warnings are errors.
+
+**Left as is:** `summary.json` key names (renaming would break `compare` against saved runs), the load-tran / line-tran edge plumbing (similar but separate), simulator behaviour (scope clipping, the three "off" currents), and the driver Protocols' missing methods (`aux`, `set_vplus`, `read`, used through `hasattr`).
+
 ## 2026-11-13: scripts for the bring-up plan's by-hand tests (simulator only)
 
 The bring-up plan was rewritten as "Bring up 2" (Google Doc): each test now says what it is, why, the setup by silkscreen label and connector pin, and the command. Four of its by-hand tests now have scripts. **None has run on hardware.**

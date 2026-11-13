@@ -40,7 +40,8 @@ Bench automation for characterizing our LDO (the JAFWAK board) and the TPS7A7001
    ```
    cd ldo_bench
    uv sync
-   uv run poe verify         # the gate: lint, both configs and 386 tests, no hardware needed
+   uv run poe verify         # the gate: lint, both configs and the whole test suite, no hardware needed
+   uv run poe sim-all        # every command end to end on the simulator, both boards
    ```
 3. **Try it on the simulator** (no hardware; prints a SIMULATED report and saves nothing):
    ```
@@ -82,7 +83,7 @@ uv run ldo-bench load-reg -c configs/jafwak.toml --enable dio  # EN driven from 
 uv run ldo-bench compare results/load-reg/<bgr run> results/load-reg/<extref run>
 ```
 
-Every command also takes:
+Set `LDO_BENCH_CONFIG=configs/jafwak.toml` to leave out `-c` at the bench. Every command also takes:
 - `--sim`: no hardware
 - `--save-sim`: keep a simulated run, marked SIM
 - `--yes`: skip the wiring prompt
@@ -161,10 +162,15 @@ Each run writes a folder under `results/<test>/`, e.g. `results/load-tran/202611
 ## Development
 
 ```
-uv run poe verify            # the gate: format check, lint, both configs, tests (no hardware)
-uv run poe format            # format the code
-uv run poe                   # list all tasks
+uv run poe verify                        # the gate: format check, lint, both configs, tests (no hardware)
+uv run poe sim-all                       # every command on the simulator, both boards
+uv run poe test tests/test_vref.py -k jp2   # one file or test (extra arguments go to pytest)
+uv run poe test-last                     # rerun only what failed last time
+uv run poe format                        # format the code
+uv run poe                               # list all tasks
 ```
+
+`discover` isn't a task: it searches the real buses. The test suite can't touch hardware (any real bus search fails the test).
 
 Repo rules for people and AI agents are in [`AGENTS.md`](../AGENTS.md) at the repo root.
 
