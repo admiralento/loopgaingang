@@ -332,9 +332,9 @@ Without `[buffer]` (the demo board) line-tran and psrr use the single-rail path 
   - Each capture spans `cycles` periods in 8192 samples, at most 100 MS/s, so at 1 Hz a capture takes 4 s, one sample every 488 µs, and resolves the threshold to about 2 mV. The trigger wait is `timeout` plus that window.
 - **Computes:**
   - **Thresholds:** the input voltage at each output crossing gives VT+ and VT-, and their difference is the hysteresis.
-  - **Output levels and edges:** VOH / VOL, 10–90 % edge times and duty cycle. An edge within two sample intervals is reported as "under" that (977 ns at 1 kHz, 977 µs at 1 Hz), not as a time: on the bench a fast edge measured 1.3–1.6 intervals at both rates.
+  - **Output levels and edges:** VOH / VOL, 10–90 % rise and fall times and duty cycle. An edge within two sample intervals is reported as "under" that (977 ns at 1 kHz, 977 µs at 1 Hz), not as a time: on the bench a fast edge measured 1.3–1.6 intervals at both rates. So the real rise and fall times come from the square run at `--freq 1e5` (100 MS/s, 20 ns); a sine or triangle run whose edges are only bounds says so and points to it.
   - **Chatter:** output edges per input cycle. More than 1 means it chatters.
-- **Plot:** input and output against time, and the transfer curve (output against input: the hysteresis loop).
+- **Plot:** input and output against time, the transfer curve (output against input: the hysteresis loop), and one rising and one falling output edge close up, with every sample marked and the 10 % / 90 % levels drawn, so the edge's shape and the sample spacing are visible (on a square run the input edge is in view too, so the delay shows).
 - **Setup checks**, on every capture (a probe can slip mid-run):
   - the input swing isn't the wave's (probe not on TP6, J6 wrong)
   - EN_OUT doesn't switch (probe not on J8.2, EN_VDD unpowered)
@@ -447,8 +447,8 @@ Even so, the BGR is unprotected from one mistake. With JP2 fitted, OUT2 sits on 
 ### `compare`: two runs side by side
 
 ```
-uv run ldo-bench load-reg -c configs/jafwak.toml                 # JP2 fitted: the BGR
-uv run ldo-bench load-reg -c configs/jafwak.toml --vref ext      # JP2 removed: 1.204 V on VREF_IN
+uv run ldo-bench load-reg                 # JP2 fitted: the BGR
+uv run ldo-bench load-reg --vref ext      # JP2 removed: 1.204 V on VREF_IN
 uv run ldo-bench compare results/load-reg/<bgr run> results/load-reg/<extref run>
 ```
 

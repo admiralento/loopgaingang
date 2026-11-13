@@ -16,7 +16,7 @@ None of the code is tied to a particular unit. Instruments are found by model (`
 2. Install the [Digilent WaveForms](https://digilent.com/reference/software/waveforms/waveforms-3/start) runtime. It provides the AD2's driver library (`dwf.dll` / `dwf.framework`).
 3. **Windows only:** install NI-VISA. On macOS and Linux nothing more is needed: pyvisa-py talks to the UsbGpib adapter through the bundled libusb.
 4. In `ldo_bench/`: `uv sync`.
-5. With the instruments on: `uv run ldo-bench discover -c configs/jafwak.toml`.
+5. With the instruments on: `uv run ldo-bench discover -c configs/jafwak.toml` (`discover` is the one command that only uses a config when given `-c`).
 
 Close the WaveForms GUI before running tests, because only one program can open the AD2.
 

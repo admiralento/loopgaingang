@@ -215,8 +215,18 @@ class EnSineResult:
             f"  duty          {self._stat('duty')[0] * 100:.1f} %   "
             f"edges per input cycle {self._stat('edges_per_cycle')[0]:.2f}",
         ]
+        if not self.square and self._edges_bounded:
+            lines.append(
+                "  (rise / fall are only bounds at this sample rate: run --shape square --freq 1e5 "
+                "for the edge times at 100 MS/s)"
+            )
         lines += [f"  note: {n}" for n in self.notes]
         return "\n".join(lines)
+
+    @property
+    def _edges_bounded(self) -> bool:
+        """The rise or fall time is within two sample intervals, so it is reported as a bound."""
+        return any(self._stat(k)[0] <= 2 / self.sample_rate for k in ("t_rise", "t_fall"))
 
 
 def wiring(bench: Bench, es: EnSineConfig) -> list[str]:
@@ -345,18 +355,75 @@ def run(bench: Bench, es: EnSineConfig) -> EnSineResult:
     )
 
 
+EDGE_MIN_HALF_WIDTH = 12  # samples either side of an edge in its zoomed plot, at least
+
+
+def edge_window(aout: np.ndarray, rising: bool, half_width: int) -> slice | None:
+    """Samples around the first output edge (rising or falling through its midpoint) that has
+    `half_width` samples on both sides in the capture, or None if there is no such edge."""
+    mid = (np.percentile(aout, 98) + np.percentile(aout, 2)) / 2
+    a, b = aout[:-1], aout[1:]
+    edges = np.nonzero((a < mid) & (b >= mid) if rising else (a > mid) & (b <= mid))[0]
+    for k in edges:
+        if k - half_width >= 0 and k + half_width + 1 < len(aout):
+            return slice(k - half_width, k + half_width + 2)
+    return None
+
+
+def _time_unit(span: float) -> tuple[float, str]:
+    """(scale, unit) to show a time span (s) in ns, us, ms or s."""
+    for scale, unit in ((1e-9, "ns"), (1e-6, "us"), (1e-3, "ms")):
+        if span < scale * 1e3:
+            return scale, unit
+    return 1.0, "s"
+
+
+def _edge_zoom(ax, res: EnSineResult, rising: bool) -> None:
+    """One output edge close up: EN_AIN and EN_OUT against time, every sample marked, with the
+    10 % / 90 % levels, so the edge's shape and the sample spacing can be seen."""
+    r, fs = res.captures[0], res.sample_rate
+    t_edge = r.t_rise if rising else r.t_fall
+    half = EDGE_MIN_HALF_WIDTH
+    if np.isfinite(t_edge):
+        half = max(half, int(np.ceil(3 * t_edge * fs)))
+    if res.delays and np.isfinite(d := res.delays[0].lh if rising else res.delays[0].hl):
+        half = max(half, int(np.ceil(1.5 * d * fs)))  # keep the input edge in view too
+    name = "rising" if rising else "falling"
+    window = edge_window(res.aout, rising, half)
+    if window is None:
+        ax.set_title(f"Output {name} edge: none in the capture", fontsize=10, pad=6)
+        return
+    t = res.t[window] - res.t[window][len(res.t[window]) // 2]
+    scale, unit = _time_unit(float(t[-1] - t[0]))
+    ax.plot(t / scale, res.ain[window], color=plotting.SERIES[1], lw=1.0, marker=".", ms=3, label="EN_AIN")
+    ax.plot(t / scale, res.aout[window], color=plotting.SERIES[0], lw=1.2, marker=".", ms=4, label="EN_OUT")
+    swing = r.voh - r.vol
+    for frac in (0.1, 0.9):
+        ax.axhline(r.vol + frac * swing, color=plotting.INK_2, lw=0.8, ls=(0, (3, 2)))
+    ax.set_title(
+        f"Output {name} edge: {res._edge('t_rise' if rising else 't_fall')} (10-90 %)", fontsize=10, pad=6
+    )
+    ax.set_xlabel(f"Time from the edge ({unit}); dots are samples, {_seconds(1 / fs)} apart")
+    ax.set_ylabel("V")
+    ax.legend(fontsize=8, loc="center right" if rising else "center left")
+
+
 def plot(res: EnSineResult, dut: str):
-    """EN_AIN and EN_OUT against time (left) and EN_OUT against EN_AIN, the transfer (right).
+    """EN_AIN and EN_OUT against time (top left), EN_OUT against EN_AIN, the transfer (top right),
+    and one rising and one falling output edge close up (bottom).
 
     Valid runs mark VT+ / VT- from the first capture; invalid runs show the issues in a red box.
     """
     import matplotlib.pyplot as plt
 
-    fig = plt.figure(figsize=(11.0, 5.6), layout="constrained")
-    gs = fig.add_gridspec(2, 2, width_ratios=[1.6, 1])
+    fig = plt.figure(figsize=(11.0, 8.4), layout="constrained")
+    gs = fig.add_gridspec(3, 2, width_ratios=[1.6, 1], height_ratios=[1, 1, 1.2])
     ax_in = fig.add_subplot(gs[0, 0])
     ax_out = fig.add_subplot(gs[1, 0], sharex=ax_in)
-    ax_tr = fig.add_subplot(gs[:, 1])
+    ax_tr = fig.add_subplot(gs[:2, 1])
+    zoom = gs[2, :].subgridspec(1, 2)
+    for col, rising in enumerate((True, False)):
+        _edge_zoom(fig.add_subplot(zoom[0, col]), res, rising)
     ms = res.t * 1e3
     valid = not res.issues
     r = res.captures[0]

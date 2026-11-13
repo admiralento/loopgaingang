@@ -10,7 +10,8 @@ side). Every test command does the same five things:
   4. Run the procedure: `procedures.<test>.run(bench, section, ...)` returns a result object.
   5. Save the run folder (`_save`, see results.py) and print the report (`_run` does 3-5).
 
-Set LDO_BENCH_CONFIG to a config file to leave out `-c` on every command.
+Every command uses configs/jafwak.toml unless `-c` or LDO_BENCH_CONFIG names another config,
+and prints the path it loaded first.
 
 Exit codes:
   0    success
@@ -54,11 +55,20 @@ Rail = _choices("Rail", IqConfig, "rail")
 Ch2 = _choices("Ch2", StartupConfig, "ch2")
 VinFrom = _choices("VinFrom", LineRegConfig, "vin_source")
 
+# The config used when neither -c nor LDO_BENCH_CONFIG names one: the JAFWAK board's, found from the
+# project folder (src/ldo_bench/cli.py -> ldo_bench/configs), so it works from any directory.
+DEFAULT_CONFIG = Path(__file__).resolve().parents[2] / "configs" / "jafwak.toml"
+
 # Options shared by several commands.
 ConfigOpt = Annotated[
     Path,
     typer.Option(
-        "--config", "-c", exists=True, dir_okay=False, envvar="LDO_BENCH_CONFIG", help="Bench TOML config"
+        "--config",
+        "-c",
+        exists=True,
+        dir_okay=False,
+        envvar="LDO_BENCH_CONFIG",
+        help="Bench TOML config (default: configs/jafwak.toml)",
     ),
 ]
 SimOpt = Annotated[bool, typer.Option("--sim", help="Use simulated instruments (no hardware)")]
@@ -140,8 +150,9 @@ def _fail(message: str, code: int = 2) -> NoReturn:
 
 
 def _load(path: Path, verbose: bool = False) -> BenchConfig:
-    """Set up logging, then load and validate the config; on any validation error print it and exit 2."""
+    """Set up logging, print which config this is, then load and validate it; on any validation error print it and exit 2."""
     _logging(verbose)
+    typer.echo(f"config: {path}")
     try:
         return load_config(path)
     except ValidationError as e:
@@ -412,10 +423,10 @@ def _run(
 
 # --- bench checks ---------------------------------------------------------------
 @app.command("check-config")
-def check_config(config: ConfigOpt) -> None:
+def check_config(config: ConfigOpt = DEFAULT_CONFIG) -> None:
     """Validate a config file without touching any instrument."""
     cfg = _load(config)
-    typer.secho(f"{config} OK ({cfg.dut.name})", fg="green")
+    typer.secho(f"OK ({cfg.dut.name})", fg="green")
 
 
 @app.command()
@@ -445,7 +456,7 @@ def discover(
 
 @app.command("psu-check")
 def psu_check(
-    config: ConfigOpt,
+    config: ConfigOpt = DEFAULT_CONFIG,
     out: OutOpt = Path("results"),
     sim: SimOpt = False,
     save_sim: SaveSimOpt = False,
@@ -475,7 +486,7 @@ def psu_check(
 
 @app.command("loadbank-check")
 def loadbank_check(
-    config: ConfigOpt,
+    config: ConfigOpt = DEFAULT_CONFIG,
     voltage: Annotated[float | None, typer.Option(help="PSU voltage across the bank (V, max 1.5)")] = None,
     out: OutOpt = Path("results"),
     sim: SimOpt = False,
@@ -507,7 +518,7 @@ def loadbank_check(
 
 @app.command()
 def smoke(
-    config: ConfigOpt,
+    config: ConfigOpt = DEFAULT_CONFIG,
     vin: Annotated[float | None, typer.Option(help="VIN to apply (default: load_reg.vin)")] = None,
     sim: SimOpt = False,
     psu: PsuOpt = None,
@@ -564,7 +575,7 @@ def _smoke(bench: Bench, vin: float) -> None:
 
 @app.command("buffer-check")
 def buffer_check(
-    config: ConfigOpt,
+    config: ConfigOpt = DEFAULT_CONFIG,
     out: OutOpt = Path("results"),
     sim: SimOpt = False,
     save_sim: SaveSimOpt = False,
@@ -597,7 +608,7 @@ def buffer_check(
 # --- DC tests -------------------------------------------------------------------
 @app.command("load-reg")
 def load_reg(
-    config: ConfigOpt,
+    config: ConfigOpt = DEFAULT_CONFIG,
     vin: Annotated[float | None, typer.Option(help="Override load_reg.vin (V)")] = None,
     out: OutOpt = Path("results"),
     sim: SimOpt = False,
@@ -632,7 +643,7 @@ def load_reg(
 
 @app.command("line-reg")
 def line_reg(
-    config: ConfigOpt,
+    config: ConfigOpt = DEFAULT_CONFIG,
     load: LoadOpt = None,
     vin_from: Annotated[
         VinFrom | None, typer.Option(help="VIN measurement: ad2 (scope at the board) or psu (its readback)")
@@ -673,7 +684,7 @@ def line_reg(
 
 @app.command("vref-line")
 def vref_line(
-    config: ConfigOpt,
+    config: ConfigOpt = DEFAULT_CONFIG,
     high: Annotated[float | None, typer.Option(help="First (highest) VIN (V)")] = None,
     low: Annotated[float | None, typer.Option(help="Last (lowest) VIN (V)")] = None,
     step: Annotated[float | None, typer.Option(help="VIN step (V)")] = None,
@@ -718,7 +729,7 @@ def vref_line(
 
 @app.command("iq")
 def iq(
-    config: ConfigOpt,
+    config: ConfigOpt = DEFAULT_CONFIG,
     method: Annotated[
         Method | None,
         typer.Option(help="shunt (DMM volts across R13) or series (DMM amps in place of a J1 jumper)"),
@@ -771,7 +782,7 @@ def iq(
 # --- transient tests ------------------------------------------------------------
 @app.command("load-tran")
 def load_tran(
-    config: ConfigOpt,
+    config: ConfigOpt = DEFAULT_CONFIG,
     low: Annotated[
         str | None, typer.Option("--from", help="Low load: code or current, e.g. 1 or 4mA")
     ] = None,
@@ -825,7 +836,7 @@ def load_tran(
 
 @app.command("line-tran")
 def line_tran(
-    config: ConfigOpt,
+    config: ConfigOpt = DEFAULT_CONFIG,
     low: Annotated[float | None, typer.Option(help="VIN low level (V)")] = None,
     high: Annotated[float | None, typer.Option(help="VIN high level (V)")] = None,
     load: LoadOpt = None,
@@ -876,7 +887,7 @@ def line_tran(
 
 @app.command("psrr")
 def psrr(
-    config: ConfigOpt,
+    config: ConfigOpt = DEFAULT_CONFIG,
     fstart: Annotated[float | None, typer.Option(help="First frequency (Hz)")] = None,
     fstop: Annotated[float | None, typer.Option(help="Last frequency (Hz)")] = None,
     ppd: Annotated[int | None, typer.Option(help="Points per decade")] = None,
@@ -927,7 +938,7 @@ def psrr(
 # --- enable block and temperature (JAFWAK) --------------------------------------
 @app.command("enable-sine")
 def enable_sine(
-    config: ConfigOpt,
+    config: ConfigOpt = DEFAULT_CONFIG,
     shape: Annotated[
         Shape | None,
         typer.Option(help="Input wave: sine, triangle (a slow linear ramp) or square (propagation delay)"),
@@ -965,7 +976,7 @@ def enable_sine(
 
 @app.command("enable-startup")
 def enable_startup(
-    config: ConfigOpt,
+    config: ConfigOpt = DEFAULT_CONFIG,
     ch2: Annotated[
         Ch2 | None, typer.Option(help="Scope 2: vref (TP3, BGR), iin (across R13) or iout (across R1)")
     ] = None,
@@ -1011,7 +1022,7 @@ def enable_startup(
 
 @app.command("temp")
 def temp(
-    config: ConfigOpt,
+    config: ConfigOpt = DEFAULT_CONFIG,
     minutes: Annotated[float | None, typer.Option(help="Log length (min), at most 120")] = None,
     interval: Annotated[float | None, typer.Option(help="Time between samples (s)")] = None,
     vin: Annotated[float | None, typer.Option(help="Override temp.vin (V)")] = None,

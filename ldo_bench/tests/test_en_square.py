@@ -78,3 +78,53 @@ def test_cli_square(tmp_path):
     r = CliRunner().invoke(app, [*base, "--shape", "square", "--freq", "1e5"])
     assert r.exit_code == 0, r.output
     assert "square 0.00-1.80 V at 100000 Hz" in r.output
+
+
+def _report(jafwak, **update) -> str:
+    es = jafwak.en_sine.model_copy(update={"captures": 1, **update})
+    with open_bench(jafwak, sim=True) as b:
+        return en_sine.run(b, es).report()
+
+
+def test_slow_wave_points_to_the_square_for_edge_times(jafwak):
+    """At 2 MS/s the edges are a bound: the report says which run resolves them."""
+    text = _report(jafwak, shape="sine", frequency=1e3)
+    assert "under" in next(ln for ln in text.splitlines() if "rise / fall" in ln)
+    assert "--shape square --freq 1e5" in text
+
+
+def test_square_does_not_point_to_itself(jafwak):
+    assert "--shape square" not in _report(jafwak, shape="square", frequency=1e5)
+
+
+def test_edge_window_finds_each_edge():
+    _, _, out, _ = square_pair(150e-9, 90e-9)
+    for rising in (True, False):
+        w = en_sine.edge_window(out, rising, 12)
+        seg = out[w]
+        assert len(seg) == 26
+        assert (seg[0] < 0.9) == rising and (seg[-1] > 0.9) == rising  # the edge is inside, centred
+
+
+def test_edge_window_skips_edges_at_the_capture_ends():
+    out = np.r_[0.0, 1.8, 1.8, np.zeros(50), np.full(50, 1.8)]  # first rising edge at sample 0
+    w = en_sine.edge_window(out, True, 12)
+    assert w.start == 52 - 12  # the second rising edge, the first has no samples before it
+    assert en_sine.edge_window(np.zeros(100), True, 12) is None
+
+
+@pytest.mark.parametrize("shape,freq", [("square", 1e5), ("triangle", 1.0)])
+def test_plot_zooms_into_one_rising_and_one_falling_edge(jafwak, shape, freq):
+    es = jafwak.en_sine.model_copy(update={"shape": shape, "frequency": freq, "captures": 1})
+    with open_bench(jafwak, sim=True) as b:
+        b.sim_model.en_delay = 200e-9
+        res = en_sine.run(b, es)
+    fig = en_sine.plot(res, "x")
+    titles = [ax.get_title("left") for ax in fig.axes]
+    rise = next(ax for ax in fig.axes if ax.get_title("left").startswith("Output rising edge:"))
+    fall = next(ax for ax in fig.axes if ax.get_title("left").startswith("Output falling edge:"))
+    assert "none" not in rise.get_title("left") and "none" not in fall.get_title("left"), titles
+    for ax in (rise, fall):
+        y = ax.lines[1].get_ydata()  # EN_OUT, close up: it crosses its midpoint inside the window
+        assert y.min() < 0.5 * y.max() and len(y) >= 2 * en_sine.EDGE_MIN_HALF_WIDTH
+    plotting.close(fig)

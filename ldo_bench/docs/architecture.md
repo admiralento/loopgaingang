@@ -5,7 +5,7 @@ This is a tour of `ldo_bench` for someone about to change it. For running tests,
 ## The short version
 
 ```
-ldo-bench <test> -c configs/<board>.toml
+ldo-bench <test> [-c configs/<board>.toml]     (default: configs/jafwak.toml, cli.DEFAULT_CONFIG)
         │
         ▼
 cli.py ── load_config() ──► BenchConfig (pydantic; every limit checked before anything powers up)

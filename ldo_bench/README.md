@@ -62,7 +62,7 @@ Bench automation for characterizing our LDO (the JAFWAK board) and the TPS7A7001
 
 ```
 uv run ldo-bench --help
-uv run ldo-bench check-config -c configs/jafwak.toml      # validate a config, touch nothing
+uv run ldo-bench check-config                            # validate the config, touch nothing
 
 uv run ldo-bench psu-check      -c configs/demo_board.toml   # supply setpoint/readback vs DMM
 uv run ldo-bench loadbank-check -c configs/demo_board.toml   # load bank straight on the supply: DIO -> J0..J4
@@ -70,20 +70,20 @@ uv run ldo-bench smoke          -c configs/demo_board.toml   # power up, VOUT at
 uv run ldo-bench load-reg       -c configs/demo_board.toml   # --vin 2.0
 uv run ldo-bench line-reg       -c configs/demo_board.toml   # --load 30mA --vin-from psu
 uv run ldo-bench load-tran      -c configs/demo_board.toml   # --from 4mA --to 67mA --avg 32 --plot-us 100
-uv run ldo-bench line-tran      -c configs/jafwak.toml       # --low 1.75 --high 1.85 --load 19mA
-uv run ldo-bench psrr           -c configs/jafwak.toml       # --fstart 100 --fstop 1e6 --amp-mv 20
-uv run ldo-bench iq             -c configs/jafwak.toml       # --method series --rail bgr
-uv run ldo-bench vref-line      -c configs/jafwak.toml       # --high 1.9 --low 1.4 --step 0.02
-uv run ldo-bench enable-sine    -c configs/jafwak.toml       # --freq 1e3, or --shape triangle --freq 1 (slow ramp)
-uv run ldo-bench enable-sine    -c configs/jafwak.toml --shape square --freq 1e5   # propagation delay
-uv run ldo-bench temp           -c configs/jafwak.toml       # --minutes 30 --interval 2 (Ctrl-C ends it, data kept)
-uv run ldo-bench enable-startup -c configs/jafwak.toml       # --ch2 iin
-uv run ldo-bench load-reg -c configs/jafwak.toml --vref ext  # JP2 removed: PSU OUT2 on VREF_IN
-uv run ldo-bench load-reg -c configs/jafwak.toml --enable dio  # EN driven from the AD2, not tied on
+uv run ldo-bench line-tran                               # --low 1.75 --high 1.85 --load 19mA
+uv run ldo-bench psrr                                    # --fstart 100 --fstop 1e6 --amp-mv 20
+uv run ldo-bench iq                                      # --method series --rail bgr
+uv run ldo-bench vref-line                               # --high 1.9 --low 1.4 --step 0.02
+uv run ldo-bench enable-sine                             # --freq 1e3, or --shape triangle --freq 1 (slow ramp)
+uv run ldo-bench enable-sine --shape square --freq 1e5     # propagation delay, rise / fall at 100 MS/s
+uv run ldo-bench temp                                    # --minutes 30 --interval 2 (Ctrl-C ends it, data kept)
+uv run ldo-bench enable-startup                          # --ch2 iin
+uv run ldo-bench load-reg --vref ext                     # JP2 removed: PSU OUT2 on VREF_IN
+uv run ldo-bench load-reg --enable dio                   # EN driven from the AD2, not tied on
 uv run ldo-bench compare results/load-reg/<bgr run> results/load-reg/<extref run>
 ```
 
-Set `LDO_BENCH_CONFIG=configs/jafwak.toml` to leave out `-c` at the bench. Every command also takes:
+Commands use `configs/jafwak.toml` unless `-c` (or `LDO_BENCH_CONFIG`) names another config, so the demo-board commands above pass `-c configs/demo_board.toml`. Every command prints the config it loaded first. Every command also takes:
 - `--sim`: no hardware
 - `--save-sim`: keep a simulated run, marked SIM
 - `--yes`: skip the wiring prompt
