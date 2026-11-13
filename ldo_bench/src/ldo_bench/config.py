@@ -548,6 +548,11 @@ class EnableConfig(_Model):
         ),
     )
 
+    @property
+    def pins(self) -> set[int]:
+        """The DIO pins the enable path uses."""
+        return {self.dio_pin} | ({self.dio_pin_n} - {None})
+
     @model_validator(mode="after")
     def _distinct(self) -> EnableConfig:
         if self.dio_pin_n is not None and self.dio_pin_n == self.dio_pin:
@@ -913,6 +918,10 @@ class BenchConfig(_Model):
     vref: VrefConfig | None = None
     buffer: BufferConfig | None = None
 
+    def enable_pin_clash(self) -> set[int]:
+        """Enable DIO pins that are also load bank pins (they would fight); empty if none."""
+        return self.enable.pins & set(self.loadbank.dio_pins)
+
     def lowest_vin(self) -> dict[str, float]:
         """The lowest VIN (V) each configured test puts on the LDO while it runs, by test name.
 
@@ -1006,8 +1015,7 @@ class BenchConfig(_Model):
             code_ok("load_tran.code_high", lt.code_high)
             if lt.code_low >= lt.code_high:
                 raise ValueError("load_tran.code_low must be below code_high")
-        en_pins = {self.enable.dio_pin} | ({self.enable.dio_pin_n} - {None})  # dio_pin_n may be None
-        clash = en_pins & set(self.loadbank.dio_pins)
+        clash = self.enable_pin_clash()
         iq_enable = self.iq is not None and "disabled" in self.iq.states
         if (self.en_sine or self.startup or iq_enable) and clash:
             raise ValueError(

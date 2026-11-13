@@ -828,9 +828,7 @@ class Bench:
 
 def _check_enable_pins(cfg: BenchConfig) -> None:
     """--enable dio: the enable DIO pins mustn't also switch the load bank."""
-    e = cfg.enable
-    clash = ({e.dio_pin} | ({e.dio_pin_n} - {None})) & set(cfg.loadbank.dio_pins)
-    if clash:
+    if clash := cfg.enable_pin_clash():
         raise InstrumentError(
             f"--enable dio: enable DIO pins {sorted(clash)} are also load bank pins {cfg.loadbank.dio_pins}"
         )

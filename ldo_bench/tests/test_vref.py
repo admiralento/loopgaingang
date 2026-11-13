@@ -241,7 +241,7 @@ def test_ext_run_folder_and_summary_record_the_reference(tmp_path):
     ("args", "msg"),
     [
         (["-c", str(CONFIGS / "demo_board.toml"), "--vref", "ext"], "[vref]"),
-        (["--vref", "maybe"], "'bgr' or 'ext'"),
+        (["--vref", "maybe"], "'bgr', 'ext'"),  # Click lists the choices
     ],
 )
 def test_vref_option_errors_exit_2(args, msg):
