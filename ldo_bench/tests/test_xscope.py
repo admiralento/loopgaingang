@@ -350,8 +350,19 @@ def test_xcheck_peak_running_off_the_screen_is_flagged(jafwak, monkeypatch):
     assert all(any("clipped" in i for i in e.xcheck.issues) for e in res.edges)
 
 
-def test_valid_xcheck_is_not_flagged_as_clipped(jafwak):
+def test_xcheck_uses_the_54621a_trace(jafwak):
     an = jafwak.analysis.model_copy(update={"settle_reference": "post"})
     with open_bench(jafwak, sim=True, use_xscope=True) as b:
-        res = load_tran.run(b, jafwak.load_tran.model_copy(update={"averages": 2}), an)
-    assert not any(e.xcheck.issues for e in res.edges)
+        collect = b.xscope.collect
+        nom = jafwak.dut.vout_nominal
+
+        def doubled(*a, **k):  # a scope that sees twice the dip: independent of the AD2's trace
+            tr = collect(*a, **k)
+            v = tr[jafwak.xscope.vout_channel]
+            v.v[:] = nom + 2 * (v.v - nom)
+            return tr
+
+        b.xscope.collect = doubled
+        res = load_tran.run(b, jafwak.load_tran.model_copy(update={"averages": 4}), an)
+    for e in res.edges:
+        assert e.xcheck.metrics.deviation == pytest.approx(2 * e.metrics.deviation, rel=0.15)

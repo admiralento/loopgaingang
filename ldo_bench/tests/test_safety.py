@@ -215,3 +215,22 @@ def test_ovp_rejection_stops_the_run():
     t.errors = ['+0,"No error"', '-113,"Undefined header"']  # CURR ok, OVP rejected
     with pytest.raises(InstrumentError, match="OVP"):
         p.setup(current_limit=0.3, ovp=6.0, voltage_range=None)
+
+
+@pytest.mark.parametrize(
+    ("vin_frac", "stops"),
+    [(line_tran.INTERLOCK_FRACTION + 0.05, True), (line_tran.INTERLOCK_FRACTION - 0.05, False)],
+)
+def test_interlock_fraction_boundary(jafwak_single, vin_frac, stops):
+    with open_bench(jafwak_single, sim=True) as b:
+        b.confirm_wiring = lambda *a, **k: None
+        reads = iter([vin_frac * line_tran.INTERLOCK_RAIL, 0.1, 0.3])  # stage 1, then a healthy proof
+        b.scope.measure_dc = lambda d, setups: (
+            {ch: type("R", (), {"mean": next(reads)})() for ch in [b.cfg.ad2.ref_channel]}
+            | {b.cfg.ad2.vout_channel: type("R", (), {"mean": 1.2})()}
+        )
+        if stops:
+            with pytest.raises(Exception, match="connected to VIN"):
+                line_tran.interlock(b, 4.0)
+        else:
+            line_tran.interlock(b, 4.0)

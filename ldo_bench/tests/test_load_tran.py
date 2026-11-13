@@ -1,10 +1,11 @@
 import numpy as np
 import pytest
 
+from ldo_bench.analysis import SettlingResult
 from ldo_bench.bench import open_bench
 from ldo_bench.instruments.base import Capture, InstrumentError
-from ldo_bench.procedures import load_tran
-from ldo_bench.procedures.transient import align_average
+from ldo_bench.procedures import line_tran, load_tran
+from ldo_bench.procedures.transient import SWING_TOLERANCE, align_average, capture_issues
 
 
 def test_align_average_lines_up_triggers():
@@ -138,8 +139,6 @@ def test_zoom_plot_gives_each_edge_its_own_span(jafwak, proc):
 
     import matplotlib.pyplot as plt
 
-    from ldo_bench.procedures import line_tran
-
     mod = load_tran if proc == "load_tran" else line_tran
     sec = jafwak.load_tran if proc == "load_tran" else jafwak.line_tran
     an = jafwak.analysis.model_copy(update={"settle_reference": "post"})
@@ -216,3 +215,37 @@ def test_supply_current_recorded_and_clean_on_a_good_run(cfg):
     assert not any("supply current" in i for i in res.issues)
     sc = res.summary()["supply_current"]
     assert sc["i_high_a"] - sc["i_low_a"] == pytest.approx(sc["expected_rise_a"], rel=0.1)
+
+
+def capture_with_step(jafwak, *, edge_found=True, vout_before=1.2):
+    n, i0 = 1000, 200
+    ref = np.where(np.arange(n) >= i0, 3.3, 0.0)
+    vout = np.where(np.arange(n) >= i0, 1.2, vout_before)
+    a = jafwak.ad2
+    ch1, ch2 = (vout, ref) if a.vout_channel == 1 else (ref, vout)
+    m = SettlingResult(1.2, 1.19, 0.001, 1.2, 1e-6, 1e-5, 1.2, 10e6, i0, "pre")
+    return m, Capture(10e6, ch1, ch2, i0, edge_found=edge_found), ref
+
+
+def test_capture_without_a_clean_edge_is_flagged(jafwak):
+    m, cap, ref = capture_with_step(jafwak, edge_found=False)
+    with open_bench(jafwak, sim=True) as b:
+        issues = capture_issues(b, m, cap, ref, expected_swing=3.3, ref_desc="DIO 2")
+    assert any("no clean edge" in i for i in issues)
+
+
+def test_vout_before_the_step_is_checked_in_the_capture(jafwak):
+    m, cap, ref = capture_with_step(jafwak, vout_before=0.0)  # DC check was fine, the capture isn't
+    with open_bench(jafwak, sim=True) as b:
+        issues = capture_issues(b, m, cap, ref, expected_swing=3.3, ref_desc="DIO 2")
+    assert any("VOUT reads" in i for i in issues)
+
+
+@pytest.mark.parametrize(
+    ("scale", "flagged"), [(1 - SWING_TOLERANCE - 0.05, True), (1 - SWING_TOLERANCE + 0.05, False)]
+)
+def test_swing_tolerance_boundary(jafwak, scale, flagged):
+    m, cap, ref = capture_with_step(jafwak)
+    with open_bench(jafwak, sim=True) as b:
+        issues = capture_issues(b, m, cap, ref, expected_swing=3.3 / scale, ref_desc="DIO 2")
+    assert any("swings" in i for i in issues) == flagged

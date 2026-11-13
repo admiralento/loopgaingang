@@ -60,3 +60,11 @@ def test_run_folder(bench, tmp_path):
     assert (run.path / "plot.png").stat().st_size > 10_000
     header = (run.path / "data.csv").read_text().splitlines()[0].split(",")
     assert {"code", "i_est_a", "i_expected_a", "vout_v", "vout_ok"} <= set(header)
+
+
+def test_load_regulation_is_a_least_squares_fit_not_the_endpoints():
+    i = np.array([0, 1, 2, 3, 4]) * 1e-3
+    v = 1.2 - 3.0 * i + 1e5 * i**3  # curved, asymmetric: the endpoints' slope differs from the fit's
+    r = load_regulation(i, v)
+    assert r.slope == pytest.approx(np.polyfit(i, v, 1)[0])
+    assert r.slope != pytest.approx((v[-1] - v[0]) / (i[-1] - i[0]))

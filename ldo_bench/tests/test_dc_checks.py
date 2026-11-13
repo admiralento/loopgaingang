@@ -2,6 +2,7 @@
 
 import numpy as np
 import pytest
+from helpers import miswire
 
 from ldo_bench.analysis import dropout_strays, find_dropout
 from ldo_bench.bench import DcPoint, open_bench
@@ -84,3 +85,28 @@ def test_dropout_is_the_first_crossing_from_the_bottom():
     d_vin, _ = find_dropout(vin, vout, 0.01)
     assert 1.2 < d_vin < 1.4  # the real knee (VIN = 1.3), not after the glitch
     assert dropout_strays(vin, vout, 0.01) == [pytest.approx(1.7)]
+
+
+def test_line_reg_flags_vout_off_nominal(jafwak):
+    with open_bench(jafwak, sim=True) as b:
+        miswire(b, dmm_probe="psu")  # DMM not on VOUT
+        res = line_reg.run(b, jafwak.line_reg)
+    assert any("VOUT out of range" in i for i in res.issues), res.issues
+
+
+def test_vout_tolerance_boundary(jafwak):
+    with open_bench(jafwak, sim=True) as b:
+        assert b.vout_issue(0.95, source="DMM")  # 1.2 V - 21 %
+        assert b.vout_issue(0.97, source="DMM") is None  # - 19 %
+        b.cfg = b.cfg.model_copy(update={"dut": b.cfg.dut.model_copy(update={"vout_tolerance": 0.1})})
+        assert b.vout_issue(1.07, source="DMM")  # - 11 % with a 10 % tolerance
+
+
+def test_dmm_range_change_inside_the_line_reg_fit_is_noted(jafwak):
+    with open_bench(jafwak, sim=True) as b:
+        # no load: the sim's VOUT rises from just under 1.2 V to just over it along the sweep
+        res = line_reg.run(b, jafwak.line_reg.model_copy(update={"load_code": 0}))
+    assert all("dmm_range_v" in r for r in res.rows)
+    ranges = {r["dmm_range_v"] for r in res.rows if r["vin_v"] >= res.reg.fit_vin_min - 1e-9}
+    assert len(ranges) == 2  # the sim's VOUT crosses 1.2 V, the top of the 1 V range
+    assert any("range" in n for n in res.notes)

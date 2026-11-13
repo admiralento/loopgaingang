@@ -2,6 +2,7 @@
 
 import numpy as np
 import pytest
+from helpers import miswire, spy
 
 from ldo_bench.analysis import schmitt_analysis, step_metrics
 from ldo_bench.bench import open_bench
@@ -75,7 +76,7 @@ def test_en_sine_on_sim(jafwak):
 
 def test_en_sine_output_not_switching_is_flagged(jafwak):
     with open_bench(jafwak, sim=True) as b:
-        b.confirm_wiring = lambda *a, **k: setattr(b.sim_model, "ch1_probe", "vout")  # scope 1 not on EN_OUT
+        miswire(b, ch1_probe="vout")  # scope 1 not on EN_OUT
         res = en_sine.run(b, jafwak.en_sine)
     assert any("EN_OUT doesn't switch" in i for i in res.issues)
     assert "NOT A VALID MEASUREMENT" in res.report() and res.summary()["valid"] is False
@@ -86,9 +87,11 @@ def test_en_sine_output_not_switching_is_flagged(jafwak):
 def test_startup_on_sim(jafwak, ch2):
     su = jafwak.startup.model_copy(update={"ch2": ch2, "averages": 2, "load_code": 2})
     with open_bench(jafwak, sim=True) as b:
+        vplus = spy(b.scope, "set_vplus")
         res = startup.run(b, su)
         m = b.sim_model
     assert not res.issues, res.issues
+    assert vplus[0][1] == (jafwak.enable.v33,)  # V_33 was on for the level shifters
     on = res.edges[0]
     assert on.vout_m.after == pytest.approx(jafwak.dut.vout_nominal, abs=0.02)
     assert on.vout_m.t10 > m.vref_delay  # VOUT starts after the reference
@@ -97,19 +100,14 @@ def test_startup_on_sim(jafwak, ch2):
         assert on.ch2_m.t90 < on.vout_m.t90
     else:  # inrush: C dV/dt on top of the load current
         assert on.ch2_m.peak > on.ch2_m.after
-    assert not m.dio.get(jafwak.enable.dio_pin) and getattr(b.scope, "vplus", None) is None  # off afterwards
+    assert not m.dio.get(jafwak.enable.dio_pin) and b.scope.vplus is None  # off afterwards
     startup.plot(res, "x")
 
 
 def test_startup_flags_enable_not_controlling_ldo(jafwak):
     su = jafwak.startup.model_copy(update={"averages": 2})
     with open_bench(jafwak, sim=True) as b:
-        real = b.confirm_wiring
-
-        def no_enable(*a, **k):  # the LDO ignores the enable path (e.g. EN_IN tied to VIN)
-            real(*a, **{**k, "en_pin": None})
-
-        b.confirm_wiring = no_enable
+        miswire(b, wiring_kw={"en_pin": None})  # the LDO ignores the enable path (e.g. EN_IN tied to VIN)
         res = startup.run(b, su)
     assert any("already" in i and "before the enable edge" in i for i in res.issues)
 

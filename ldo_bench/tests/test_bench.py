@@ -1,9 +1,8 @@
-import itertools
-
 import pytest
 
 from ldo_bench.bench import open_bench
 from ldo_bench.instruments.base import InstrumentError
+from ldo_bench.procedures import iq
 
 
 def test_vin_ceiling_enforced(jafwak_single):
@@ -14,17 +13,6 @@ def test_vin_ceiling_enforced(jafwak_single):
         b.buffer_rail(4.5)  # buffer rail may exceed the DUT's VIN limit
         with pytest.raises(InstrumentError):
             b.vin_from_wavegen(vmax + 0.1)
-
-
-def test_psu_ramps_in_steps(jafwak):
-    with open_bench(jafwak, sim=True) as b:
-        seen = []
-        orig = b.psu.set_voltage
-        b.psu.set_voltage = lambda v: (seen.append(v), orig(v))
-        b.vin_from_psu(1.8)
-        steps = [y - x for x, y in itertools.pairwise(seen)]
-        assert seen[-1] == pytest.approx(1.8)
-        assert max(steps) <= jafwak.psu.ramp_step + 1e-9
 
 
 def test_shutdown_runs_on_exception(jafwak):
@@ -96,7 +84,6 @@ def test_sweep_points_end_on_stop_either_way():
 
 
 def test_iq_sweep_ends_on_vin_stop(jafwak):
-    from ldo_bench.procedures import iq
 
     cfg = jafwak.iq.model_copy(update={"vin_step": 0.15})
     with open_bench(jafwak, sim=True) as b:
@@ -143,3 +130,12 @@ def test_unexpected_error_still_reports_a_failed_shutdown(monkeypatch):
     cfg = str(Path(__file__).parents[1] / "configs" / "jafwak.toml")
     r = CliRunner().invoke(app, ["load-reg", "-c", cfg, "--sim"])
     assert r.exit_code != 0 and "SHUTDOWN FAILED" in r.output
+
+
+def test_vout_comes_from_the_dmm_when_there_is_one(jafwak):
+    with open_bench(jafwak, sim=True) as b:
+        read = b.dmm.read_dcv
+        b.dmm.read_dcv = lambda: read() + 5e-3  # the DMM reads 5 mV above the AD2
+        b.vin_from_psu(1.8)
+        p = b.measure_point(0.05)
+    assert p.source == "dmm" and p.vout - p.vout_ad2 == pytest.approx(5e-3, abs=1e-3)

@@ -1,3 +1,5 @@
+import math
+
 import pytest
 
 from ldo_bench.bench import open_bench
@@ -113,3 +115,41 @@ def test_parity_mismatch_is_reported_not_parsed():
 def test_unknown_parity_rejected():
     with pytest.raises(InstrumentError, match="unknown parity"):
         SerialTransport("COM3", parity="mark", serial_obj=FakeSerial({}))
+
+
+def test_34401a_dci_and_overload():
+    sent = []
+
+    class T:
+        name, kind = "fake", "gpib"
+
+        def write(self, c):
+            sent.append(c)
+
+        def query(self, c):
+            sent.append(c)
+            return {"*IDN?": "HEWLETT-PACKARD,34401A,0,11-5-2", "SYST:ERR?": '+0,"No error"'}.get(
+                c, "+9.9E+37"
+            )
+
+    d = HP34401A(T())
+    d.configure_dci(range=0.01, nplc=10)
+    assert "CONF:CURR:DC 0.01" in sent and "CURR:DC:NPLC 10" in sent
+    assert d.read() == math.inf
+
+
+def test_34401a_dcv_overload_is_inf_not_a_voltage():
+    """An overloaded DC volts reading (+9.9E+37) must never be averaged or saved as a voltage."""
+
+    class T:
+        name, kind = "fake", "gpib"
+
+        def write(self, c):
+            pass
+
+        def query(self, c):
+            return {"*IDN?": "HEWLETT-PACKARD,34401A,0,11-5-2", "SYST:ERR?": '+0,"No error"'}.get(
+                c, "-9.9E+37"
+            )
+
+    assert HP34401A(T()).read_dcv() == -math.inf

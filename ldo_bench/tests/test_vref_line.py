@@ -2,6 +2,7 @@
 
 import numpy as np
 import pytest
+from helpers import miswire
 from pydantic import ValidationError
 
 from ldo_bench import plotting
@@ -33,8 +34,7 @@ def test_vref_line_on_sim(jafwak):
 
 def test_dmm_not_on_vref_is_flagged(jafwak):
     with open_bench(jafwak, sim=True) as b:
-        real = b.confirm_wiring
-        b.confirm_wiring = lambda *a, **k: (real(*a, **k), setattr(b.sim_model, "dmm_probe", "open"))
+        miswire(b, dmm_probe="open")
         res = vref_line.run(b, jafwak.vref_line)
     assert any("TP3" in i for i in res.issues)
     plotting.close(vref_line.plot(res, "x"))  # the invalid plot draws too
@@ -42,8 +42,7 @@ def test_dmm_not_on_vref_is_flagged(jafwak):
 
 def test_ldo_not_enabled_is_flagged(jafwak):
     with open_bench(jafwak, sim=True) as b:
-        real = b.confirm_wiring
-        b.confirm_wiring = lambda *a, **k: (real(*a, **k), setattr(b.sim_model, "en_pin", 5))
+        miswire(b, en_pin=5)  # EN wired to the DIO but nothing drives it
         res = vref_line.run(b, jafwak.vref_line)
     assert any("enabled" in i for i in res.issues)
 

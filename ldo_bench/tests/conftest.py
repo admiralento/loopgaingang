@@ -53,6 +53,15 @@ def _no_real_buses(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _close_figures():
+    """Every test leaves no matplotlib figure open (pytest treats the too-many-figures warning as an error)."""
+    yield
+    import matplotlib.pyplot as plt
+
+    plt.close("all")
+
+
+@pytest.fixture(autouse=True)
 def _no_serial_delays(monkeypatch):
     """Fake serial ports don't need the 34401A's pacing."""
     from ldo_bench.instruments.transports import SerialTransport

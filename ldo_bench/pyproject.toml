@@ -46,9 +46,14 @@ check-configs = { sequence = [
     { cmd = "ldo-bench check-config -c configs/demo_board.toml" },
 ], help = "Validate both board configs" }
 verify = { sequence = ["format-check", "lint", "check-configs", "test"], help = "The gate: everything must pass before a commit" }
+sim-all = { cmd = "pytest -q tests/test_cli_sim.py", help = "Every command end to end on the simulator, both boards (no hardware)" }
+test-last = { cmd = "pytest -q --lf -x", help = "Rerun only the tests that failed last time, stop at the first failure" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+xfail_strict = true
+filterwarnings = ["error"]  # no warning goes unnoticed (an unclosed figure, a deprecated call)
 
 [tool.ruff]
 line-length = 110

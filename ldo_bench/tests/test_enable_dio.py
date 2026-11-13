@@ -6,6 +6,7 @@ low again before the supply goes away. The simulator's LDO is only on while the 
 """
 
 import pytest
+from helpers import miswire
 
 from ldo_bench.bench import open_bench
 from ldo_bench.instruments.base import InstrumentError
@@ -50,11 +51,7 @@ def test_enable_dio_order_and_valid(jafwak, proc, section, extra):
 def test_without_enable_dio_the_wired_enable_stays_off(jafwak):
     """The check the option exists for: with EN wired to the DIO and nothing driving it, VOUT is 0."""
     with open_bench(jafwak, sim=True) as b:
-        real = b.confirm_wiring
-        b.confirm_wiring = lambda *a, **k: (
-            real(*a, **k),
-            setattr(b.sim_model, "en_pin", jafwak.enable.dio_pin),
-        )
+        miswire(b, en_pin=jafwak.enable.dio_pin)
         res = load_reg.run(b, jafwak.load_reg)
     assert any("VOUT out of range" in i for i in res.issues)
 

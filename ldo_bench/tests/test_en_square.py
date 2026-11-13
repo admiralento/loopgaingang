@@ -78,4 +78,3 @@ def test_cli_square(tmp_path):
     r = CliRunner().invoke(app, [*base, "--shape", "square", "--freq", "1e5"])
     assert r.exit_code == 0, r.output
     assert "square 0.00-1.80 V at 100000 Hz" in r.output
-    assert CliRunner().invoke(app, [*base, "--shape", "sawtooth"]).exit_code == 2

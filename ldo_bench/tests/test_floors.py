@@ -2,6 +2,7 @@
 
 import numpy as np
 import pytest
+from helpers import miswire
 
 from ldo_bench.analysis import schmitt_analysis, settling_analysis
 from ldo_bench.bench import open_bench
@@ -56,11 +57,7 @@ def test_unsettled_edge_is_flagged(jafwak):
 
 
 def test_disable_edge_checks_vout_turned_off(jafwak):
-    def enable_path_broken(b):
-        orig = b.confirm_wiring
-        b.confirm_wiring = lambda *a, **k: orig(*a, **(k | {"en_pin": None}))
-
-    res = run_startup(jafwak, enable_path_broken, edges=["falling"])
+    res = run_startup(jafwak, lambda b: miswire(b, wiring_kw={"en_pin": None}), edges=["falling"])
     assert any("still" in i for i in res.issues), res.issues
 
 

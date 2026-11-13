@@ -13,6 +13,7 @@ from ldo_bench.bench import open_bench
 from ldo_bench.cli import app
 from ldo_bench.instruments.base import DcReading
 from ldo_bench.procedures import line_tran, load_reg, load_tran
+from ldo_bench.results import RunDir
 
 CONFIGS = Path(__file__).parents[1] / "configs"
 runner = CliRunner()
@@ -21,28 +22,6 @@ runner = CliRunner()
 def runs(test_dir: Path) -> list[Path]:
     """Run folders in results/<test>/ (that folder also holds latest.png / latest_full.png)."""
     return [p for p in test_dir.iterdir() if p.is_dir()]
-
-
-@pytest.mark.parametrize(
-    "cmd",
-    [
-        "load-reg",
-        "line-reg",
-        "vref-line",
-        "load-tran",
-        "line-tran",
-        "psu-check",
-        "loadbank-check",
-        "iq",
-        "psrr",
-    ],
-)
-def test_sim_saves_nothing_by_default(cmd, tmp_path):
-    cfg = "jafwak.toml" if cmd in ("line-tran", "iq", "vref-line", "temp") else "demo_board.toml"
-    r = runner.invoke(app, [cmd, "-c", str(CONFIGS / cfg), "--sim", "-o", str(tmp_path)])
-    assert r.exit_code == 0, r.output
-    assert "SIMULATED" in r.output and "nothing saved" in r.output
-    assert list(tmp_path.iterdir()) == []
 
 
 def test_save_sim_marks_the_folder(tmp_path):
@@ -157,3 +136,13 @@ def test_latest_images_follow_the_newest_run(tmp_path):
     assert (tmp_path / "load-tran" / "latest.png").read_bytes() == tran_latest  # per-test copy kept
     assert (tmp_path / "latest_run.txt").read_text().strip() == str(reg_run)
     assert not list(tmp_path.rglob(".*.tmp"))  # no temp files left behind
+
+
+def test_two_runs_in_the_same_second_get_separate_folders(jafwak, tmp_path, monkeypatch):
+    import ldo_bench.results as results
+
+    fixed = results.datetime(2026, 11, 7, 12, 0, 0)
+    monkeypatch.setattr(results, "datetime", type("D", (), {"now": staticmethod(lambda: fixed)}))
+    a = RunDir(tmp_path, "load-reg", jafwak)
+    b = RunDir(tmp_path, "load-reg", jafwak)
+    assert a.path != b.path and a.path.exists() and b.path.exists()

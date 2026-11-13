@@ -1,5 +1,7 @@
+import numpy as np
 import pytest
 
+from ldo_bench.analysis import SettlingResult
 from ldo_bench.bench import open_bench
 from ldo_bench.procedures import line_tran
 
@@ -61,3 +63,9 @@ def test_load_limit_applies(jafwak):
     d["line_tran"]["load_code"] = 8  # 38 mA > 20 mA
     with pytest.raises(ValueError, match="i_max"):
         BenchConfig.model_validate(d)
+
+
+def test_line_tran_rejection_by_hand():
+    m = SettlingResult(1.2, 1.205, 5e-4, 1.2, 1e-5, 1e-5, 1.2, 10e6, 100, "pre")  # +5 mV kick
+    e = line_tran.EdgeResult("rising", 1.75, 1.85, m, np.zeros(1), np.zeros(1), np.zeros(1), np.zeros(1))
+    assert e.rejection == pytest.approx(0.005 / 0.1)  # 50 mV per V of VIN step

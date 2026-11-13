@@ -65,6 +65,7 @@ def test_reference_comes_on_only_after_vin_and_sets_vout(jafwak):
         assert b._vout_now() == pytest.approx(1.204, abs=2e-3)  # VOUT follows the external reference
         assert b.vref_proof["vout_moved_v"] == pytest.approx(0.02, abs=2e-3)
         assert log[-1] == ("vin", 1.8)  # VIN was finished before the reference started
+        assert not m.bgr_backdriven  # JP2 out: OUT2 never touched the BGR's output
 
 
 def test_reference_refused_before_vin(jafwak):
@@ -85,6 +86,7 @@ def test_jp2_left_in_stops_the_run_and_zeroes_the_reference(jafwak):
             b.reference_on()
         assert b.sim_model.vref_out_v == 0.0
         assert not b._vref_on
+        assert b.sim_model.bgr_backdriven  # what the stop limits: OUT2 did reach the BGR, briefly
 
 
 def test_vin_cannot_drop_below_the_reference_window(jafwak):
@@ -197,6 +199,7 @@ def test_each_test_proves_the_reference_and_runs_on_it(cmd, tmp_path, monkeypatc
         orig(self)
         seen["vref"] = self.sim_model.reference
         seen["proof"] = self.vref_proof
+        seen["backdriven"] = self.sim_model.bgr_backdriven
 
     monkeypatch.setattr(Bench, "reference_on", spy)
     out = [] if cmd == "smoke" else ["-o", str(tmp_path / "results")]  # smoke saves nothing
@@ -212,6 +215,7 @@ def test_each_test_proves_the_reference_and_runs_on_it(cmd, tmp_path, monkeypatc
     assert r.exit_code == 0, r.output
     assert seen["vref"] == pytest.approx(1.204)
     assert seen["proof"]["vout_moved_v"] > 0.01
+    assert not seen["backdriven"]
 
 
 def test_ext_run_folder_and_summary_record_the_reference(tmp_path):

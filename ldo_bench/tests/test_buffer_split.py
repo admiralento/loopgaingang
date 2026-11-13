@@ -7,6 +7,7 @@ high, a PSU on VIN shows up as VIN following VS_BUFF, and a floating input sends
 from pathlib import Path
 
 import pytest
+from helpers import miswire
 from pydantic import ValidationError
 from typer.testing import CliRunner
 
@@ -105,8 +106,7 @@ def test_psu_never_far_up_when_it_is_on_vin(jafwak):
         seen = []
         orig = b.psu.set_voltage
         b.psu.set_voltage = lambda v: (seen.append(v), orig(v))[1]
-        real = b.confirm_wiring
-        b.confirm_wiring = lambda *a, **k: (real(*a, **k), setattr(b.sim_model, "psu_to", "vin"))
+        miswire(b, psu_to="vin")
         with pytest.raises(InstrumentError):
             line_tran.run(b, jafwak.line_tran, jafwak.analysis)
     hi = jafwak.buffer.vin_window[1]
@@ -231,9 +231,7 @@ def test_buffer_check_flags_a_level_it_cant_reach(jafwak):
     from ldo_bench.procedures import buffer_check
 
     with open_bench(jafwak, sim=True) as b:
-        real = b.confirm_wiring
-        # healthy at the bottom, but the 5 V rail leaves only 1.8 V at the top
-        b.confirm_wiring = lambda *a, **k: (real(*a, **k), setattr(b.sim_model, "buffer_dropout", 3.2))
+        miswire(b, buffer_dropout=3.2)  # healthy at the bottom, but the 5 V rail leaves only 1.8 V at the top
         res = buffer_check.run(b, jafwak.buffer)
     assert any(i.startswith("1.85 V") for i in res.issues)
     assert "NOT READY" in res.report()
@@ -244,8 +242,7 @@ def test_buffer_check_probe_off_the_output(jafwak):
     from ldo_bench.procedures import buffer_check
 
     with open_bench(jafwak, sim=True) as b:
-        real = b.confirm_wiring
-        b.confirm_wiring = lambda *a, **k: (real(*a, **k), setattr(b.sim_model, "ref_probe", ("dio", 0)))
+        miswire(b, ref_probe=("dio", 0))
         res = buffer_check.run(b, jafwak.buffer)
     assert any("JP4 pin 1" in i for i in res.issues)
 
