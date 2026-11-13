@@ -51,11 +51,7 @@ class LoadBank:
     def conductance(self, code: int) -> float:
         """Total conductance (S) switched in for `code`."""
         self._check(code)
-        return sum(
-            1.0 / (r + self.cfg.switch_resistance)
-            for bit, r in enumerate(self.cfg.resistors)
-            if code >> bit & 1
-        )
+        return self.cfg.conductance(code)
 
     def current(self, code: int, vout: float) -> float:
         """Estimated load current (A) for `code` at output voltage `vout`."""

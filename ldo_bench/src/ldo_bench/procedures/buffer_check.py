@@ -1,28 +1,16 @@
-"""buffer-check: the reworked U2 on its own, chip disconnected (first bring-up plan, steps I.1-I.5).
+"""buffer-check: the reworked U2 on its own, chip disconnected (bring-up steps I.1-I.5).
 
-JP4 is open, so U2's output (JP4 pin 1) drives only a 100 Ohm dummy load (~18 mA at 1.8 V, about
-what the chip draws at 20 mA load). AD2 scope ref channel reads JP4 pin 1. Run it before line-tran or
-psrr: it proves the split supply comes up cleanly and that U2 reaches the 1.7-1.9 V range without
-clipping, and it records the W1 settings that put U2's output there.
+JP4 open, 100 Ohm dummy load on JP4 pin 1 (U2's output), AD2 ref channel on it. Run it before
+line-tran or psrr: it proves the split supply comes up cleanly and that U2 reaches the levels
+they use without clipping, and it records the W1 settings that get there. docs/tests.md has the setup.
 
-run() steps:
-1. Confirm the wiring. W1 to DC 0 V, then Bench.buffer_rails_on(buffer.v_plus): V- and VS_BUFF
-   ramp together with JP4 pin 1 read after every step; outside buffer.vin_window everything
-   comes down and the run stops (I.2: within ~65 mV of 0 V, never above 0.3 V).
-2. The output at W1 = 0 V (U2's offset).
-3. Each of buffer.check_levels (1.70 / 1.80 / 1.85 V): calibrate W1 so JP4 pin 1 lands on it
-   (line_tran._calibrate, with buffer.check_peak_max as the hard stop since the chip is off). The
-   W1 needed, and the gain dVOUT/dW1 across the levels (I.3; the first plan expects 0.93-0.99).
-4. A step from the lowest to the highest level and back (W1 DC steps, triggered on the output):
-   peak, and 10-90 % edge times (C9 and U2's ~7 Ohm make these tens of us).
-5. A sine, check_sine_dc +/- check_sine_amplitude at check_sine_frequency, free-running: its
-   amplitude against W1's (gain at that frequency), and its peak.
-6. Bench.buffer_rails_off: W1 to 0 V, rails down together, W1 off last.
-
-Issues (the run is invalid; don't connect the chip): a level not reached, anything on JP4 pin 1
-above check_peak_max, the sine clipped, a VIN probe that isn't on JP4 pin 1 (the output doesn't follow
-W1). The first plan's I.4 (what W1 does when stopped) isn't tested: the scripts never stop W1 while
-U2's rails are up.
+run(): W1 to DC 0 V, then Bench.buffer_rails_on (JP4 pin 1 checked after every step); U2's
+offset at W1 = 0 V; W1 calibrated onto each of check_levels (hard stop at check_peak_max, the
+chip being off; W1 stays within dut.vin_max); the DC gain; if those passed, a step between the
+lowest and highest level both ways, and a sine at check_sine_dc; Bench.buffer_rails_off.
+Issues (not ready: don't connect the chip): a level not reached, JP4 pin 1 not following W1, a
+step that never triggered, anything above check_peak_max. A Bench limit refusal stops the run.
+Not tested: the first plan's I.4 (W1 stopped), since the scripts never stop W1 with U2's rails up.
 """
 
 from __future__ import annotations
@@ -37,7 +25,7 @@ from ldo_bench import wiring as w
 from ldo_bench.bench import Bench
 from ldo_bench.config import AD2_MAX_SAMPLE_RATE, BufferConfig
 from ldo_bench.instruments.base import InstrumentError
-from ldo_bench.procedures.line_tran import _calibrate
+from ldo_bench.procedures.line_tran import calibrate
 
 log = logging.getLogger(__name__)
 
@@ -154,7 +142,7 @@ def run(bench: Bench, bu: BufferConfig) -> BufferCheckResult:
 
     rows = []
     for level in bu.check_levels:
-        w, v, issue = _calibrate(bench, level, limit=bu.check_peak_max)
+        w, v, issue = calibrate(bench, level, limit=bu.check_peak_max)
         rows.append({"target_v": level, "w1_v": w, "out_v": v, "reached": issue is None})
         if issue:
             issues.append(f"{level:.2f} V: {issue}")
@@ -254,7 +242,7 @@ def _sine(
     Returns (the sine's numbers, t, v). A Bench limit refusal stops the run; a capture failure is an issue.
     """
     a = bench.cfg.ad2
-    w_dc, _, cal = _calibrate(bench, bu.check_sine_dc, limit=bu.check_peak_max)
+    w_dc, _, cal = calibrate(bench, bu.check_sine_dc, limit=bu.check_peak_max)
     if cal:
         issues.append(f"sine DC level: {cal}")
         return {}, np.zeros(0), np.zeros(0)

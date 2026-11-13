@@ -31,6 +31,7 @@ from ldo_bench.bench import Bench
 from ldo_bench.config import PsuCheckConfig
 from ldo_bench.instruments.base import InstrumentError
 from ldo_bench.instruments.e36xx import ACCURACY, model_of
+from ldo_bench.procedures import INVALID
 
 log = logging.getLogger(__name__)
 
@@ -78,7 +79,7 @@ class PsuCheckResult:
     def report(self) -> str:
         lines = [
             f"PSU check: {self.model or 'unknown model'} OUT{self.channel} against the DMM",
-            *(["  NOT A VALID MEASUREMENT:", *(f"    - {i}" for i in self.issues)] if self.issues else []),
+            *([f"  {INVALID}"] if self.issues else []),
             f"  {'set V':>6} {'DMM V':>10} {'readback V':>11} {'output err':>11} {'readback err':>13}",
         ]
         for r in self.rows:

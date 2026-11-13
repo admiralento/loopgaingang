@@ -52,6 +52,7 @@ from ldo_bench.analysis import sweep_points
 from ldo_bench.bench import Bench
 from ldo_bench.config import IqConfig
 from ldo_bench.instruments.base import InstrumentError
+from ldo_bench.procedures import INVALID
 
 log = logging.getLogger(__name__)
 
@@ -169,8 +170,7 @@ class IqResult:
                 f"  load check: code {c['code']} should add {fmt_a(c['expected'])}, measured {fmt_a(c['measured'])}"
             )
         if self.issues:
-            lines.append("  NOT A VALID MEASUREMENT (data saved and plotted as measured):")
-            lines += [f"    - {i}" for i in self.issues]
+            lines.append(f"  {INVALID}")
         for s in self.states:
             lines.append(f"  {s}:")
             lines.append("      VIN (V)      current      VOUT (V)")
@@ -460,14 +460,5 @@ def plot(res: IqResult, dut: str):
             plotting.issue_box(ax, res.issues)
     axes[-1][0].set_xlabel("VIN (V)")
     title = f"Quiescent current: {dut}  ·  {res.what}"
-    if not valid:
-        title = "SETUP PROBLEM, not a valid measurement\n" + title
-    fig.suptitle(
-        title,
-        x=0.01,
-        ha="left",
-        fontsize=11,
-        fontweight="bold",
-        color=plotting.CRITICAL if not valid else plotting.INK,
-    )
+    plotting.suptitle(fig, title, invalid=not valid)
     return fig

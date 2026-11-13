@@ -620,16 +620,7 @@ def plot_edges(
         fig.legend(
             list(legend.values()), list(legend), loc="outside lower center", ncols=len(legend), fontsize=8
         )
-    if any_invalid:  # two lines so it fits; invalid edges draw no band, so drop its legend note
-        suptitle = "SETUP PROBLEM, not a valid measurement\n" + suptitle.replace(
-            "  ·  shaded = settling band", ""
-        )
-    fig.suptitle(
-        suptitle,
-        x=0.01,
-        ha="left",
-        fontsize=11,
-        fontweight="bold",
-        color=plotting.CRITICAL if any_invalid else plotting.INK,
-    )
+    if any_invalid:  # invalid edges draw no band, so drop its legend note
+        suptitle = suptitle.replace("  ·  shaded = settling band", "")
+    plotting.suptitle(fig, suptitle, invalid=any_invalid)
     return fig

@@ -62,6 +62,20 @@ class DcPoint:
     dmm_range: float = float("nan")  # V: the DMM's range for this point (NaN: no DMM, or not reported)
 
 
+def _toward(v: float, target: float, step: float) -> float:
+    """One ramp step (V) from v towards target, never past it."""
+    return min(target, v + step) if target > v else max(target, v - step)
+
+
+def _setpoint_issue(out, want: float, name: str) -> str | None:
+    """Why a supply output's setpoint readback isn't `want` (V), or None: a lost or rejected command
+    would leave the output somewhere else while the data records the requested value."""
+    got = out.get_voltage_setpoint()
+    if abs(got - want) <= SETPOINT_TOLERANCE:
+        return None
+    return f"the {name} setpoint reads {got:.4f} V after programming {want:.4f} V: it didn't take the command"
+
+
 class Bench:
     """The instruments plus the safety layer every procedure goes through.
 
@@ -302,20 +316,13 @@ class Bench:
             self.psu.output(True)
             self._psu_on = True
         v = self.psu.get_voltage_setpoint()
-        step = self.cfg.psu.ramp_step
         while abs(target - v) > 1e-9:
-            v = min(target, v + step) if target > v else max(target, v - step)
+            v = _toward(v, target, self.cfg.psu.ramp_step)
             self.psu.set_voltage(v)
             if abs(target - v) > 1e-9:
                 self.sleep(0.02)
-        # Confirm the supply took it: a lost or rejected command would leave VIN somewhere else
-        # while the data records the requested value.
-        got = self.psu.get_voltage_setpoint()
-        if abs(got - target) > SETPOINT_TOLERANCE:
-            raise InstrumentError(
-                f"the PSU setpoint reads {got:.4f} V after programming {target:.4f} V: the supply didn't "
-                "take the command (check the connection)"
-            )
+        if issue := _setpoint_issue(self.psu, target, "PSU"):
+            raise InstrumentError(f"{issue} (check the connection)")
         self.sleep(self.cfg.psu.settle_time)
 
     def supply_off(self) -> None:
@@ -366,13 +373,10 @@ class Bench:
         within tens of mV of dut.vin_max. Anything above the fine range's span reads as clipped
         (about 2.5 V), which is still above a vin_max of at most 2.4 V, so the limit checks still trip.
         """
-        a = self.cfg.ad2
-        ref = (
-            ChannelSetup(self.FINE_RANGE, 0.0)
-            if self.cfg.dut.vin_max <= self.FINE_RANGE_MAX
-            else ChannelSetup(a.ref.range, a.ref.offset)
-        )
-        return {a.vout_channel: ChannelSetup(a.vout.range, a.vout.offset), a.ref_channel: ref}
+        setups = self.scope_setups()
+        if self.cfg.dut.vin_max <= self.FINE_RANGE_MAX:
+            setups[self.cfg.ad2.ref_channel] = ChannelSetup(self.FINE_RANGE, 0.0)
+        return setups
 
     def measure_vin_fine(self) -> float:
         """VIN at the board (V): the AD2 ref channel averaged over 50 ms, on the finest range that fits."""
@@ -420,10 +424,9 @@ class Bench:
         self._buffer_up = True
         self._ramp_rails(v_plus, bu.v_minus, check=True)
         for out, want, name in ((self.psu, v_plus, "VS_BUFF"), (self.vminus_out, bu.v_minus, "U2 V-")):
-            got = out.get_voltage_setpoint()
-            if abs(got - want) > SETPOINT_TOLERANCE:
+            if issue := _setpoint_issue(out, want, name):
                 self.buffer_rails_off()
-                raise InstrumentError(f"the {name} setpoint reads {got:.4f} V after programming {want:.4f} V")
+                raise InstrumentError(issue)
         self.sleep(self.cfg.psu.settle_time)
 
     def _ramp_rails(self, v_plus: float, v_minus: float, *, check: bool) -> None:
@@ -433,16 +436,11 @@ class Bench:
         the rails come down and InstrumentError is raised.
         """
         bu = self.cfg.buffer
-        step = bu.ramp_step
-
-        def toward(v: float, target: float) -> float:
-            return min(target, v + step) if target > v else max(target, v - step)
-
         vp, vm = self.psu.get_voltage_setpoint(), self.vminus_out.get_voltage_setpoint()
         while abs(vp - v_plus) > 1e-9 or abs(vm - v_minus) > 1e-9:
-            vm = toward(vm, v_minus)
+            vm = _toward(vm, v_minus, bu.ramp_step)
             self.vminus_out.set_voltage(vm)
-            vp = toward(vp, v_plus)
+            vp = _toward(vp, v_plus, bu.ramp_step)
             self.psu.set_voltage(vp)
             self.sleep(0.02)
             if not check:
@@ -488,10 +486,15 @@ class Bench:
         self._awg_on = False
         self._vin_level, self._vin_from = None, None
 
+    @property
+    def wavegen_limit(self) -> float:
+        """Highest wavegen level (V) that may reach the DUT: min(dut.vin_max, the AD2's 5 V)."""
+        return min(self.cfg.dut.vin_max, AD2_WAVEGEN_MAX_V)
+
     def vin_from_wavegen(self, volts: float) -> None:
         """Wavegen drives VIN through the BUF634: a DC level of `volts` (V), at most
         min(dut.vin_max, 5 V). The buffer rail must already be up (buffer_rail)."""
-        limit = min(self.cfg.dut.vin_max, AD2_WAVEGEN_MAX_V)
+        limit = self.wavegen_limit
         if not 0 <= volts <= limit:
             raise InstrumentError(f"refusing to drive VIN to {volts} V from the wavegen (limit {limit} V)")
         self._vref_allows_vin(volts)
@@ -504,7 +507,7 @@ class Bench:
 
         dc, amplitude in V (amplitude = peak, not peak-to-peak); frequency in Hz.
         """
-        limit = min(self.cfg.dut.vin_max, AD2_WAVEGEN_MAX_V)
+        limit = self.wavegen_limit
         lo, hi = dc - amplitude, dc + amplitude
         if amplitude <= 0 or lo < 0 or hi > limit + 1e-9:
             raise InstrumentError(
@@ -558,7 +561,7 @@ class Bench:
         wavegen's 5 V); its bottom may go to -0.3 V, the usual input clamp limit. Every shape
         peaks exactly at low and high, so the same limits apply to each.
         """
-        limit = min(self.cfg.dut.vin_max, AD2_WAVEGEN_MAX_V)
+        limit = self.wavegen_limit
         if not -0.3 <= low < high <= limit + 1e-9:
             raise InstrumentError(
                 f"refusing to drive EN_AIN with a {low:.3f}..{high:.3f} V {shape} (limit -0.3..{limit} V)"
@@ -608,15 +611,11 @@ class Bench:
             raise InstrumentError(f"refusing to program VREF_IN to {target} V (limit {vr.v_max} V)")
         out = self.vref_out
         v = out.get_voltage_setpoint()
-        step = self.cfg.psu.ramp_step
         while abs(target - v) > 1e-9:
-            v = min(target, v + step) if target > v else max(target, v - step)
+            v = _toward(v, target, self.cfg.psu.ramp_step)
             out.set_voltage(v)
-        got = out.get_voltage_setpoint()
-        if abs(got - target) > SETPOINT_TOLERANCE:
-            raise InstrumentError(
-                f"the reference output (OUT{out.channel}) reads {got:.4f} V after programming {target:.4f} V"
-            )
+        if issue := _setpoint_issue(out, target, f"reference output (OUT{out.channel})"):
+            raise InstrumentError(issue)
         self.sleep(vr.settle_time)
 
     def reference_on(self) -> None:
@@ -767,17 +766,20 @@ class Bench:
         """
         if vin_source == "psu" and self.dmm is not None:  # the AD2 isn't needed at all
             vin_psu = self.psu.measure_voltage()
-            n = self.cfg.dmm.samples if self.cfg.dmm else 1
-            x = np.array([self.dmm.read_dcv() for _ in range(n)])
-            return DcPoint(float(x.mean()), float(x.std()), vin_psu, float("nan"), "dmm", self._dmm_range())
+            mean, std = self.dmm_mean()
+            return DcPoint(mean, std, vin_psu, float("nan"), "dmm", self._dmm_range())
         vout_ad2, vin = self.measure_dc(duration)
         if vin_source == "psu":
             vin = DcReading(self.psu.measure_voltage(), 0.0, 1)
         if self.dmm is None:
             return DcPoint(vout_ad2.mean, vout_ad2.std, vin.mean, vout_ad2.mean, "ad2")
-        n = self.cfg.dmm.samples if self.cfg.dmm else 1
-        x = np.array([self.dmm.read_dcv() for _ in range(n)])
-        return DcPoint(float(x.mean()), float(x.std()), vin.mean, vout_ad2.mean, "dmm", self._dmm_range())
+        mean, std = self.dmm_mean()
+        return DcPoint(mean, std, vin.mean, vout_ad2.mean, "dmm", self._dmm_range())
+
+    def dmm_mean(self) -> tuple[float, float]:
+        """(mean, std) of dmm.samples DC volts readings (V); an overload reads +/-inf."""
+        x = np.array([self.dmm.read_dcv() for _ in range(self.cfg.dmm.samples)])
+        return float(x.mean()), float(x.std())
 
     def _dmm_range(self) -> float:
         """The DMM's DC volts range (V) after a reading, so a sweep shows where autorange switched."""

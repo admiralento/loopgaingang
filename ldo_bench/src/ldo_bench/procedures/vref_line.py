@@ -1,27 +1,14 @@
-"""vref-line: the BGR output (VREF, TP3) against VIN, with the LDO on.
+"""vref-line: the BGR output (VREF, TP3) against VIN with the LDO on (bring-up Test 2.7).
 
-First bring-up plan, Test 2.7: with EN high, step VIN down from 1.90 V and read VREF at TP3 with the
-DMM (on its highest-input-resistance range, so it doesn't load the BGR). That gives:
-  - the BGR's line sensitivity: dVREF/dVIN (mV/V) while it has headroom
-  - the lowest VIN it works at: where VREF first falls `drop_fraction` below its value at vin_high
-    (simulated ~1.56 V). Below it, the BGR rather than the pass device can set the LDO's dropout.
+The DMM reads VREF while VIN steps from vin_high down to vin_low; the AD2 reads VOUT (J13 pin 4)
+and VIN (J13 pin 1). The line-reg analysis applied to VREF gives the line sensitivity (mV/V) and
+the BGR's lowest working VIN: where VREF falls drop_fraction below its value at vin_high. Below
+that the BGR, not the pass device, can set the LDO's dropout. docs/tests.md has the setup.
 
-The DMM is the VREF reference. AD2 scope vout channel on J13 pin 4 (OUTA) reads VOUT, which shows
-the LDO is enabled and following VREF (unity gain); scope ref channel on J13 pin 1 (INA) reads VIN
-at the board (vin_source "ad2").
-
-run() steps:
-1. Confirm the wiring. EN low (--enable dio), VIN to vin_high, EN high.
-2. For each VIN from vin_high down to vin_low: PSU to that VIN, wait settle_time, one
-   `bench.measure_point` (VREF from the DMM, VOUT and VIN from the AD2).
-3. EN low, load bank off. `analysis.line_regulation` on (VIN, VREF): the same fit and knee as
-   line-reg, applied to VREF.
-
-Validity checks (issues: the run is invalid, the data is still saved):
-  - VREF at vin_high within vref_tolerance of vref_nominal (DMM on TP3, LDO enabled, JP2 side)
-  - VOUT on the AD2 near vout_nominal at vin_high (the LDO enabled, scope on OUTA)
-  - measured VIN within 2 % + 20 mV of its setpoint at every point
-  - VREF below the knee threshold above the knee (a bad reading), or too few points to fit
+run(): EN low (--enable dio), VIN to vin_high, EN high; each VIN down to vin_low: wait
+settle_time, measure; EN low, load off; analysis.line_regulation on (VIN, VREF).
+Issues: VREF off vref_nominal at vin_high (DMM not on TP3, LDO off), VOUT off nominal, VIN off
+its setpoint, a stray low point above the knee, too few points to fit.
 """
 
 from __future__ import annotations
@@ -38,11 +25,12 @@ from ldo_bench.analysis import sweep_points as analysis_sweep
 from ldo_bench.bench import Bench
 from ldo_bench.config import VrefLineConfig
 from ldo_bench.instruments.base import InstrumentError
+from ldo_bench.procedures import INVALID
+from ldo_bench.procedures.line_reg import KNEE_STEPS  # the fit starts this many steps above the knee
 
 log = logging.getLogger(__name__)
 
 NAME = "vref-line"
-KNEE_STEPS = 3  # the fit starts this many steps above the knee, as in line-reg
 
 
 @dataclass
@@ -88,10 +76,7 @@ class VrefLineResult:
             f"VREF vs VIN (BGR), VIN {self.rows[0]['vin_set_v']:.2f} -> {self.rows[-1]['vin_set_v']:.2f} V:"
         )
         if self.issues:
-            return "\n".join(
-                [head, "  NOT A VALID MEASUREMENT (data saved and plotted as measured):"]
-                + [f"    - {i}" for i in self.issues]
-            )
+            return f"{head}\n  {INVALID}"
         knee = (
             f"VIN {r.dropout_vin:.3f} V (VREF {r.dropout_fraction:.0%} below its value at the top)"
             if np.isfinite(r.dropout_vin)

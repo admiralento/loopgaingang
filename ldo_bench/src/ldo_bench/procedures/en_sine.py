@@ -45,6 +45,7 @@ from ldo_bench.analysis import PropagationDelays, SchmittResult, propagation_del
 from ldo_bench.bench import Bench
 from ldo_bench.config import AD2_MAX_SAMPLE_RATE, EnSineConfig
 from ldo_bench.instruments.base import Capture, ChannelSetup, InstrumentError
+from ldo_bench.procedures import INVALID
 
 log = logging.getLogger(__name__)
 
@@ -186,10 +187,7 @@ class EnSineResult:
             f"VIN {self.vin:.2f} V, {len(self.captures)} captures:"
         )
         if self.issues:
-            return "\n".join(
-                [head, "  NOT A VALID MEASUREMENT (data saved and plotted as measured):"]
-                + [f"    - {i}" for i in self.issues]
-            )
+            return f"{head}\n  {INVALID}"
 
         def mv(key):
             m, s = self._stat(key)
@@ -246,7 +244,8 @@ def run(bench: Bench, es: EnSineConfig) -> EnSineResult:
         f"enable block ({es.shape})", wiring(bench, es), ref_probe=("en_ain", 0), ch1_probe="en_out"
     )
     # 5 V range (+/-2.5 V) on both: covers the 0-EN_VDD wave and EN_OUT at the best resolution
-    setups = {a.vout_channel: ChannelSetup(5.0, 0.0), a.ref_channel: ChannelSetup(5.0, 0.0)}
+    fine = ChannelSetup(bench.FINE_RANGE, 0.0)
+    setups = {a.vout_channel: fine, a.ref_channel: fine}
     bench.vin_from_psu(es.vin)
     bench.en_ain_sine(es.wavegen_channel, frequency=es.frequency, low=lo, high=hi, shape=es.shape)
     bench.sleep(0.05)  # let the wavegen output start
@@ -403,14 +402,5 @@ def plot(res: EnSineResult, dut: str):
         f"Enable block: {dut}  ·  {res.low:.2f}-{res.high:.2f} V {res.shape} at {res.frequency:g} Hz"
         f"  ·  VIN {res.vin:.2f} V"
     )
-    if not valid:
-        title = "SETUP PROBLEM, not a valid measurement\n" + title
-    fig.suptitle(
-        title,
-        x=0.01,
-        ha="left",
-        fontsize=11,
-        fontweight="bold",
-        color=plotting.CRITICAL if not valid else plotting.INK,
-    )
+    plotting.suptitle(fig, title, invalid=not valid)
     return fig

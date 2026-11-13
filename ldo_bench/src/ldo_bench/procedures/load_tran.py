@@ -38,7 +38,7 @@ from ldo_bench import wiring as w
 from ldo_bench.analysis import SettlingResult, settling_analysis
 from ldo_bench.bench import Bench
 from ldo_bench.config import AnalysisConfig, LoadTranConfig
-from ldo_bench.instruments.base import ChannelSetup, InstrumentError
+from ldo_bench.instruments.base import InstrumentError
 from ldo_bench.procedures.transient import (
     XCheck,
     XScopeSetup,
@@ -239,10 +239,7 @@ def run(bench: Bench, lt: LoadTranConfig, an: AnalysisConfig) -> LoadTranResult:
     bank, a = bench.loadbank, bench.cfg.ad2
     pin, rises_with_load = trigger_setup(bench, lt)
     bench.confirm_wiring("load transient", wiring(bench, pin), ref_probe=("dio", pin))
-    setups = {
-        a.vout_channel: ChannelSetup(a.vout.range, a.vout.offset),
-        a.ref_channel: ChannelSetup(a.ref.range, a.ref.offset),
-    }
+    setups = bench.scope_setups()
     bench.ldo_enable(False)  # --enable dio only: EN held low while VIN comes up
     bank.set(lt.code_low)
     bench.vin_from_psu(lt.vin)

@@ -77,14 +77,11 @@ class StartupResult:
     i_load: float  # A, that code's current at the nominal VOUT
     edges: list[EdgeStartup]
     vout_nominal: float  # V
-    setup_issues: list[str] = field(default_factory=list)
 
     @property
     def issues(self) -> list[str]:
-        out = list(self.setup_issues)
-        for e in self.edges:
-            out += [f"{e.edge}: {i}" for i in e.issues if i not in self.setup_issues]
-        return out
+        """Every edge's setup problems, each prefixed with its edge."""
+        return [f"{e.edge}: {i}" for e in self.edges for i in e.issues]
 
     @property
     def rows(self) -> list[dict]:
@@ -373,14 +370,5 @@ def plot(res: StartupResult, dut: str):
         ax_c.set_xlabel(f"Time from EN_CTRL_33 edge ({unit})")
         ax_v.tick_params(labelbottom=False)
     title = f"Enable startup: {dut}  ·  VIN {res.vin:.2f} V  ·  {res.i_load * 1e3:.1f} mA load  ·  {res.averages} averages"
-    if any_invalid:
-        title = "SETUP PROBLEM, not a valid measurement\n" + title
-    fig.suptitle(
-        title,
-        x=0.01,
-        ha="left",
-        fontsize=11,
-        fontweight="bold",
-        color=plotting.CRITICAL if any_invalid else plotting.INK,
-    )
+    plotting.suptitle(fig, title, invalid=any_invalid)
     return fig

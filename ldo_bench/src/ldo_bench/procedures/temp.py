@@ -1,28 +1,14 @@
-"""temp: log the board temperature, VREF and VOUT over time, and the tempco from stable plateaus.
+"""temp: the board temperature, VREF and VOUT over time, and their tempco (bring-up Test 3.10).
 
-First bring-up plan, Test 3.10. The TMP235 next to U1 runs from VS_BUFF (J4, set by hand) and its
-output, TEMP (TP7), is on J13 pin 5, read by AD2 scope ref channel: T = (V - tmp_offset) / tmp_slope.
-VREF (TP3) is on the DMM and VOUT (OUTA, J13 pin 4) on AD2 scope vout channel. With the LDO on,
-the run samples every `interval` for `duration` (or until Ctrl-C). Take readings at room
-temperature, then put ice in a sealed bag on U1, and leave each for a few minutes.
+TMP235 on J13 pin 5 (AD2 ref channel, T = (V - tmp_offset) / tmp_slope), VREF on the DMM, VOUT on
+the AD2. Where T holds within stable_delta for stable_window the samples form a plateau; two
+plateaus min_spread apart give the tempco from a line through their means, which uses only
+temperature differences (so the AD2's and TMP235's offsets cancel). docs/tests.md has the setup.
 
-Where the temperature held within stable_delta for stable_window, the samples count as stable;
-each run of stable samples is a plateau, averaged into one point (T, VREF, VOUT). Two or more
-plateaus at least min_spread apart give the temperature coefficient (ppm/C) of VREF and VOUT from
-a straight-line fit through the plateau means. That uses temperature differences, so the AD2's DC
-offset (~10 mV, ~1 C, a figure still to check) and the TMP235's own offset largely cancel.
-
-run() steps:
-1. Confirm the wiring. EN low (--enable dio), VIN up, EN high, load code set.
-2. Every `interval`: TMP and VOUT from the AD2 (averaged over dc_window), VREF from the DMM,
-   optionally the supply current. Stops at `duration` (2 h at most) or on Ctrl-C, which ends the
-   log, keeps the data and still shuts the bench down.
-3. EN low, load off. Plateaus and the tempco.
-
-Validity checks (issues): every temperature within temp_min..temp_max (scope on J13 pin 5,
-VS_BUFF powered), VOUT near nominal, VREF within vref_tolerance of vref_nominal (DMM on TP3).
-Notes: Ctrl-C, no tempco (fewer than two plateaus far enough apart), supply current rising more
-than 20 % (moisture on the board can do that).
+run(): EN low (--enable dio), VIN up, EN high; sample every `interval` until `duration` (2 h at
+most) or Ctrl-C, which ends the log and keeps the data; EN low, load off; plateaus and tempco.
+Issues: a temperature outside temp_min..temp_max, VOUT off nominal, VREF off vref_nominal. Notes:
+Ctrl-C, no tempco, the supply current rising more than 20 % (condensation).
 """
 
 from __future__ import annotations
@@ -37,6 +23,7 @@ from ldo_bench import wiring as w
 from ldo_bench.bench import Bench
 from ldo_bench.config import TempConfig
 from ldo_bench.instruments.base import ChannelSetup
+from ldo_bench.procedures import INVALID
 
 log = logging.getLogger(__name__)
 
@@ -105,10 +92,7 @@ class TempResult:
     def report(self) -> str:
         head = f"Temperature log: {len(self.rows)} samples over {self.summary()['duration_s'] / 60:.1f} min"
         if self.issues:
-            return "\n".join(
-                [head, "  NOT A VALID MEASUREMENT (data saved and plotted as measured):"]
-                + [f"    - {i}" for i in self.issues]
-            )
+            return f"{head}\n  {INVALID}"
         lines = [head, f"  plateaus      {len(self.points)}"]
         for p in self.points:
             vref = f"VREF {p['vref_v']:.5f} V" if np.isfinite(p["vref_v"]) else "VREF not read"
@@ -150,7 +134,7 @@ def run(bench: Bench, tc: TempConfig) -> TempResult:
     bench.confirm_wiring("temperature log", wiring(bench, tc), ref_probe=("tmp", 0), dmm_probe="vref")
     setups = {
         a.vout_channel: ChannelSetup(a.vout.range, a.vout.offset),
-        a.ref_channel: ChannelSetup(5.0, 0.0),  # TMP235: 0.3-1.3 V, on the fine 5 V range
+        a.ref_channel: ChannelSetup(bench.FINE_RANGE, 0.0),  # TMP235: 0.3-1.3 V, on the fine 5 V range
     }
     bench.ldo_enable(False)  # --enable dio only: EN held low while VIN comes up
     bench.loadbank.set(tc.load_code)
@@ -168,7 +152,9 @@ def run(bench: Bench, tc: TempConfig) -> TempResult:
                 "temp_c": (tmp_v - tc.tmp_offset) / tc.tmp_slope,
                 "tmp_v": tmp_v,
                 "vout_v": vout_v,
-                "vref_v": bench.dmm.read_dcv() if bench.dmm is not None else float("nan"),
+                "vref_v": bench.dmm_mean()[0]
+                if bench.dmm is not None
+                else float("nan"),  # dmm.samples averaged
             }
             if tc.psu_readback:
                 row["i_psu_a"] = bench.psu.measure_current()
@@ -201,12 +187,11 @@ def _analyse(bench: Bench, tc: TempConfig, rows: list[dict], stopped_early: bool
             f"{tc.temp_max:g} C ({len(out)} of {len(rows)} samples): is scope {a.ref_channel} on J13 pin 5 (TMP), "
             "and is VS_BUFF (J4) powered?"
         )
-    bad_vout = [(r["t_s"], r["vout_v"]) for r in rows if bench.vout_issue(r["vout_v"], source="x")]
+    src = f"scope {a.vout_channel}"
+    bad_vout = [(r["t_s"], i) for r in rows if (i := bench.vout_issue(r["vout_v"], source=src))]
     if bad_vout:
-        tv, v = bad_vout[0]
-        issues.append(
-            f"{bench.vout_issue(v, source=f'scope {a.vout_channel}')} (at {tv:.0f} s; {len(bad_vout)} of {len(rows)} samples)"
-        )
+        tv, issue = bad_vout[0]
+        issues.append(f"{issue} (at {tv:.0f} s; {len(bad_vout)} of {len(rows)} samples)")
     vrefs = np.array([r["vref_v"] for r in rows])
     if np.isfinite(vrefs).any():
         bad = np.nonzero(np.abs(vrefs - tc.vref_nominal) > tc.vref_tolerance * tc.vref_nominal)[0]
@@ -296,14 +281,5 @@ def plot(res: TempResult, dut: str):
     if not valid:
         plotting.issue_box(ax_o, res.issues)
     title = f"Temperature: {dut}  ·  {len(res.rows)} samples"
-    if not valid:
-        title = "SETUP PROBLEM, not a valid measurement\n" + title
-    fig.suptitle(
-        title,
-        x=0.01,
-        ha="left",
-        fontsize=11,
-        fontweight="bold",
-        color=plotting.INK if valid else plotting.CRITICAL,
-    )
+    plotting.suptitle(fig, title, invalid=not valid)
     return fig

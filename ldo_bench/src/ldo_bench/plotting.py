@@ -113,6 +113,8 @@ def issue_box(ax, issues: list[str], *, width: int = 58) -> None:
     )
 
 
-def mark_invalid(fig, issues: list[str]) -> None:
-    """Figure-level version of issue_box, for plots without a natural single axes (uses the first axes)."""
-    issue_box(fig.axes[0], issues)
+def suptitle(fig, title: str, *, invalid: bool) -> None:
+    """The figure title, left-aligned; an invalid run's gets a red SETUP PROBLEM line above it."""
+    if invalid:
+        title = "SETUP PROBLEM, not a valid measurement\n" + title
+    fig.suptitle(title, x=0.01, ha="left", fontsize=11, fontweight="bold", color=CRITICAL if invalid else INK)

@@ -38,6 +38,7 @@ from ldo_bench.analysis import LineRegulation, dropout_strays, line_regulation
 from ldo_bench.analysis import sweep_points as analysis_sweep
 from ldo_bench.bench import Bench
 from ldo_bench.config import LineRegConfig
+from ldo_bench.procedures import INVALID
 
 log = logging.getLogger(__name__)
 
@@ -83,8 +84,7 @@ class LineRegResult:
             return "\n".join(
                 [
                     f"Line regulation (code {self.load_code}), VOUT from {self.vout_source.upper()}:",
-                    "  NOT A VALID MEASUREMENT (data saved and plotted as measured):",
-                    *(f"    - {i}" for i in self.issues),
+                    f"  {INVALID}",
                     f"  measured VOUT ranged {min(v):.4f} to {max(v):.4f} V "
                     f"(expected ~{self.vout_nominal} V)",
                 ]

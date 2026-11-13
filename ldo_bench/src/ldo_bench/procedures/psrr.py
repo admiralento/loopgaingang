@@ -16,8 +16,8 @@ PsrrMeter that reads VOUT's amplitude from it (VIN still from AD2 scope 2).
 PSRR (dB) = 20 log10(|VIN| / |VOUT|), positive = rejection.
 
 run() steps:
-1. Confirm the wiring, set the load code, interlock (line_tran._interlock), buffer rail to
-   psu_voltage, calibrate W1's DC level so VIN = psrr.vin at the board (line_tran._calibrate).
+1. Confirm the wiring, set the load code, interlock (line_tran.interlock), buffer rail to
+   psu_voltage, calibrate W1's DC level so VIN = psrr.vin at the board (line_tran.calibrate).
 2. VOUT DC check (setup issue if not near nominal).
 3. For each frequency: W1 plays dc +/- amplitude, wait settle_cycles periods (at least 50 ms),
    measure. If VIN's amplitude is off by more than level_tolerance (buffer / board roll-off at
@@ -46,14 +46,15 @@ from ldo_bench.analysis import multi_sine_fit, sine_fit
 from ldo_bench.bench import Bench
 from ldo_bench.config import AD2_WAVEGEN_MAX_V, PsrrConfig
 from ldo_bench.instruments.base import ChannelSetup, InstrumentError
+from ldo_bench.procedures import INVALID
 from ldo_bench.procedures.line_tran import (
-    _calibrate,
-    _interlock,
-    _vin_limit,
     buffer_down,
     buffer_up,
     buffer_wiring,
+    calibrate,
     input_idle,
+    interlock,
+    vin_limit,
 )
 
 log = logging.getLogger(__name__)
@@ -304,8 +305,7 @@ class PsrrResult:
             f"(code {self.load_code}), {self.meter}, {self.averages} captures per point:"
         ]
         if self.issues:
-            lines.append("  NOT A VALID MEASUREMENT (data saved and plotted as measured):")
-            lines += [f"    - {i}" for i in self.issues]
+            lines.append(f"  {INVALID}")
         lines.append("      f (Hz)     PSRR (dB)   phase    VIN (mV pk)   VOUT (uV pk)")
         for p in self.points:
             db = f">= {p.psrr_db:5.1f}" if p.limited else f"   {p.psrr_db:5.1f}"
@@ -329,7 +329,7 @@ def _check_peak(bench: Bench, tone: Tone, f: float) -> None:
     buffer's offset or gain.
     """
     peak = tone.vin_dc + abs(tone.vin)
-    if peak > _vin_limit(bench):
+    if peak > vin_limit(bench):
         input_idle(bench)
         raise InstrumentError(
             f"at {f:g} Hz VIN peaks at {peak:.3f} V, above dut.vin_max ({bench.cfg.dut.vin_max} V) "
@@ -347,9 +347,9 @@ def run(bench: Bench, ps: PsrrConfig, meter: PsrrMeter | None = None) -> PsrrRes
     a = cfg.ad2
     bench.confirm_wiring("PSRR", wiring(bench, ps), ref_probe=("vin", 0), psu_to="rail")
     bench.loadbank.set(ps.load_code)
-    _interlock(bench, ps.psu_voltage, ps.proof_levels)
+    interlock(bench, ps.psu_voltage, ps.proof_levels)
     buffer_up(bench, ps.psu_voltage)
-    w_dc, v_dc, cal = _calibrate(bench, ps.vin)
+    w_dc, v_dc, cal = calibrate(bench, ps.vin)
     if bench.vref_external:  # after the interlock and calibration, with VIN at its DC level
         bench.vin_from_wavegen(w_dc)
         bench.reference_on()
@@ -362,7 +362,7 @@ def run(bench: Bench, ps: PsrrConfig, meter: PsrrMeter | None = None) -> PsrrRes
     # Largest amplitude W1 may play: the W1 peak within the bench's wavegen limit, and the VIN peak
     # (the measured DC level + amplitude, the buffer being unity gain) within vin_max less the AD2's
     # error margin. The second matters when the buffer's offset puts VIN above W1.
-    w_limit = min(min(cfg.dut.vin_max, AD2_WAVEGEN_MAX_V) - w_dc, _vin_limit(bench) - v_dc)
+    w_limit = min(min(cfg.dut.vin_max, AD2_WAVEGEN_MAX_V) - w_dc, vin_limit(bench) - v_dc)
 
     amp = min(ps.amplitude, w_limit)
     points = []
@@ -479,14 +479,5 @@ def plot(res: PsrrResult, dut: str):
         f"PSRR: {dut}  ·  VIN {res.vin_dc:.2f} V ± {res.amplitude * 1e3:.0f} mV  ·  "
         f"{res.i_load * 1e3:.1f} mA load  ·  {res.meter}"
     )
-    if not valid:
-        title = "SETUP PROBLEM, not a valid measurement\n" + title
-    fig.suptitle(
-        title,
-        x=0.01,
-        ha="left",
-        fontsize=11,
-        fontweight="bold",
-        color=plotting.CRITICAL if not valid else plotting.INK,
-    )
+    plotting.suptitle(fig, title, invalid=not valid)
     return fig

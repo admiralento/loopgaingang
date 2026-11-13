@@ -33,6 +33,7 @@ from ldo_bench import wiring as w
 from ldo_bench.analysis import LoadRegulation, load_regulation
 from ldo_bench.bench import Bench
 from ldo_bench.config import LoadRegConfig
+from ldo_bench.procedures import INVALID
 
 log = logging.getLogger(__name__)
 
@@ -69,8 +70,7 @@ class LoadRegResult:
             return "\n".join(
                 [
                     f"Load regulation at VIN = {self.vin_set:.3f} V (VOUT from {self.vout_source.upper()}):",
-                    "  NOT A VALID MEASUREMENT (data saved and plotted as measured):",
-                    *(f"    - {i}" for i in self.issues),
+                    f"  {INVALID}",
                     f"  measured VOUT ranged {min(v):.4f} to {max(v):.4f} V over {len(v)} points "
                     f"(expected ~{self.vout_nominal} V)",
                 ]

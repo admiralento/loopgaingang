@@ -79,9 +79,9 @@ def test_interlock_fraction_boundary(jafwak_single, vin_frac, stops):
         )
         if stops:
             with pytest.raises(Exception, match="connected to VIN"):
-                line_tran._interlock(b, 4.0)
+                line_tran.interlock(b, 4.0)
         else:
-            line_tran._interlock(b, 4.0)
+            line_tran.interlock(b, 4.0)
 
 
 @pytest.mark.parametrize(("seen_frac", "flagged"), [(0.8, True), (0.9, False)])

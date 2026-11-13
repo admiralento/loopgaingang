@@ -468,7 +468,11 @@ class PropagationDelays:
 
 
 def _two_levels(x: np.ndarray) -> tuple[float, float]:
-    """(low, high) of a two-level signal: medians either side of the 0.5 / 99.5 % midpoint."""
+    """(low, high) of a two-level signal: medians either side of the 0.5 / 99.5 % midpoint.
+
+    Not the 5 / 95 % percentiles: those both land on one level when the signal spends under 5 % of
+    the time at the other (a comparator threshold near a sine's extreme).
+    """
     lo_x, hi_x = float(np.percentile(x, 0.5)), float(np.percentile(x, 99.5))
     split = (lo_x + hi_x) / 2
     lows, highs = x[x <= split], x[x > split]
@@ -520,11 +524,7 @@ def schmitt_analysis(ain, aout, sample_rate: float, frequency: float) -> Schmitt
     vin, vout = np.asarray(ain, float), np.asarray(aout, float)
     # Two-level split rather than 5th / 95th percentiles: those both land on one level when the
     # output spends under 5 % of the time at the other (a threshold near a sine extreme).
-    lo_x, hi_x = float(np.percentile(vout, 0.5)), float(np.percentile(vout, 99.5))
-    split = (lo_x + hi_x) / 2
-    lows, highs = vout[vout <= split], vout[vout > split]
-    vol = float(np.median(lows)) if len(lows) else lo_x
-    voh = float(np.median(highs)) if len(highs) else hi_x
+    vol, voh = _two_levels(vout)
     mid = (vol + voh) / 2
     rise, fall = _crossings(vout, mid, True), _crossings(vout, mid, False)
 
@@ -660,23 +660,20 @@ def sine_fit(x, sample_rate: float, frequency: float) -> SineFit:
     x in V, sample_rate and frequency in Hz.
     """
     x = np.asarray(x, float)
-    n = len(x)
-    t = (np.arange(n) - (n - 1) / 2) / sample_rate
-    w = 2 * np.pi * frequency * t
-    a = np.column_stack([np.cos(w), np.sin(w), np.ones(n), t])
-    coef, *_ = np.linalg.lstsq(a, x, rcond=None)
+    a, coef = _lockin(x, sample_rate, [frequency])
     resid = x - a @ coef
-    dof = max(1, n - 4)  # 4 fitted parameters
+    dof = max(1, len(x) - 4)  # 4 fitted parameters
     # x = a cos + b sin = Re((a - jb) e^{jwt}), hence the minus sign on the sine coefficient
-    return SineFit(complex(coef[0], -coef[1]), float(coef[2]), float(np.sqrt(np.sum(resid**2) / dof)), n)
+    return SineFit(
+        complex(coef[0], -coef[1]), float(coef[-2]), float(np.sqrt(np.sum(resid**2) / dof)), len(x)
+    )
 
 
-def multi_sine_fit(x, sample_rate: float, frequencies) -> list[complex]:
-    """Phasors (V peak, same convention as sine_fit) of several tones fitted together, plus offset
-    and drift. Fitting jointly keeps each tone's leakage out of the others, e.g. so noise fitted
-    next to a strong tone doesn't include that tone.
+def _lockin(x: np.ndarray, sample_rate: float, frequencies) -> tuple[np.ndarray, np.ndarray]:
+    """Least-squares fit of cos / sin at each frequency plus offset and drift: (design matrix, coefficients).
+
+    Time is centred on the capture, so channels from the same capture share a phase reference.
     """
-    x = np.asarray(x, float)
     n = len(x)
     t = (np.arange(n) - (n - 1) / 2) / sample_rate
     cols = []
@@ -685,4 +682,13 @@ def multi_sine_fit(x, sample_rate: float, frequencies) -> list[complex]:
         cols += [np.cos(w), np.sin(w)]
     a = np.column_stack([*cols, np.ones(n), t])
     coef, *_ = np.linalg.lstsq(a, x, rcond=None)
+    return a, coef
+
+
+def multi_sine_fit(x, sample_rate: float, frequencies) -> list[complex]:
+    """Phasors (V peak, same convention as sine_fit) of several tones fitted together, plus offset
+    and drift. Fitting jointly keeps each tone's leakage out of the others, e.g. so noise fitted
+    next to a strong tone doesn't include that tone.
+    """
+    _, coef = _lockin(np.asarray(x, float), sample_rate, list(frequencies))
     return [complex(coef[2 * k], -coef[2 * k + 1]) for k in range(len(frequencies))]
