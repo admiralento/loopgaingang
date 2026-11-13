@@ -83,8 +83,9 @@ Procedures never program a voltage onto the DUT directly. They call Bench method
 | `psu_output(v)` | PSU with only a meter on it (psu-check) | `psu.v_max` |
 | `vin_from_wavegen(v)` | W1 DC → buffer → VIN | `min(dut.vin_max, 5 V)` |
 | `vin_sine_from_wavegen(dc, amplitude, f)` | W1 sine → buffer → VIN | peak within `min(dut.vin_max, 5 V)` |
-| `en_ain_sine(ch, f, low, high, shape)` | W1 sine or triangle → EN_AIN (enable-sine) | −0.3 V to `min(dut.vin_max, 5 V)` |
+| `en_ain_sine(ch, f, low, high, shape)` | W1 sine, triangle or square → EN_AIN (enable-sine) | −0.3 V to `min(dut.vin_max, 5 V)` |
 | `enable_logic(on)`, `set_enable(on)` | AD2 V+ → V_33, DIO → EN_CTRL_33 | fixed by `[enable]` |
+| `ldo_enable(on)` | the same, for `--enable dio` only (no-op when EN is tied on) | fixed by `[enable]` |
 | `loadbank.set(code)` | AD2 DIO → load bank | `dut.i_max` |
 | `reference_on()` / `reference_off()` | PSU's other output → VREF_IN (`--vref ext` only) | `vref.v_max`, and at most `vref.above_vin` above VIN |
 
@@ -98,8 +99,10 @@ Other things the Bench does:
   - **While on:** VIN may not go more than `vref.above_vin` below the reference, `buffer_rail` and `psu_output` are refused, and `supply_off()` and turning off the wavegen that drives VIN ramp the reference to 0 V first.
   - **JP2 can't be measured beforehand**, and the BGR must not be back-driven, so `confirm_wiring()` asks about JP2 in a separate question every run, even with `--yes`. A run that can't ask (no prompt) stops.
   - **Records:** `vref_info()` (source, the applied voltage, the proof readings) goes into `summary.json` and `meta.json` as `vref`, and the folder name gets `_extref`.
-- **Shutdown:** leaving the `with` block for any reason (end of test, exception, Ctrl-C) runs `shutdown()`. It turns off, in order: external reference (0 V), wavegen, AD2 V+, load bank, DIO, PSU output (then the setpoint goes to 0 V), and closes every instrument. Each step runs even if an earlier one fails. A failed step is printed in red as SHUTDOWN FAILED and the command exits 1, since the bench may still be powered.
+- **Enable from the AD2** (`--enable dio`, `Bench.enable_dio`): the DC and transient tests call `ldo_enable(False)` before VIN comes up, `ldo_enable(True)` once it is up (which waits `enable.settle_time`) and `ldo_enable(False)` when they finish. With EN tied on (the default) these do nothing. `confirm_wiring()` adds the enable wiring and tells the simulator the LDO now follows the enable DIO. An enable pin shared with the load bank is refused.
+- **Shutdown:** leaving the `with` block for any reason (end of test, exception, Ctrl-C) runs `shutdown()`. It turns off, in order: external reference (0 V), LDO enable low (`--enable dio`), wavegen, AD2 V+, load bank, DIO, PSU output (then the setpoint goes to 0 V), and closes every instrument. Each step runs even if an earlier one fails. A failed step is printed in red as SHUTDOWN FAILED and the command exits 1, since the bench may still be powered.
 - **Commands are confirmed:** after every ramp the supply's setpoint is read back, and `OUTP OFF` is confirmed with `OUTP?`. A serial reply that ends at the timeout instead of its line feed is rejected, not parsed.
+- **Time:** `sleep()` waits on hardware; in simulation it returns at once and advances the model's clock, and `now()` reads that clock, so timed procedures (`temp`) run in the tests without waiting.
 - **Measurements:** `measure_dc()` averages both AD2 channels, `measure_point()` takes VOUT from the DMM when there is one, and `vout_issue()` is the standard "is VOUT where it should be?" check. With a DMM, `vout_agreement_issue()` also checks the AD2 reads the same VOUT (2 % + 50 mV), so a loose scope 1 is caught in the DC tests too.
 
 ## Instruments (`instruments/`)
@@ -162,7 +165,9 @@ This is the rule the whole package is built around: **nothing saved or plotted i
 - output resistance, line regulation and dropout
 - noise, a ringing transient and a switching glitch
 - the BUF634 offset and its dropout from the rail
-- the enable comparator and the startup dynamics
+- the enable comparator, its propagation delay (`en_delay`) and the startup dynamics
+- the BGR output (`bgr_vref()`): a line term, a headroom knee at `bgr_min_vin` (1.56 V) and a temperature coefficient that VOUT follows too
+- the TMP235 (`ref_probe` `("tmp", 0)`) and a board temperature from `temp_profile(clock)`
 - quiescent and shutdown current, and a PSRR transfer function
 - the reference the regulator follows: the BGR (at `vout_nominal`) or, with JP2 out, the PSU's second output (`LdoModel.reference`)
 
@@ -190,7 +195,7 @@ results/
 ## Tests and tooling
 
 ```
-uv run poe verify         # the gate: format check, lint, both configs validated, 329 tests (~10 s, no hardware)
+uv run poe verify         # the gate: format check, lint, both configs validated, 366 tests (~15 s, no hardware)
 uv run poe test           # just the tests
 uv run poe format         # format the code
 ```

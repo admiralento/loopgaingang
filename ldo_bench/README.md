@@ -6,12 +6,14 @@ Bench automation for characterizing our LDO (the JAFWAK board) and the TPS7A7001
 |---|---|---|
 | Load regulation | `load-reg` | VOUT vs load current → output resistance |
 | Line regulation | `line-reg` | VOUT vs VIN → mV/V and the dropout voltage |
+| VREF vs VIN | `vref-line` | the BGR output (TP3) vs VIN → mV/V and the lowest VIN it works at (JAFWAK) |
 | Load transient | `load-tran` | VOUT after a load step → peak deviation, settling time |
 | Line transient | `line-tran` | VOUT after a VIN step (through the BUF634) |
 | PSRR | `psrr` | VIN ripple rejection, 100 Hz – 1 MHz |
 | Quiescent current | `iq` | supply current enabled / disabled vs VIN |
-| Enable thresholds | `enable-sine` | enable comparator VT+, VT-, hysteresis (JAFWAK) |
+| Enable thresholds | `enable-sine` | enable comparator VT+, VT-, hysteresis; `--shape square`: EN_AIN → EN_OUT propagation delay (JAFWAK) |
 | Startup | `enable-startup` | VOUT / VREF / current after the enable edge (JAFWAK) |
+| Temperature | `temp` | TMP235 (J13 pin 5), VREF and VOUT over time → tempco from stable plateaus (JAFWAK) |
 | Bench checks | `discover`, `psu-check`, `loadbank-check`, `smoke` | instruments found, supply accuracy, load bank wiring, quick power-up |
 | BGR vs external reference | any DC, transient, psrr or iq test with `--vref ext`, then `compare` | the same test with 1.204 V on VREF_IN in place of the BGR (JP2 removed), side by side with the BGR run |
 
@@ -24,8 +26,8 @@ Bench automation for characterizing our LDO (the JAFWAK board) and the TPS7A7001
 ## Hardware
 
 - **Agilent E3648A** (dual output; an E3638A works too): VIN, or the BUF634 rail for line-tran / psrr. On GPIB through a XyphroLabs UsbGpib adapter.
-- **Digilent Analog Discovery 2:** scope (VOUT, VIN / trigger), W1 (line-tran, psrr and enable-sine stimulus), DIO 0–4 (load bank), DIO 5–6 and V+ (JAFWAK enable).
-- **Agilent 34401A:** VOUT in the DC tests, and the `iq` measurement. On RS-232 through a USB-serial adapter.
+- **Digilent Analog Discovery 2:** scope (VOUT, VIN / trigger, the TMP235 for `temp`), W1 (line-tran, psrr and enable-sine stimulus), DIO 0–4 (load bank), DIO 5–6 and V+ (JAFWAK enable).
+- **Agilent 34401A:** VOUT in the DC tests, VREF (TP3) in `vref-line` and `temp`, and the `iq` measurement. On RS-232 through a USB-serial adapter.
 - **Agilent 54621A** (optional): an independent capture of every transient edge.
 - **Load banks:** binary-weighted resistors switched by FETs from AD2 DIO 0–4. JAFWAK has one on board (`load_cell.kicad_sch`); the demo board uses `Switched_R_Load_Bank`.
 - **Spectrum analyzer:** coming, for PSRR past what the AD2 can resolve.
@@ -37,7 +39,7 @@ Bench automation for characterizing our LDO (the JAFWAK board) and the TPS7A7001
    ```
    cd ldo_bench
    uv sync
-   uv run poe verify         # the gate: lint, both configs and 329 tests, no hardware needed
+   uv run poe verify         # the gate: lint, both configs and 366 tests, no hardware needed
    ```
 3. **Try it on the simulator** (no hardware; prints a SIMULATED report and saves nothing):
    ```
@@ -69,9 +71,13 @@ uv run ldo-bench load-tran      -c configs/demo_board.toml   # --from 4mA --to 6
 uv run ldo-bench line-tran      -c configs/jafwak.toml       # --low 1.75 --high 1.85 --load 19mA
 uv run ldo-bench psrr           -c configs/jafwak.toml       # --fstart 100 --fstop 1e6 --amp-mv 20
 uv run ldo-bench iq             -c configs/jafwak.toml       # --method series --rail bgr
+uv run ldo-bench vref-line      -c configs/jafwak.toml       # --high 1.9 --low 1.4 --step 0.02
 uv run ldo-bench enable-sine    -c configs/jafwak.toml       # --freq 1e3, or --shape triangle --freq 1 (slow ramp)
+uv run ldo-bench enable-sine    -c configs/jafwak.toml --shape square --freq 1e5   # propagation delay
+uv run ldo-bench temp           -c configs/jafwak.toml       # --minutes 30 --interval 2 (Ctrl-C ends it, data kept)
 uv run ldo-bench enable-startup -c configs/jafwak.toml       # --ch2 iin
 uv run ldo-bench load-reg -c configs/jafwak.toml --vref ext  # JP2 removed: PSU OUT2 on VREF_IN
+uv run ldo-bench load-reg -c configs/jafwak.toml --enable dio  # EN driven from the AD2, not tied on
 uv run ldo-bench compare results/load-reg/<bgr run> results/load-reg/<extref run>
 ```
 
@@ -83,6 +89,8 @@ Every command also takes:
 - `--psu` / `--ad-serial`: pick an instrument when several are connected
 
 The DC, transient, psrr and iq tests also take `--vref ext`. It drives VREF_IN from the supply's second output in place of the BGR; see [tests.md](docs/tests.md#external-reference-bgr-vs---vref-ext-jafwak).
+
+`smoke`, `load-reg`, `line-reg`, `load-tran`, `vref-line` and `temp` also take `--enable dio`. The run then drives the LDO's enable from the AD2 (J6 7-8, J13 pins 12 / 10 / 14) instead of it being tied on with jumpers (J6 1-2): EN is low while VIN rises, high once VIN is up, and low again before anything turns off. See [tests.md](docs/tests.md#enable-from-the-ad2---enable-dio-jafwak).
 
 ## Configs
 
@@ -108,7 +116,8 @@ Command-line options go through the same checks.
   - **Prompt:** it asks every run whether JP2 is removed, even with `--yes`, since the BGR mustn't be back-driven.
   - **Turn-on:** the reference comes on only after VIN, then the run proves VOUT follows a 20 mV step (it stops if not: JP2 is still in).
   - **Limits:** it's never more than 0.3 V above VIN, and it goes to 0 V before VIN does.
-- **Shutdown:** however a run ends (finished, error, Ctrl-C), everything is switched off in order: external reference, wavegen, AD2 V+, load bank, DIO, supply.
+- **Shutdown:** however a run ends (finished, error, Ctrl-C), everything is switched off in order: external reference, LDO enable (with `--enable dio`), wavegen, AD2 V+, load bank, DIO, supply.
+- **Temperature log:** `temp` runs for at most 2 hours (`temp.duration`); Ctrl-C ends it early, keeps the data and still shuts down.
 
 ## Results: real data only
 
@@ -131,7 +140,7 @@ Each run writes a folder under `results/<test>/`, e.g. `results/load-tran/202611
 
 `results/latest.png` is always the newest plot: keep it open in VS Code and it updates after each run. `results/` isn't in git, so runs stay on the machine that made them.
 
-## Status (2026-11-10)
+## Status (2026-11-13)
 
 | | Hardware-tested |
 |---|---|
@@ -140,6 +149,7 @@ Each run writes a folder under `results/<test>/`, e.g. `results/load-tran/202611
 | enable-sine `--shape triangle` (JAFWAK) | yes (2026-11-12), valid; the 1 kHz sine hit an AD2 arm race, fixed but not yet re-run |
 | line-tran, psrr, iq, enable-startup | simulator only |
 | `--vref ext` (PSU OUT2 on VREF_IN) and `compare` | simulator only |
+| `vref-line`, `temp`, `enable-sine --shape square`, `--enable dio` (added 2026-11-13) | simulator only |
 | 54624A over RS-232: load-tran cross-check (averaged capture, readback, time window), demo board | yes (2026-11-10), peaks within 0.8 mV of the AD2 |
 | load-tran supply current check (VIN reaching the board), 54621A/54624A clipping check | yes (2026-11-10): passing, and failing with the supply leads unplugged |
 | supply over RS-232, Prologix adapters | simulator / fake instruments only |

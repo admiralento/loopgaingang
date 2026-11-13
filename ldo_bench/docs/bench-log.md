@@ -2,6 +2,19 @@
 
 What was built, what was measured, and what went wrong along the way. Newest session first.
 
+## 2026-11-13: scripts for the bring-up plan's by-hand tests (simulator only)
+
+The bring-up plan was rewritten as "Bring up 2" (Google Doc): each test now says what it is, why, the setup by silkscreen label and connector pin, and the command. Four of its by-hand tests now have scripts. **None has run on hardware.**
+
+- **`vref-line`** (plan Test 2.7): VREF (TP3) on the DMM while VIN steps 1.90 → 1.40 V, LDO on. Line sensitivity and the BGR's lowest working VIN.
+- **`enable-sine --shape square`** (plan Test 1.8): EN_AIN → EN_OUT propagation delay per output edge. Use 100 kHz for 10 ns samples.
+- **`temp`** (plan Test 3.10): TMP235 on J13 pin 5 (AD2), VREF and VOUT logged for up to 2 h; tempco from stable plateaus.
+- **`--enable dio`** on smoke, load-reg, line-reg, load-tran, vref-line and temp: EN from the AD2 (J6 7-8) instead of tied on (J6 1-2).
+
+**Confirmed on the board (Alek):** J8's silkscreen is swapped on the EN_IN half. "HI" is printed over 5–6, which is GND, and "LO" over 7–8, which is VIN. The ~EN_IN half is right. Go by pin numbers.
+
+**Still by hand:** dropout "Method B" (BGR and OTA on a second supply), BGR PSRR, the HP 8591E readings and output noise. `line-tran` and `psrr` stay blocked until U2 is reworked: they assume U2's V− is on GND, and after the rework it needs −5 V.
+
 ## 2026-11-12: JAFWAK enable block, first `enable-sine` runs
 
 Run by hand at the bench. W1 straight onto EN_AIN (not through the EN_FG SMA). AD2 scope 2 on TP6 (EN_AIN), scope 1 on J8.2 (EN_OUT). VIN 1.8 V from the PSU on VIN_DC.

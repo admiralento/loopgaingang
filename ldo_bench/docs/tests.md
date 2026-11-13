@@ -13,6 +13,7 @@ Every command also takes:
 - `-o <folder>`: results folder (default `results/`).
 - `--psu` / `--ad-serial`: pick an instrument when there are several.
 - `--vref bgr|ext`: the reference VOUT follows. `ext` uses the supply's second output in place of the BGR (JAFWAK, JP2 removed). Not on the enable or bench-check tests; see [External reference](#external-reference-bgr-vs---vref-ext-jafwak).
+- `--enable static|dio` (smoke, load-reg, line-reg, load-tran, vref-line, temp): how the LDO is enabled. `static` (default): tied on with jumpers. `dio`: driven from the AD2; see [Enable from the AD2](#enable-from-the-ad2---enable-dio-jafwak).
 
 Before powering anything up, each command prints the wiring it expects and asks you to confirm it. The wiring lists below are exactly what the commands print. Option values in the examples are just examples; defaults come from the board's config section, which is named under each test.
 
@@ -26,7 +27,7 @@ How a run decides it measured the board, and what `_INVALID` means, is covered i
   - `line-reg`
   - `load-tran`
 - **JAFWAK:** no valid run yet. Its load-transient runs had the scope off VOUT (see [bench-log.md](bench-log.md)).
-- **Simulator only so far:** `line-tran`, `enable-sine`, `enable-startup`, `iq` and `psrr`.
+- **Simulator only so far:** `line-tran`, `enable-startup`, `iq` and `psrr`; `vref-line`, `temp`, `enable-sine --shape square` and `--enable dio` (added 2026-11-13). `enable-sine --shape triangle` ran on JAFWAK on 2026-11-12.
 
 Suggested order for a first session on a board:
 1. `discover`
@@ -122,6 +123,26 @@ Powers VIN up (default `load_reg.vin`), then reads VOUT, VIN and the supply's V 
   - `--vin-from psu`
   - `--no-dmm`
 - **Config:** `[line_reg]`.
+
+### `vref-line`: VREF against VIN (JAFWAK)
+- **Wiring:**
+  - PSU + -> VIN_DC (J7), PSU - -> GND (J11); JP4 2-3 "DC"; JP2 closed (BGR drives VREF_IN)
+  - DMM V / COM -> VREF (TP3) / GND (TP2); Hi-Z input (10 GOhm) if the meter has it
+  - Scope 1+ -> J13 pin 4 (OUTA), Scope 2+ -> J13 pin 1 (INA); both - -> J13 pin 6 (GND)
+  - LDO enabled: J6 1-2 "HI" (EN_AIN = VIN), J8 1-2 and 9-10 "LDO" (or `--enable dio`)
+- **Does:** with the LDO on, steps VIN from `vin_high` (1.90 V) down to `vin_low` (1.40 V) in `vin_step` (20 mV), waits `settle_time`, and reads VREF on the DMM, VOUT and VIN on the AD2. This is the first bring-up plan's Test 2.7.
+- **Computes** (the line-reg analysis, applied to VREF):
+  - **Line sensitivity:** dVREF/dVIN (mV/V), fitted from 3 steps above the knee to the top.
+  - **BGR minimum VIN:** where VREF first falls `drop_fraction` (1 %) below its value at `vin_high`. Simulated ~1.56 V. Below it the BGR, not the pass device, can set the LDO's dropout (compare with `line-reg`).
+  - **VOUT − VREF** at the top: the regulator follows VREF at unity gain. VOUT is on the AD2, so its DC error (~10 mV, unverified) is in this number.
+- **Setup checks:**
+  - VREF at `vin_high` within `vref_tolerance` (20 %) of `vref_nominal` (1.204 V): DMM on TP3, JP2 closed, LDO on
+  - VOUT on the AD2 near nominal at `vin_high` (LDO enabled, scope 1 on OUTA)
+  - measured VIN within 2 % + 20 mV of each setpoint
+  - VREF below the knee threshold above the knee (a bad reading), or too few points to fit
+- **Needs the DMM** (`[dmm]` enabled): it stops before anything powers up otherwise.
+- **Options:** `--high 1.9 --low 1.4 --step 0.02`, `--vin-from psu`, `--enable dio`.
+- **Config:** `[vref_line]`.
 
 ### `iq`: quiescent and shutdown current
 - **Wiring (JAFWAK, shunt method):**
@@ -272,7 +293,8 @@ Powers VIN up (default `load_reg.vin`), then reads VOUT, VIN and the supply's V 
 - **Shape** (`--shape`, `en_sine.shape`):
   - `sine` (default), at 1 kHz: about 5.6 V/ms through the midpoint.
   - `triangle`: a linear ramp up and down at 2 (high − low) f V/s. With `--freq 1` that's 3.6 V/s, about 1500× slower than the 1 kHz sine, and the same slope through both thresholds. Comparing the two runs shows how much the comparator's delay moves the thresholds.
-  - Each capture spans `cycles` periods in 8192 samples, so at 1 Hz a capture takes 4 s, one sample every 488 µs, and resolves the threshold to about 2 mV. The trigger wait is `timeout` plus that window.
+  - `square`: jumps through both thresholds, so no thresholds are measured. It gives the **propagation delay** instead (first bring-up plan, Test 1.8): from EN_AIN's midpoint crossing to the output's next midpoint crossing, for each output edge (rising / falling), and whether the output is inverted (Scope 1 on J8 pin 10, ~EN_OUT). A delay within two sample intervals is reported as "under" that. Use `--freq 1e5` so the capture runs at the AD2's 100 MS/s (10 ns per sample); at 1 kHz it's 2 MS/s and any delay under ~1 µs is only a bound.
+  - Each capture spans `cycles` periods in 8192 samples, at most 100 MS/s, so at 1 Hz a capture takes 4 s, one sample every 488 µs, and resolves the threshold to about 2 mV. The trigger wait is `timeout` plus that window.
 - **Computes:**
   - **Thresholds:** the input voltage at each output crossing gives VT+ and VT-, and their difference is the hysteresis.
   - **Output levels and edges:** VOH / VOL, 10–90 % edge times and duty cycle. An edge within two sample intervals is reported as "under" that (977 ns at 1 kHz, 977 µs at 1 Hz), not as a time: on the bench a fast edge measured 1.3–1.6 intervals at both rates.
@@ -282,7 +304,7 @@ Powers VIN up (default `load_reg.vin`), then reads VOUT, VIN and the supply's V 
   - the input swing isn't the wave's (probe not on TP6, J6 wrong)
   - EN_OUT doesn't switch (probe not on J8.2, EN_VDD unpowered)
 - **Options:**
-  - `--shape triangle`
+  - `--shape triangle` or `--shape square`
   - `--freq 1e3`
   - `--captures 8`
 - **Config:** `[en_sine]`.
@@ -316,6 +338,37 @@ Powers VIN up (default `load_reg.vin`), then reads VOUT, VIN and the supply's V 
   - `--load`
 - **Config:** `[startup]`, `[enable]`.
 - **First hardware run:** the AD2's digital trigger needs checking.
+
+---
+
+## Temperature (JAFWAK)
+
+### `temp`: temperature log
+- **Wiring:**
+  - PSU + -> VIN_DC (J7), PSU - -> GND (J11); JP4 2-3 "DC"; JP2 closed
+  - VS_BUFF (J4) at 5.0 V from a separate supply (powers the TMP235 on TEMP (TP7)); J10 "LOAD" only after VS_BUFF is up
+  - Scope 2+ -> J13 pin 5 (TMP), Scope 1+ -> J13 pin 4 (OUTA); both - -> J13 pin 6 (GND)
+  - DMM V / COM -> VREF (TP3) / GND (TP2), Hi-Z if the meter has it
+  - LDO enabled (J6 1-2 "HI", J8 1-2 and 9-10 "LDO") or `--enable dio`
+  - Optional 1 mA load: 1.2 kOhm from VOUT (J5) to GND (J12)
+- **Does:** with the LDO on, samples every `interval` (2 s) for `duration` (30 min, at most 2 h): T from the TMP235 on the AD2's 5 V range, T = (V − 0.500 V) / 0.010 V/C; VREF on the DMM; VOUT on the AD2; the supply current. Ctrl-C ends the log early, keeps the data and still shuts down. First bring-up plan, Test 3.10: start at room temperature, then put ice in a sealed bag on U1.
+- **Computes:**
+  - **Plateaus:** a sample is stable when T held within `stable_delta` (0.5 C) for `stable_window` (30 s). Each run of stable samples is averaged into one point (T, VREF, VOUT).
+  - **Tempco:** with two or more plateaus at least `min_spread` (2 C) apart, a line through the plateau means gives VREF and VOUT in ppm/C. It works on temperature differences, so the AD2's offset (~10 mV ≈ 1 C, unverified) mostly cancels. Simulated: 58.9 ppm/C, so room to ~5 C moves VREF by only ~1.4 mV.
+- **Setup checks:** every T within `temp_min`..`temp_max` (−20 to 80 C: scope 2 on J13 pin 5, VS_BUFF powered); VOUT near nominal; VREF within 20 % of `vref_nominal` (DMM on TP3).
+- **Notes:** stopped with Ctrl-C; no tempco (fewer than two plateaus far enough apart); the supply current rising by more than 20 % (condensation on the board).
+- **Options:** `--minutes 30`, `--interval 2`, `--vin`, `--no-dmm` (no VREF), `--enable dio`.
+- **Config:** `[temp]`.
+
+## Enable from the AD2: `--enable dio` (JAFWAK)
+
+`smoke`, `load-reg`, `line-reg`, `load-tran`, `vref-line` and `temp` don't need the enable line: by default the LDO is tied on with jumpers (J6 1-2 "HI", EN_AIN = VIN, with J8 1-2 and 9-10 "LDO"), so it turns on as VIN rises. With `--enable dio` the run drives it from the AD2 through `[enable]` instead, the same path `iq` and `enable-startup` use.
+
+- **Wiring** (added to the test's own; the run prints it): AD2 DIO 5 -> J13 pin 12 (EN), DIO 6 -> J13 pin 10 (~EN), AD2 V+ -> J13 pin 14 (VIO); J6 7-8 "EN" and nothing else on J6; J8 1-2 and 9-10 "LDO".
+- **Order:** EN is driven low before VIN comes up (V_33 on first), high once VIN is up, then the run waits `enable.settle_time` (0.2 s) before measuring. It goes low again when the test ends and, if the run stops for any reason, as the first step of the shutdown after the external reference.
+- **Refused** (exit 2) if an enable DIO pin is also a load bank pin.
+- **Records:** `meta.json` has `"enable": "dio"` or `"static"`.
+- **Not on** `line-tran` or `psrr` yet.
 
 ## External reference: BGR vs `--vref ext` (JAFWAK)
 
