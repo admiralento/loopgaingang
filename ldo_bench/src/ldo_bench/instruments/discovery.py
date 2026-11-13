@@ -340,13 +340,11 @@ def open_psu(
 def open_dmm(
     resource: str = "",
     *,
-    baud: int = 9600,
-    parity: str = "none",
     serial: SerialSettings | None = None,
     finder: Finder | None = None,
 ) -> HP34401A:
     """The 34401A at `resource`, or the one found by searching if it's ''. RS-232 as for open_psu()."""
-    serial = serial or SerialSettings(baud, parity, 2, "dsr-pacing")
+    serial = serial or SerialSettings()
     finder = finder or Finder()
     hint = f"{RS232_HINT}\nRun without the DMM with --no-dmm, or set dmm.enabled = false."
     if resource:
@@ -392,17 +390,12 @@ def reserve_dmm_port(resource: str = "", *, serial: SerialSettings, finder: Find
 def open_xscope(
     resource: str = "",
     *,
-    baud: int = 57600,
-    flow: str = "dsrdtr",
     serial: SerialSettings | None = None,
     finder: Finder | None = None,
-    skip: frozenset[str] = frozenset(),
 ) -> Agilent54621A:
-    """The cross-check scope at `resource`, or found by searching. `skip`: ports not to probe."""
-    serial = serial or SerialSettings(baud, "none", 1, flow)
+    """The cross-check scope at `resource`, or found by searching. RS-232 default: 57600 8N1, DTR/DSR."""
+    serial = serial or SerialSettings(57600, "none", 1, "dsrdtr")
     finder = finder or Finder()
-    for p in skip:
-        finder.claimed.add(p)
     hint = f"{SCOPE_HINT}\nRun without it with --no-xscope, or set xscope.enabled = false."
     if resource:
         finder.claim(resource)

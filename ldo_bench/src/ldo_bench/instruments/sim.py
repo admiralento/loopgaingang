@@ -129,20 +129,19 @@ class LdoModel:
     # PSRR: VOUT/VIN = h_dc (1 + j f/fz) / (1 + j f/fp)
     psrr_h_dc: float = 1e-3  # -60 dB at low frequency
     psrr_fz: float = 5e3  # Hz, zero: rejection worsens above here as loop gain falls
-    psrr_fp: float = 2e6
-    vout_hum: tuple[float, float] | None = (
-        None  # (amplitude V, frequency Hz) of a tone on VOUT, e.g. mains  # Hz, pole: |H| levels off again
-    )
+    psrr_fp: float = 2e6  # Hz, pole: |H| levels off again
+    vout_hum: tuple[float, float] | None = None  # (amplitude V, frequency Hz) of a tone on VOUT, e.g. mains
+    # the buffer (BUF634 / U2) between W1 and VIN, and where the PSU is wired
+    buffer_offset: float = -0.015  # V, buffer output minus input (line tran calibrates it out)
+    psu_to: str = "vin"  # where the PSU is wired: "vin" (DC tests) or "rail" (the buffer's supply)
+    buffer_dropout: float = 1.5  # V, the buffer's output can't get closer than this to a rail
+    buffer_split: bool = False  # U2 reworked: V- from the second output (see the module docstring)
+    vminus_wired: bool = False
 
     def __post_init__(self) -> None:
         self.rng = np.random.default_rng(self.seed)
 
     # --- DC model -----------------------------------------------------------
-    buffer_offset: float = -0.015  # V, BUF634 output minus input (line tran calibrates it out)
-    psu_to: str = "vin"  # where the PSU is wired: "vin" (DC tests) or "rail" (BUF634 supply, line tran)
-    buffer_dropout: float = 1.5  # V, the BUF634 output can't get closer than this to its rail
-    buffer_split: bool = False  # U2 reworked: V- from the second output (see the module docstring)
-    vminus_wired: bool = False
 
     @property
     def vin(self) -> float:
@@ -333,10 +332,9 @@ class SimPowerSupply:
     def __init__(self, model: LdoModel) -> None:
         self.m = model
         self.idn = "SIM,E3648A,0,sim"
-        self.current_limit = 0.0
 
     def setup(self, *, current_limit: float, ovp: float | None, voltage_range: str | None) -> None:
-        self.current_limit = current_limit
+        """Nothing to program: the model has no current limit or OVP (tests spy on the arguments)."""
 
     def set_voltage(self, volts: float) -> None:
         self.m.psu_v = volts
@@ -372,10 +370,8 @@ class SimSupplyOutput:
     def __init__(self, model: LdoModel, channel: int) -> None:
         self.m = model
         self.channel = channel
-        self.current_limit = 0.0
 
     def setup(self, *, current_limit: float, ovp: float | None) -> None:
-        self.current_limit = current_limit
         self.set_voltage(0.0)
 
     def set_voltage(self, volts: float) -> None:
@@ -400,6 +396,7 @@ class SimAnalogDiscovery:
         self.m = model
         self.vout_channel = vout_channel
         self.idn = "SIM Analog Discovery 2 (SN:SIM000)"
+        self.vplus: float | None = None  # V+ (None = off)
         self._touched: set[int] = set()
 
     # --- Oscilloscope -------------------------------------------------------
@@ -578,6 +575,8 @@ class SimAnalogDiscovery:
 
     # --- DigitalOut ---------------------------------------------------------
     def write_pins(self, levels: dict[int, bool]) -> None:
+        if bad := [p for p in levels if not 0 <= p < 16]:
+            raise InstrumentError(f"DIO {bad[0]} does not exist on the AD2")  # as the real driver
         self.m.dio.update(levels)
         self._touched.update(levels)
 
@@ -604,6 +603,8 @@ class SimAnalogDiscovery:
         self.m.awg_wave[channel] = (shape, frequency, low, high)
 
     def set_vplus(self, volts: float | None) -> None:
+        if volts is not None and not 0.5 <= volts <= 5.0:
+            raise InstrumentError(f"AD2 V+ can't be set to {volts} V (0.5..5 V)")  # as the real driver
         self.vplus = volts  # recorded only; nothing in the model depends on it
 
     def off(self, channel: int) -> None:

@@ -27,11 +27,13 @@ Not yet bench-tested: written from the guide, so check the first captures agains
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 
 import numpy as np
 
 from ldo_bench.instruments.base import Edge, InstrumentError
+from ldo_bench.instruments.transports import drain_errors
 
 log = logging.getLogger(__name__)
 
@@ -75,21 +77,11 @@ class Agilent54621A:
             raise InstrumentError(f"{transport.name} is '{self.idn}', not a 54620/54640-series scope")
         self.t.write("*CLS")
         self._channels: tuple[int, int] = (1, 2)
-        self._points = 2000
         self.busy = False  # True if a :DIGitize never completed (commands are queued behind it)
 
     def _errors(self) -> list[str]:
         """Drain :SYSTem:ERRor? ('<code>,"<message>"', code 0 = no error)."""
-        errs = []
-        for _ in range(10):
-            e = self.t.query(":SYSTem:ERRor?")
-            try:
-                if int(e.split(",")[0]) == 0:
-                    break
-            except ValueError:
-                pass
-            errs.append(e)
-        return errs
+        return drain_errors(self.t, ":SYSTem:ERRor?", limit=10)
 
     def _send(self, *cmds: str) -> None:
         """Send commands, then raise if the scope rejected any of them."""
@@ -123,7 +115,6 @@ class Agilent54621A:
         Returns at once; the caller then runs the stimulus and calls collect().
         """
         self._channels = (vout_channel, ref_channel)
-        self._points = points
         self._send(":STOP", ":TIMebase:MODE MAIN")
         for ch, rng, off in ((vout_channel, vout_range, vout_offset), (ref_channel, ref_range, ref_offset)):
             self._send(
@@ -171,7 +162,6 @@ class Agilent54621A:
         max_extra times / `timeout` s. If it never completes the scope is left busy (commands
         queue behind :DIGitize) and every later call is refused until Run/Stop is pressed.
         """
-        import time
 
         self.t.write("*OPC?")
         old = self.t.set_timeout(0.5)

@@ -14,7 +14,7 @@ import logging
 import time
 
 from ldo_bench.instruments.base import InstrumentError
-from ldo_bench.instruments.transports import Transport
+from ldo_bench.instruments.transports import Transport, drain_errors
 
 log = logging.getLogger(__name__)
 
@@ -46,16 +46,10 @@ class HP34401A:
         if MODEL not in self.idn.upper():
             raise InstrumentError(f"{transport.name} is '{self.idn}', not a {MODEL}")
         self.t.write("*CLS")  # empty the error queue so _check() only sees our own errors
-        self._nplc = 10.0
 
     def _check(self, what: str) -> None:
         """Raise InstrumentError if the meter queued any SCPI errors."""
-        errs = []
-        for _ in range(20):
-            e = self.t.query("SYST:ERR?")
-            if e.startswith(("+0", "0")):
-                break
-            errs.append(e)
+        errs = drain_errors(self.t)
         if errs:
             raise InstrumentError(f"34401A error after {what}: {'; '.join(errs)}")
 
@@ -68,7 +62,6 @@ class HP34401A:
         self.t.write("INP:IMP:AUTO ON")  # >10 GOhm on the 0.1/1/10 V ranges: doesn't load VOUT
         self.t.write("TRIG:SOUR IMM")  # READ? takes a reading at once
         self._check("configuring DC volts")
-        self._nplc = nplc
         log.info("DMM: DCV %s, %g NPLC, autozero on, high-Z input", f"{range:g} V" if range else "auto", nplc)
 
     def configure_dci(self, *, range: float | None, nplc: float) -> None:
@@ -78,7 +71,6 @@ class HP34401A:
         self.t.write("ZERO:AUTO ON")
         self.t.write("TRIG:SOUR IMM")
         self._check("configuring DC current")
-        self._nplc = nplc
         log.info("DMM: DCI %s, %g NPLC, autozero on", f"{range:g} A" if range else "auto", nplc)
 
     def read(self) -> float:

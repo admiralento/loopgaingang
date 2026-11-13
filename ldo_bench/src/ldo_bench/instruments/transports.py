@@ -77,6 +77,35 @@ def parse_block(raw: bytes, cmd: str, name: str) -> bytes:
     return data
 
 
+def read_block_from(ser, cmd: str, name: str) -> bytes:
+    """Read an IEEE 488.2 definite-length block from a serial port, exactly the bytes its header
+    announces (binary data may contain LF), then the trailing NL. InstrumentError if it's malformed."""
+    head = ser.read(2)
+    if len(head) != 2 or head[:1] != b"#" or not head[1:2].isdigit():
+        raise InstrumentError(f"{name}: '{cmd}' did not return a data block (got {head!r})")
+    nd = int(head[1:2])
+    length = ser.read(nd)
+    if len(length) != nd or not length.isdigit():
+        raise InstrumentError(f"{name}: bad block length {length!r} after '{cmd}'")
+    data = parse_block(head + length + ser.read(int(length)), cmd, name)
+    ser.readline()  # trailing NL
+    return data
+
+
+def drain_errors(t: Transport, cmd: str = "SYST:ERR?", limit: int = 20) -> list[str]:
+    """Read the SCPI error queue until it says no error ('+0,"No error"'); return the errors."""
+    errs = []
+    for _ in range(limit):
+        e = t.query(cmd)
+        try:
+            if int(e.split(",")[0]) == 0:
+                break
+        except ValueError:
+            pass
+        errs.append(e)
+    return errs
+
+
 def parse_prologix(resource: str) -> tuple[str, int]:
     """'prologix:COM5:5' -> ('COM5', 5). The port itself may contain ':'."""
     body = resource[len(PROLOGIX_PREFIX) :]
@@ -100,16 +129,14 @@ def open_transport(
     resource: str,
     *,
     timeout: float = 5.0,
-    baud: int = 9600,
-    parity: str = "none",
     serial: SerialSettings | None = None,
 ) -> Transport:
     """Any resource form: VISA ('GPIB0::5::INSTR', 'USB0::...'), 'prologix:<port>:<addr>', 'serial:<port>'.
 
-    `serial` (or the older baud/parity) only matters for 'serial:' resources.
+    `serial` only matters for 'serial:' resources (default SerialSettings()).
     """
     if resource.lower().startswith(SERIAL_PREFIX):
-        s = serial or SerialSettings(baud=baud, parity=parity)
+        s = serial or SerialSettings()
         return SerialTransport(
             resource[len(SERIAL_PREFIX) :],
             baud=s.baud,
@@ -268,14 +295,7 @@ class PrologixTransport:
         self._ser.reset_input_buffer()
         self.write(cmd)
         self._raw("++read eoi")
-        # Read exactly the header-announced byte count: binary data may contain LF.
-        head = self._ser.read(2)
-        nd = int(head[1:2]) if len(head) == 2 and head[1:2].isdigit() else 0
-        length = self._ser.read(nd) if nd else b""
-        n = int(length) if length.isdigit() else 0
-        data = parse_block(head + length + self._ser.read(n), cmd, self.name)
-        self._ser.readline()  # trailing NL
-        return data
+        return read_block_from(self._ser, cmd, self.name)
 
     def set_timeout(self, seconds: float) -> float:
         old = self._ser.timeout
@@ -429,19 +449,8 @@ class SerialTransport:
         """Query returning an IEEE 488.2 definite-length block: #<n><n digits of length><data><NL>."""
         self._ser.reset_input_buffer()
         self.write(cmd)
-        head = self._ser.read(2)
-        if len(head) != 2 or head[:1] != b"#" or not head[1:2].isdigit():
-            raise InstrumentError(f"{self.name}: '{cmd}' did not return a data block (got {head!r})")
-        ndigits = int(head[1:2])
-        length_txt = self._ser.read(ndigits)
-        if len(length_txt) != ndigits or not length_txt.isdigit():
-            raise InstrumentError(f"{self.name}: bad block length {length_txt!r} after '{cmd}'")
-        n = int(length_txt)
-        data = self._ser.read(n)
-        if len(data) != n:
-            raise InstrumentError(f"{self.name}: '{cmd}' block truncated: {len(data)} of {n} bytes")
-        self._ser.readline()  # trailing NL
-        log.debug("%s <- %s -> %d-byte block", self.name, cmd, n)
+        data = read_block_from(self._ser, cmd, self.name)
+        log.debug("%s <- %s -> %d-byte block", self.name, cmd, len(data))
         return data
 
     def close(self) -> None:

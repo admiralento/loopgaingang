@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 
 from ldo_bench.instruments.base import InstrumentError
-from ldo_bench.instruments.transports import Transport
+from ldo_bench.instruments.transports import Transport, drain_errors
 
 log = logging.getLogger(__name__)
 
@@ -73,21 +73,24 @@ class AgilentE36xx:
         if self.n_outputs > 1:
             self.t.write(f"INST:SEL OUT{channel or self.channel}")
 
-    def _errors(self) -> list[str]:
-        """Drain the SCPI error queue."""
-        errs = []
-        for _ in range(20):
-            e = self.t.query("SYST:ERR?")
-            if e.startswith(("+0", "0")):  # '+0,"No error"'
-                break
-            errs.append(e)
-        return errs
-
     def _check(self, what: str) -> None:
         """Raise InstrumentError if the supply queued any SCPI errors (e.g. a value out of range)."""
-        errs = self._errors()
+        errs = drain_errors(self.t)
         if errs:
             raise InstrumentError(f"{self.model} error after {what}: {'; '.join(errs)}")
+
+    def _set_ovp(self, ovp: float, channel: int, key: str) -> None:
+        """Hardware OVP on `channel` (already selected). It's a safety limit: if the supply refuses
+        it, stop rather than run without it (`key` names the config setting to change)."""
+        self.t.write(f"VOLT:PROT {ovp:.3f}")
+        self.t.write("VOLT:PROT:STAT ON")
+        errs = drain_errors(self.t)
+        if errs:
+            raise InstrumentError(
+                f"{self.model} did not accept OVP {ovp:.3f} V on OUT{channel} ({'; '.join(errs)}). Stopping: "
+                f"set {key} to a level the supply accepts, or remove it from the config to run on the "
+                "software limits alone"
+            )
 
     def setup(self, *, current_limit: float, ovp: float | None, voltage_range: str | None) -> None:
         self.t.write("OUTP OFF")
@@ -104,17 +107,7 @@ class AgilentE36xx:
         self.t.write(f"CURR {current_limit:.4f}")
         self._check("setting the current limit")
         if ovp is not None:
-            self.t.write(f"VOLT:PROT {ovp:.3f}")
-            self.t.write("VOLT:PROT:STAT ON")
-            errs = self._errors()
-            if errs:
-                # Hardware OVP is one of the safety limits: never run without it unless the config
-                # says so (psu.ovp = None).
-                raise InstrumentError(
-                    f"{self.model} did not accept the OVP setting {ovp:.3f} V ({'; '.join(errs)}). "
-                    "Stopping: set psu.ovp to a level the supply accepts, or remove psu.ovp from the "
-                    "config to run on the software limits alone"
-                )
+            self._set_ovp(ovp, self.channel, "psu.ovp")
         log.info(
             "PSU %s OUT%d set up: I limit %.3f A, OVP %s, range %s",
             self.model,
@@ -186,14 +179,7 @@ class E36xxOutput:
         s.t.write(f"CURR {current_limit:.4f}")
         s._check(f"setting the OUT{self.channel} current limit")
         if ovp is not None:
-            s.t.write(f"VOLT:PROT {ovp:.3f}")
-            s.t.write("VOLT:PROT:STAT ON")
-            errs = s._errors()
-            if errs:
-                raise InstrumentError(
-                    f"{s.model} did not accept OVP {ovp:.3f} V on OUT{self.channel} ({'; '.join(errs)}). "
-                    "Stopping: set vref.ovp to a level the supply accepts, or remove it"
-                )
+            s._set_ovp(ovp, self.channel, "vref.ovp (external reference) or buffer.ovp (U2's V-)")
         log.info("PSU %s OUT%d set up: I limit %.4f A, OVP %s", s.model, self.channel, current_limit, ovp)
 
     def set_voltage(self, volts: float) -> None:
