@@ -219,8 +219,7 @@ class Bench:
         dmm_rail: str = "total",
         bank_on_psu: bool = False,
         psu_to: Literal["vin", "rail"] = "vin",
-        ch1_probe: Literal["vout", "en_out", "vref"] = "vout",
-        ch1_atten: float = 1.0,
+        ch1_probe: Literal["vout", "en_out"] = "vout",
         ldo_on_en_out: bool = False,
         aux_to: Literal["vref", "rails"] = "vref",
         en_pin: int | None = None,
@@ -246,7 +245,6 @@ class Bench:
             self.sim_model.bank_on_psu = bank_on_psu
             self.sim_model.psu_to = psu_to
             self.sim_model.ch1_probe = ch1_probe
-            self.sim_model.ch1_atten = ch1_atten
             self.sim_model.ldo_on_en_out = ldo_on_en_out
             self.sim_model.aux_to = aux_to
             self.sim_model.en_pin = en_pin

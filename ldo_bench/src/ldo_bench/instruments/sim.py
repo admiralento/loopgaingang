@@ -17,8 +17,7 @@ matching field instead:
   ref_probe  what the AD2 reference channel (ch2) probes: ("vin", 0), ("dio", pin),
              ("vref", 0) BGR output, ("iin", 0) across R13, ("iout", 0) across R1,
              ("tmp", 0) the TMP235 output (J13 pin 5), ("en_ain", 0) EN_AIN (TP6, the enable tests)
-  ch1_probe  what the VOUT channel probes: "vout", "en_out" (enable-sine) or "vref" (psrr --measure
-             vref, through a ch1_atten probe)
+  ch1_probe  what the VOUT channel probes: "vout" or "en_out" (enable-sine test)
   dmm_probe  what the DMM is on: "vout", "vref" (TP3, the BGR output), "psu" (supply terminals),
              "shunt" (across R13), "series" (in series with a rail, current mode) or "open"
   en_pin     the AD2 DIO driving the enable path, None if EN is tied on
@@ -116,13 +115,11 @@ class LdoModel:
     c_out: float = 10e-6  # output capacitance: inrush = C dV/dt
     iq_on: float = 150e-6  # quiescent current when enabled (A)
     sense_ohm: float = 0.1  # ohm, current-sense resistors R13 (input) / R1 (output)
-    ch1_probe: str = "vout"  # what the VOUT channel is on: "vout", "en_out" or "vref" (TP3)
-    ch1_atten: float = 1.0  # that channel's probe attenuation (10 = a 10x probe)
+    ch1_probe: str = "vout"  # what the VOUT channel is on: "vout" or "en_out"
     ldo_on_en_out: bool = False  # J8 on "LDO": the LDO follows EN_OUT (enable-sine --output vout)
     aux_to: str = "vref"  # the PSU's second output: "vref" (VREF_IN / U2's V-) or "rails" (Method B)
     rails_v: float = 0.0  # V, that output's setpoint when aux_to == "rails"
     j1_rail_jumpers_out: bool = True  # Method B: J1 1-3 / 13-15 removed (else OUT2 fights VIN via INB)
-    bgr_psrr_db: float = 60.0  # dB, the BGR's rejection of VIN ripple at VREF (flat)
     awg_wave: dict[int, tuple[str, float, float, float]] = field(
         default_factory=dict
     )  # ch -> (shape, f, low, high)
@@ -441,9 +438,7 @@ class SimAnalogDiscovery:
 
     def measure_dc(self, duration: float, setups: dict[int, ChannelSetup]) -> dict[int, DcReading]:
         n = 8192
-        m = self.m
-        vout = m.bgr_vref() / m.ch1_atten if m.ch1_probe == "vref" else m.vout_dc()
-        ref = m.ref_value()
+        vout, ref = self.m.vout_dc(), self.m.ref_value()
         out = {}
         for ch in setups:
             x = self._value(ch, vout, ref) + self.m.noise(n)
@@ -585,10 +580,6 @@ class SimAnalogDiscovery:
         vin = vin_dc + amp * np.sin(2 * math.pi * f * t + ph)
         if vin_dc > 0:
             vin = np.minimum(vin, m.psu_v - m.buffer_dropout)
-        if m.ch1_probe == "vref":  # VREF at TP3 through the probe: the BGR's own rejection
-            g = 10 ** (-m.bgr_psrr_db / 20)
-            vout = (m.bgr_vref() + g * amp * np.sin(2 * math.pi * f * t + ph)) / m.ch1_atten
-            return self._put(vout + m.noise(n), vin + m.noise(n), rate, 0, False)
         h = m.psrr_h(f)
         vout = m.vout_dc(vin_dc) + abs(h) * amp * np.sin(2 * math.pi * f * t + ph + np.angle(h))
         if m.vout_hum is not None:  # not locked to the injected tone: its phase differs each capture

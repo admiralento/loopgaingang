@@ -40,7 +40,6 @@ from ldo_bench.config import (
     EnSineConfig,
     IqConfig,
     LineRegConfig,
-    PsrrConfig,
     PsuHoldConfig,
     StartupConfig,
     load_config,
@@ -64,7 +63,6 @@ Rail = _choices("Rail", IqConfig, "rail")
 Ch2 = _choices("Ch2", StartupConfig, "ch2")
 VinFrom = _choices("VinFrom", LineRegConfig, "vin_source")
 To = _choices("To", PsuHoldConfig, "to")
-Measure = _choices("Measure", PsrrConfig, "measure")
 Output = _choices("Output", EnSineConfig, "output")
 
 # The config used when neither -c nor LDO_BENCH_CONFIG names one: the JAFWAK board's, found from the
@@ -1054,9 +1052,6 @@ def psrr(
     vin: Annotated[float | None, typer.Option(help="DC level on VIN (V)")] = None,
     load: LoadOpt = None,
     averages: Annotated[int | None, typer.Option("--avg", help="Captures per frequency")] = None,
-    measure: Annotated[
-        Measure | None, typer.Option(help="vout (OUTA), or vref (TP3 through a 10x probe: the BGR's PSRR)")
-    ] = None,
     out: OutOpt = Path("results"),
     sim: SimOpt = False,
     save_sim: SaveSimOpt = False,
@@ -1080,7 +1075,6 @@ def psrr(
         amplitude=None if amp_mv is None else amp_mv * 1e-3,
         averages=averages,
         load_code=_load_code(cfg, load),
-        measure=measure and measure.value,
     )
     _run(
         cfg,

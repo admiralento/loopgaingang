@@ -15,11 +15,6 @@ PsrrMeter that reads VOUT's amplitude from it (VIN still from AD2 scope 2).
 
 PSRR (dB) = 20 log10(|VIN| / |VOUT|), positive = rejection.
 
-measure "vref" (bring-up plan Test 3, the BGR's PSRR): scope 1 is on VREF (TP3) through a 10x probe
-(vref_probe_attenuation) instead of VOUT, as the AD2's 1 MOhm would load the BGR; its readings are
-scaled back up. JP2 stays fitted (not with --vref ext). Everything else is the same; the floor is
-the probe's attenuation times higher.
-
 run() steps:
 1. Confirm the wiring, set the load code, interlock (line_tran.interlock), buffer rail to
    psu_voltage, calibrate W1's DC level so VIN = psrr.vin at the board (line_tran.calibrate).
@@ -47,7 +42,6 @@ from typing import Protocol
 import numpy as np
 
 from ldo_bench import plotting
-from ldo_bench import wiring as w
 from ldo_bench.analysis import multi_sine_fit, sine_fit
 from ldo_bench.bench import Bench
 from ldo_bench.config import AD2_WAVEGEN_MAX_V, PsrrConfig
@@ -122,8 +116,7 @@ class Ad2SineFit:
         peak = ps.vin + 2 * ps.amplitude
         # the 5 V (+/-2.5 V) range has 10x the resolution of the 50 V one: use it when VIN fits
         vin_range = 5.0 if peak < 2.4 else 50.0
-        self.scale = ps.vref_probe_attenuation if ps.measure == "vref" else 1.0  # back to volts at the pin
-        vout_range = 5.0 if ps.measure == "vref" or bench.cfg.dut.vout_nominal < 2.4 else 50.0
+        vout_range = 5.0 if bench.cfg.dut.vout_nominal < 2.4 else 50.0
         self.setups = {
             a.vout_channel: ChannelSetup(vout_range, 0.0),
             a.ref_channel: ChannelSetup(vin_range, 0.0),
@@ -149,7 +142,7 @@ class Ad2SineFit:
                 timeout=ps.timeout,
                 force=True,  # free-running: the ratio needs no trigger
             )
-            vin_x, vout_x = cap.channel(a.ref_channel), cap.channel(a.vout_channel) * self.scale
+            vin_x, vout_x = cap.channel(a.ref_channel), cap.channel(a.vout_channel)
             fin = sine_fit(vin_x, cap.sample_rate, frequency)
             fout = sine_fit(vout_x, cap.sample_rate, frequency)
             h.append(fout.phasor / fin.phasor if fin.amplitude > 0 else complex("nan"))
@@ -244,13 +237,6 @@ class PsrrResult:
     vout_nominal: float  # V
     setup_issues: list[str] = field(default_factory=list)  # calibration / VOUT problems
     notes: list[str] = field(default_factory=list)  # findings that don't invalidate the run
-    measured: str = "vout"  # "vout" or "vref": what scope 1 was on
-    probe_attenuation: float = 1.0  # scope 1's probe (10 for VREF)
-
-    @property
-    def name(self) -> str:
-        """What the rejection is measured at, as the report and plot name it."""
-        return "VREF" if self.measured == "vref" else "VOUT"
 
     @property
     def issues(self) -> list[str]:
@@ -306,8 +292,6 @@ class PsrrResult:
             "vin_dc_v": self.vin_dc,
             "w1_dc_v": self.w1_dc,
             "amplitude_v": self.amplitude,
-            "measured": self.measured,
-            "probe_attenuation": self.probe_attenuation,
             "load_code": self.load_code,
             "i_load_a": self.i_load,
             "averages": self.averages,
@@ -316,14 +300,13 @@ class PsrrResult:
         }
 
     def report(self) -> str:
-        at = f" of VREF (BGR, TP3, x{self.probe_attenuation:g} probe)" if self.measured == "vref" else ""
         lines = [
-            f"PSRR{at} at VIN {self.vin_dc:.3f} V ± {self.amplitude * 1e3:.0f} mV, load {self.i_load * 1e3:.1f} mA "
+            f"PSRR at VIN {self.vin_dc:.3f} V ± {self.amplitude * 1e3:.0f} mV, load {self.i_load * 1e3:.1f} mA "
             f"(code {self.load_code}), {self.meter}, {self.averages} captures per point:"
         ]
         if self.issues:
             lines.append(f"  {INVALID}")
-        lines.append(f"      f (Hz)     PSRR (dB)   phase    VIN (mV pk)   {self.name} (uV pk)")
+        lines.append("      f (Hz)     PSRR (dB)   phase    VIN (mV pk)   VOUT (uV pk)")
         for p in self.points:
             db = f">= {p.psrr_db:5.1f}" if p.limited else f"   {p.psrr_db:5.1f}"
             ph = f"{p.phase_deg:6.0f}" if np.isfinite(p.phase_deg) else "     -"
@@ -336,11 +319,6 @@ class PsrrResult:
 
 def wiring(bench: Bench, ps: PsrrConfig) -> list[str]:
     """Wiring lines shown before the run."""
-    if ps.measure == "vref":
-        att = ps.vref_probe_attenuation
-        probe = f"VREF (TP3) through a {att:g}x probe" if att > 1 else "VREF (TP3)"
-        line = w.scope(bench.cfg, "vout", probe, note="short ground lead; JP2 fitted")
-        return buffer_wiring(bench, ps.load_code, scope_line=line)
     return buffer_wiring(bench, ps.load_code, "short ground lead")
 
 
@@ -367,18 +345,7 @@ def run(bench: Bench, ps: PsrrConfig, meter: PsrrMeter | None = None) -> PsrrRes
     """
     cfg = bench.cfg
     a = cfg.ad2
-    on_vref = ps.measure == "vref"
-    if on_vref and bench.vref_external:
-        raise InstrumentError("psrr --measure vref measures the BGR: run it with JP2 fitted, not --vref ext")
-    att = ps.vref_probe_attenuation if on_vref else 1.0
-    bench.confirm_wiring(
-        "PSRR",
-        wiring(bench, ps),
-        ref_probe=("vin", 0),
-        psu_to="rail",
-        ch1_probe="vref" if on_vref else "vout",
-        ch1_atten=att,
-    )
+    bench.confirm_wiring("PSRR", wiring(bench, ps), ref_probe=("vin", 0), psu_to="rail")
     bench.loadbank.set(ps.load_code)
     interlock(bench, ps.psu_voltage, ps.proof_levels)
     buffer_up(bench, ps.psu_voltage)
@@ -387,11 +354,7 @@ def run(bench: Bench, ps: PsrrConfig, meter: PsrrMeter | None = None) -> PsrrRes
         bench.vin_from_wavegen(w_dc)
         bench.reference_on()
     vout_dc, _ = bench.measure_dc(0.05)
-    if on_vref:
-        level = _vref_issue(vout_dc.mean * att, ps, a.vout_channel)
-    else:
-        level = bench.vout_issue(vout_dc.mean, source=f"scope {a.vout_channel}")
-    setup_issues = [i for i in (cal, level) if i]
+    setup_issues = [i for i in (cal, bench.vout_issue(vout_dc.mean, source=f"scope {a.vout_channel}")) if i]
     for i in setup_issues:
         log.warning("psrr: %s (running anyway; the data will show it)", i)
     i_load = bench.loadbank.current(ps.load_code, cfg.dut.vout_nominal)
@@ -435,18 +398,17 @@ def run(bench: Bench, ps: PsrrConfig, meter: PsrrMeter | None = None) -> PsrrRes
     buffer_down(bench)
     bench.loadbank.off()
 
-    name = "VREF" if on_vref else "VOUT"
     notes = []
     good = [p for p in points if not p.issues]
     if good and not good[0].limited and good[0].psrr_db < 3:
         notes.append(
-            f"{name} follows VIN at {good[0].frequency:g} Hz ({good[0].psrr_db:.1f} dB): the LDO may be in dropout "
+            f"VOUT follows VIN at {good[0].frequency:g} Hz ({good[0].psrr_db:.1f} dB): the LDO may be in dropout "
             f"at this VIN / load, or scope {bench.cfg.ad2.vout_channel} is on VIN"
         )
     if any(p.limited for p in good):
         notes.append(
-            f"hollow points: {name}'s ripple is under what the AD2 resolves, so the PSRR is at least that value; "
-            f"a spectrum analyzer on {name} will measure them"
+            "hollow points: VOUT's ripple is under what the AD2 resolves, so the PSRR is at least that value; "
+            "a spectrum analyzer on VOUT will measure them"
         )
     return PsrrResult(
         ps.psu_voltage,
@@ -461,20 +423,6 @@ def run(bench: Bench, ps: PsrrConfig, meter: PsrrMeter | None = None) -> PsrrRes
         cfg.dut.vout_nominal,
         list(dict.fromkeys(setup_issues)),
         notes,
-        ps.measure,
-        att,
-    )
-
-
-def _vref_issue(vref: float, ps: PsrrConfig, channel: int) -> str | None:
-    """A setup problem if VREF (V, scaled by the probe) isn't near ps.vref_nominal."""
-    if abs(vref - ps.vref_nominal) <= 0.2 * ps.vref_nominal:
-        return None
-    att = ps.vref_probe_attenuation
-    return (
-        f"VREF reads {vref:.3f} V on scope {channel} (x{att:g} probe), expected ~{ps.vref_nominal} V: is scope "
-        f"{channel} on VREF (TP3) through a {att:g}x probe switched to {att:g}x (psrr.vref_probe_attenuation), "
-        "and JP2 fitted?"
     )
 
 
@@ -495,14 +443,7 @@ def plot(res: PsrrResult, dut: str):
     ax.plot(f[~lim], db[~lim], color=c, lw=1.6, zorder=3)
     ax.plot(f[~lim], db[~lim], "o", ms=5, color=c, zorder=4, label="measured")
     ax.plot(
-        f[lim],
-        db[lim],
-        "^",
-        ms=6,
-        mfc=plotting.SURFACE,
-        mec=c,
-        zorder=4,
-        label=f"≥ ({res.name} under the floor)",
+        f[lim], db[lim], "^", ms=6, mfc=plotting.SURFACE, mec=c, zorder=4, label="≥ (VOUT under the floor)"
     )
     for p in res.points:
         if not p.limited and np.isfinite(p.psrr_db):
@@ -528,14 +469,14 @@ def plot(res: PsrrResult, dut: str):
     vout = np.array([p.vout_amp for p in res.points]) * 1e3
     vfl = np.array([p.tone.vout_floor for p in res.points]) * 1e3
     ax_a.plot(f, vin, "o-", ms=4, lw=1.2, color=plotting.SERIES[1], label="VIN (AD2)")
-    ax_a.plot(f, vout, "o-", ms=4, lw=1.2, color=c, label=res.name)
-    ax_a.plot(f, vfl, color=plotting.MUTED, lw=1.0, ls=(0, (4, 3)), label=f"{res.name} floor")
+    ax_a.plot(f, vout, "o-", ms=4, lw=1.2, color=c, label="VOUT")
+    ax_a.plot(f, vfl, color=plotting.MUTED, lw=1.0, ls=(0, (4, 3)), label="VOUT floor")
     ax_a.set_yscale("log")
     ax_a.set_ylabel("Amplitude (mV peak)")
     ax_a.set_xlabel("Frequency (Hz)")
     ax_a.legend(loc="best")
     title = (
-        f"PSRR{' of VREF' if res.measured == 'vref' else ''}: {dut}  ·  VIN {res.vin_dc:.2f} V ± {res.amplitude * 1e3:.0f} mV  ·  "
+        f"PSRR: {dut}  ·  VIN {res.vin_dc:.2f} V ± {res.amplitude * 1e3:.0f} mV  ·  "
         f"{res.i_load * 1e3:.1f} mA load  ·  {res.meter}"
     )
     plotting.suptitle(fig, title, invalid=not valid)

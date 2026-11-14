@@ -16,12 +16,34 @@ Bring-up plan Tests 1-4 have been run on JAFWAK. These changed since, so their r
 | 1 | `enable-sine` | Only if J1 5-7 (VDD) wasn't fitted: VDD must be up in every test |
 
 New, for Tests 5 onward (not run yet): `enable-sine --output vout` (Test 5), `line-reg --split-rails`
-(Test 7, Method B), `psrr --measure vref` (Test 11), `--ext-load-ohm` (Tests 6-8 with 1.2 kOhm on J5).
+(Test 7, Method B), `--ext-load-ohm` (Tests 6-8 with 1.2 kOhm on J5).
+
+## 2026-11-14: `enable-startup` on JAFWAK: a scope on VREF pulls it down
+
+**What ran:** `enable-startup --ch2 vref`, twice, at VIN 1.8 V with no load and the enable driven from the AD2:
+- 1 ms window: `_INVALID`, because VOUT hadn't settled
+- `--window-ms 10`: marked valid
+
+**What it measured:** VOUT and VREF both settled at about **0.98 V** instead of 1.2 V. VOUT follows VREF, because the LDO has no feedback loop. The day before, `iq` at the same VIN read VOUT 1.196 V with no scope on VREF.
+
+**Cause, found at the bench:** AD2 scope 2 (1 MOhm) on TP3 loads the BGR's output and pulls VREF down, and VOUT with it. The run's checks missed it:
+- VOUT's ±20 % window accepted 0.98 V;
+- the VREF check was off (`startup.vref_nominal` was unset).
+
+These numbers are not the board's: discard both runs.
+
+**What changed:**
+- No test puts a scope on VREF any more.
+- `psrr --measure vref` (10x probe on TP3, added the same morning) was removed.
+- `enable-startup` measures input and output current instead (see the next entry).
+- VREF is read only with the DMM at 10 GOhm.
+
+**First suspect, ruled out:** the new 10 mA supply limit. The board draws about 0.25 mA. The concern that the E3648A's current-limit setting has roughly 10 mA of offset (from memory, not checked) still stands for low limits.
 
 ## 2026-11-14: by-hand steps scripted (no hardware run)
 
 - **vref-line:** VREF at vin_high with the DMM at 10 GOhm and at 10 MOhm; the difference gives the BGR's output resistance (a drop over 0.5 mV is a note). New `HP34401A.set_input_z`.
-- **psrr --measure vref:** the BGR's rejection at TP3 through a 10x probe (`vref_probe_attenuation`); readings scaled back, a probe left on 1x shows as VREF reading 10x high.
+- **psrr --measure vref:** the BGR's rejection at TP3 through a 10x probe. Removed again the same day: a scope on VREF loads the BGR (see "A scope on VREF pulls it down" below).
 - **enable-sine --output vout:** VOUT (OUTA) following a slow triangle through the whole enable path (J8 on LDO); the EN_AIN levels where VOUT turns on / off, with a note on how much the shutdown time shifts the turn-off level.
 - **line-reg --split-rails:** dropout Method B, BGR_VDD / OTA_VDD on PSU OUT2 (J1 pins 1 and 13, jumpers 1-3 / 13-15 out). VIN up first and above `vin_floor` while the rails are up; OUT2 drawing over 1 mA (a jumper left in) stops the run; shutdown drops the rails before VIN.
 - **--ext-load-ohm:** a fixed resistor on VOUT in every load estimate and in the `dut.i_max` check (per run, before power-up). With 1.2 kOhm, load code 4 is 20.2 mA and refused, so "1 to 20 mA" becomes 1 to 15.4 mA (code 3) unless dut.i_max is raised.

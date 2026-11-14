@@ -27,7 +27,7 @@ How a run decides it measured the board, and what `_INVALID` means, is covered i
   - `line-reg`
   - `load-tran`
 - **JAFWAK:** no valid run yet. Its load-transient runs had the scope off VOUT (see [bench-log.md](bench-log.md)).
-- **Simulator only so far:** `line-tran`, `enable-startup`, `iq` and `psrr` (on the split-supply U2 too); `buffer-check`; `vref-line`, `temp`, `enable-sine --shape square`, `enable-current` and `--enable dio` (added 2026-11-13); `psrr --measure vref`, `enable-sine --output vout`, `line-reg --split-rails`, `--ext-load-ohm` and vref-line's DMM loading check (added 2026-11-14). `enable-sine --shape triangle` ran on JAFWAK on 2026-11-12.
+- **Simulator only so far:** `line-tran`, `enable-startup`, `iq` and `psrr` (on the split-supply U2 too); `buffer-check`; `vref-line`, `temp`, `enable-sine --shape square`, `enable-current` and `--enable dio` (added 2026-11-13); `enable-sine --output vout`, `line-reg --split-rails`, `--ext-load-ohm` and vref-line's DMM loading check (added 2026-11-14). `enable-sine --shape triangle` ran on JAFWAK on 2026-11-12.
 
 Suggested order for a first session on a board:
 1. `discover`
@@ -343,10 +343,9 @@ Without `[buffer]` (the demo board) line-tran and psrr use the single-rail path 
   - VOUT off nominal
   - a note if VOUT follows VIN at low frequency (dropout, or scope 1 on VIN)
 - **Plot:** PSRR vs frequency, and the VIN / VOUT amplitudes with the VOUT floor.
-- **The BGR's PSRR (`--measure vref`, bring-up plan Test 3):** scope 1 goes on VREF (TP3) through a 10x probe (`vref_probe_attenuation`), not OUTA, since the AD2's 1 MOhm would load the BGR; readings are scaled back up. JP2 stays fitted (refused with `--vref ext`). The DC check looks for VREF near `vref_nominal` (a probe left on 1x reads ten times high). The floor is ten times higher than on VOUT: 60 dB of rejection on 50 mV is 5 µV after the probe, under the AD2's floor, so expect "≥" points unless the BGR rejects less.
+- **No scope on VREF:** the BGR's own PSRR (`--measure vref`, a scope on TP3 through a 10x probe) was removed on 2026-11-14. A scope on VREF loads the BGR and pulls VREF, and VOUT with it, down (seen in enable-startup). VREF is read only with the DMM at 10 GOhm (vref-line, temp).
 - **Spectrum analyzer:** dropped for now (2026-11-14). The AD2 resolves PSRR to about 70 dB at 50 mV, against a 40 dB spec at 10 kHz and 55 dB from PEX. Floor-limited points say "≥"; a spectrum-analyzer `PsrrMeter` would replace them once its driver exists.
 - **Options:**
-  - `--measure vref`
   - `--fstart`, `--fstop`, `--ppd`
   - `--amp-mv 20`
   - `--vin`

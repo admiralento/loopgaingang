@@ -961,16 +961,6 @@ class PsrrConfig(BufferProofConfig):
         2.0, ge=0, description="Required psu_voltage - VIN peak margin for the BUF634 (V)"
     )
     timeout: float = Field(10.0, gt=0, description="Max wait for one AD2 trigger (s)")
-    measure: Literal["vout", "vref"] = Field(
-        "vout",
-        description="What scope 1 measures: VOUT (OUTA), or VREF (TP3: the BGR's own rejection, JP2 fitted)",
-    )
-    vref_probe_attenuation: float = Field(
-        10.0,
-        ge=1,
-        description="measure 'vref': the scope probe's attenuation on TP3 (10 = a 10x probe; 1 MOhm would load the BGR)",
-    )
-    vref_nominal: float = Field(1.204, gt=0, description="measure 'vref': expected VREF (V) for the DC check")
 
     @model_validator(mode="after")
     def _check(self) -> PsrrConfig:
