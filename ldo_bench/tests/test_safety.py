@@ -25,7 +25,11 @@ def spy(obj, name, log, tag=None):
 
 
 def run_buffer_test(proc, cfg, setup):
-    """Run line-tran or psrr on the sim with `setup(bench)` applied; return (exception, PSU setpoints)."""
+    """Run line-tran or psrr on the sim with `setup(bench)` applied; return (exception, PSU setpoints).
+
+    Only setpoints programmed while the output is on count: shutdown leaves psu.idle_voltage behind with
+    the output off, which never reaches the board.
+    """
     setpoints = []
     with open_bench(cfg, sim=True) as b:
         orig = b.confirm_wiring
@@ -35,13 +39,14 @@ def run_buffer_test(proc, cfg, setup):
             setup(b)
 
         b.confirm_wiring = cw
-        spy(b.psu, "set_voltage", setpoints)
+        live = b.psu.set_voltage
+        b.psu.set_voltage = lambda v: (setpoints.append(v) if b.sim_model.psu_on else None, live(v))[1]
         with pytest.raises(InstrumentError) as exc:
             if proc is line_tran:
                 line_tran.run(b, cfg.line_tran.model_copy(update={"averages": 2}), cfg.analysis)
             else:
                 psrr.run(b, cfg.psrr.model_copy(update={"averages": 2}))
-    return exc.value, [a[0] for _, a, _ in setpoints]
+    return exc.value, setpoints
 
 
 # --- buffer interlock (line-tran, psrr) -----------------------------------------
@@ -138,7 +143,7 @@ def test_buffer_rail_and_psu_output_refuse_above_psu_v_max(jafwak):
 
 def test_vin_from_psu_obeys_psu_v_max_when_it_is_below_vin_max(jafwak):
     data = jafwak.model_dump()
-    data["psu"] |= {"v_max": 1.5, "ovp": 2.0}
+    data["psu"] |= {"v_max": 1.5, "ovp": 2.0, "idle_voltage": None}
     data["psu_check"]["points"] = [0.5, 1.0]
     for sec in (
         "load_reg",

@@ -115,7 +115,8 @@ class Bench:
     `shutdown()` (also run on leaving `with Bench`) turns things off in this order: external
     reference 0 V -> LDO enable low (--enable dio) -> with the buffer rails up: W1 to DC 0 V, PSU
     outputs off, negative rail 0 V -> wavegen (both channels) -> AD2 V+ -> load bank -> DIO released -> PSU output
-    off and 0 V -> close the instruments. Signals into the board go first, so nothing drives an
+    off -> setpoint psu.idle_voltage at psu.current_limit (0 V without it; only once the output is
+    confirmed off) -> close the instruments. Signals into the board go first, so nothing drives an
     unpowered DUT.
 
     In simulation (`sim_model` set) `sleep` doesn't wait and wiring isn't asked about.
@@ -156,6 +157,7 @@ class Bench:
         self._psu_ready = False  # current limit / OVP / range programmed
         self._psu_limit = 0.0  # A, the current limit programmed (once _psu_ready)
         self._psu_on = False  # output enabled
+        self._psu_off_confirmed = False  # shutdown's output-off step succeeded (the idle setpoint needs it)
         self._awg_on = False
         self.shutdown_errors: list[str] = []  # steps of the last shutdown() that failed
         # external reference (see the class docstring)
@@ -915,6 +917,37 @@ class Bench:
         return float(self.dmm.dcv_range()) if hasattr(self.dmm, "dcv_range") else float("nan")
 
     # --- Shutdown -----------------------------------------------------------
+    def _psu_off_for_shutdown(self) -> None:
+        """Shutdown: PSU output off (the driver confirms it with OUTP?); records that it is confirmed off."""
+        self._psu_off_confirmed = False
+        self.psu.output(False)
+        self._psu_off_confirmed = True
+
+    def _psu_idle_step(self) -> tuple[str, Callable[[], None]]:
+        """Shutdown's last PSU step: the setpoint left behind with the output off.
+
+        psu.idle_voltage None: 0 V (as always). Set (JAFWAK 1.8 V): that voltage with psu.current_limit,
+        so turning the output on by hand gives the normal VIN at the normal limit, whatever limit the run
+        used. Only programmed once the output is confirmed off; otherwise the step fails and says so.
+        """
+        p = self.cfg.psu
+        if p.idle_voltage is None:
+            return ("PSU 0 V", lambda: self.psu.set_voltage(0.0))
+
+        def idle() -> None:
+            if not self._psu_off_confirmed:
+                raise InstrumentError("output not confirmed off, so the idle setpoint was not programmed")
+            self.psu.setup(current_limit=p.current_limit, ovp=p.ovp, voltage_range=p.voltage_range)
+            self.psu.set_voltage(p.idle_voltage)
+            log.info(
+                "PSU OUT%d left at %g V, %g mA limit, output off",
+                p.channel,
+                p.idle_voltage,
+                p.current_limit * 1e3,
+            )
+
+        return (f"PSU idle {p.idle_voltage:g} V / {p.current_limit * 1e3:g} mA (output off)", idle)
+
     def shutdown(self) -> None:
         """Turn everything off in the order the class docstring gives, then close the instruments.
 
@@ -938,8 +971,8 @@ class Bench:
             ("AD2 V+ off", lambda: self.scope.set_vplus(None) if hasattr(self.scope, "set_vplus") else None),
             ("load bank off", self.loadbank.off),
             ("DIO release", self.dio.release_all),
-            ("PSU output off", lambda: self.psu.output(False)),
-            ("PSU 0 V", lambda: self.psu.set_voltage(0.0)),
+            ("PSU output off", self._psu_off_for_shutdown),
+            self._psu_idle_step(),
             ("close PSU", self.psu.close),
             ("close DMM", lambda: self.dmm.close() if self.dmm is not None else None),
             ("close cross-check scope", lambda: self.xscope.close() if self.xscope is not None else None),

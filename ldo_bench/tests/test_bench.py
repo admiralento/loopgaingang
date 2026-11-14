@@ -23,7 +23,7 @@ def test_shutdown_runs_on_exception(jafwak):
         b.loadbank.set(b.loadbank.max_allowed_code)
         b.vin_from_wavegen(1.5)
         raise RuntimeError("boom")
-    assert not m.psu_on and m.psu_v == 0.0
+    assert not m.psu_on and m.psu_v == (jafwak.psu.idle_voltage or 0.0)  # output off, idle setpoint
     assert m.awg_v == {}
     assert m.conductance() == 0.0
 

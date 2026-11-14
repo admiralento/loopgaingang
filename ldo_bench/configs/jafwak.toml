@@ -27,6 +27,7 @@ high_current_limit = 0.06    # A, only for sections with high_current = true (20
 v_max = 5.5                  # PSU ceiling; above dut.vin_max only so line_tran can power VS_BUFF
 ovp = 6.0
 settle_time = 0.3
+idle_voltage = 1.8           # after every run: output off, setpoint 1.8 V at current_limit (10 mA), ready for a manual Output On
 
 [ad2]                        # Analog Discovery 2
 serial = ""                  # "" = first AD2 found
@@ -210,7 +211,7 @@ settle_time = 0.5
 
 [startup]                    # EN_CTRL_33 step -> enable block -> EN_IN: VOUT, EN_IN and the input current
 vin = 1.8
-load_code = 0
+load_code = 1                # 4.8 mA (code 1, R20): enough to see the turn-on current; under the 10 mA limit
 edges = ["rising", "falling"]
 window = 10e-3               # s; 8192 samples -> 0.82 MS/s. 1 ms was too short for VOUT to settle (2026-11-14)
 pre_trigger = 0.1

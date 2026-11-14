@@ -117,6 +117,14 @@ class PsuConfig(_Instrument):
             "when the PSU powers the buffer rail (line-tran, psrr, buffer-check)."
         ),
     )
+    idle_voltage: float | None = Field(
+        None,
+        ge=0,
+        description=(
+            "Setpoint (V) left on the output after shutdown, output off, with current_limit (so turning it "
+            "on by hand gives the normal VIN); None = 0 V. At most min(dut.vin_max, v_max)"
+        ),
+    )
     ramp_step: float = Field(0.25, gt=0, description="Max voltage step when ramping (V)")
     settle_time: float = Field(0.3, ge=0, description="Wait after each PSU voltage change (s)")
 
@@ -1408,6 +1416,11 @@ class BenchConfig(_Model):
                 raise ValueError(
                     f"buffer.check_sine_dc + check_sine_amplitude exceed dut.vin_max ({self.dut.vin_max} V)"
                 )
+        if self.psu.idle_voltage is not None and self.psu.idle_voltage > vin_ceiling:
+            raise ValueError(
+                f"psu.idle_voltage ({self.psu.idle_voltage} V) exceeds dut.vin_max / psu.v_max ({vin_ceiling} V): "
+                "it is what the supply gives when its output is turned on by hand"
+            )
         for name, (sec, amps) in self.supply_loads().items():
             limit = self.psu_limit_for(sec)
             if amps >= limit:

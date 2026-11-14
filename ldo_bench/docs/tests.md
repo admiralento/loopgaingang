@@ -447,7 +447,8 @@ Without `[buffer]` (the demo board) line-tran and psrr use the single-rail path 
   - INA or INB clipped at the edge of the 54621A's screen (VIN out of the zoomed window)
   - no data from the 54621A. With no `[xscope]` configured, the command is refused before anything powers up.
 - **Saves:** `waveform_<edge>.csv` (AD2: t, VOUT, EN_IN) and `waveform_<edge>_iin.csv` (54621A: t, INA, INB, I_in).
-- **Supply limit:** enable-startup runs on `psu.current_limit` (10 mA on JAFWAK). The inrush charging the output capacitors can be far above that, so the supply may limit the startup; VIN sagging then shows up as INA / INB clipping.
+- **Load:** `startup.load_code = 1` on JAFWAK (4.8 mA, R20), so there is a turn-on current to see. The load bank needs VS_BUFF (J4) powered before J10 goes in; the wiring prompt lists it. `--load 0` runs unloaded.
+- **Supply limit:** enable-startup runs on `psu.current_limit` (10 mA on JAFWAK); 4.8 mA plus the LDO's own current stays under it. The inrush charging the output capacitors can be far above that, so the supply may limit the startup; VIN sagging then shows up as INA / INB clipping.
 - **Options:**
   - `--avg`
   - `--window-ms`

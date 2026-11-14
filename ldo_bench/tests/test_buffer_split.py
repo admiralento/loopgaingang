@@ -105,7 +105,8 @@ def test_psu_never_far_up_when_it_is_on_vin(jafwak):
     with open_bench(jafwak, sim=True) as b:
         seen = []
         orig = b.psu.set_voltage
-        b.psu.set_voltage = lambda v: (seen.append(v), orig(v))[1]
+        # only setpoints with the output on (shutdown leaves psu.idle_voltage behind with it off)
+        b.psu.set_voltage = lambda v: (seen.append(v) if b.sim_model.psu_on else None, orig(v))[1]
         miswire(b, psu_to="vin")
         with pytest.raises(InstrumentError):
             line_tran.run(b, jafwak.line_tran, jafwak.analysis)

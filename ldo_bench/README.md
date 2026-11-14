@@ -130,7 +130,8 @@ Command-line options go through the same checks.
   - **Prompt:** it asks every run whether JP2 is removed, even with `--yes`, since the BGR mustn't be back-driven.
   - **Turn-on:** the reference comes on only after VIN, then the run proves VOUT follows a 20 mV step (it stops if not: JP2 is still in).
   - **Limits:** it's never more than 0.3 V above VIN, and it goes to 0 V before VIN does.
-- **Shutdown:** however a run ends (finished, error, Ctrl-C), everything is switched off in order: external reference, LDO enable (with `--enable dio`), wavegen, AD2 V+, load bank, DIO, supply.
+- **Shutdown:** however a run ends (finished, error, Ctrl-C), everything is switched off in order: external reference, LDO enable (with `--enable dio`), wavegen, AD2 V+, load bank, DIO, supply output.
+- **Supply after a run:** the output is off. The setpoint is `psu.idle_voltage` at `psu.current_limit`, so pressing Output On gives the normal VIN (JAFWAK: 1.8 V, 10 mA); without `idle_voltage` it is 0 V (demo board). The idle setpoint is programmed only once the output is confirmed off.
 - **Temperature log:** `temp` runs for at most 2 hours (`temp.duration`); Ctrl-C ends it early, keeps the data and still shuts down.
 
 ## Results: real data only

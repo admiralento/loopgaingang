@@ -19,6 +19,14 @@ Bring-up plan Tests 1-4 have been run on JAFWAK. These changed since, so their r
 New, for Tests 5 onward (not run yet): `enable-sine --output vout` (Test 5), `line-reg --split-rails`
 (Test 7, Method B), `--ext-load-ohm` (Tests 6-8 with 1.2 kOhm on J5).
 
+## 2026-11-14: `enable-startup` with a load; the supply left at 1.8 V after runs (no hardware run)
+
+- **At the bench:** after fixing the INA probe, there was little inrush to see. `[startup] load_code = 1` (4.8 mA) is now the default.
+- **`psu.idle_voltage = 1.8`:** every run now ends with the supply output off and the setpoint at 1.8 V with the 10 mA limit, instead of 0 V, so a manual Output On gives the normal VIN.
+  - It is programmed only after the output is confirmed off; otherwise SHUTDOWN FAILED.
+  - It must be within the VIN ceiling.
+- **Demo board:** unchanged (0 V).
+
 ## 2026-11-14: `enable-startup`: input current from the 54621A (no hardware run)
 
 - **Earlier layout, same day:** AD2 across R13 and R1, VOUT on the 54621A. Never run, replaced the same day.
