@@ -159,7 +159,7 @@ def wiring(bench: Bench, ec: EnCurrentConfig) -> list[str]:
     return [
         *w.psu_on_vin(cfg),
         "Remove the J1 9-11 jumper (EN_VDD)",
-        "DMM I (3A/mA jack) -> J1 pin 9, DMM LO (COM) -> J1 pin 11 (in place of the jumper)",
+        "DMM I (3A/mA jack) -> J1 pin 11 (INB), DMM LO (COM) -> J1 pin 9 (EN_VDD) (in place of the jumper)",
         *w.j1_rails(skip="en"),
         'Fit J8 5-6 (EN_IN = GND; misprinted "HI"): LDO held off',
         'Fit J8 13-14 "HI" (~EN_IN = VIN)',

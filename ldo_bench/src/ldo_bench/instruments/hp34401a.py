@@ -64,6 +64,11 @@ class HP34401A:
         self._check("configuring DC volts")
         log.info("DMM: DCV %s, %g NPLC, autozero on, high-Z input", f"{range:g} V" if range else "auto", nplc)
 
+    def set_input_z(self, *, high: bool) -> None:
+        """DC volts input impedance: high=True >10 GOhm (0.1 / 1 / 10 V ranges), False the fixed 10 MOhm."""
+        self.t.write(f"INP:IMP:AUTO {'ON' if high else 'OFF'}")
+        self._check("setting the input impedance")
+
     def configure_dci(self, *, range: float | None, nplc: float) -> None:
         """DC amps on the 3 A / mA input (I and LO terminals). Ranges 10 mA, 100 mA, 1 A, 3 A."""
         self.t.write(f"CONF:CURR:DC {range:g}" if range else "CONF:CURR:DC AUTO")

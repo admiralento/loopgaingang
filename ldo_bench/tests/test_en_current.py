@@ -80,7 +80,7 @@ def test_wiring_powers_vdd_and_leaves_en_out_unprobed(jafwak):
         lines = en_current.wiring(b, jafwak.en_current)
     text = "\n".join(lines)
     assert "Fit J1 5-7" in text and "Fit J1 9-11" not in text  # VDD on; the DMM replaces EN_VDD's jumper
-    assert "J1 pin 9" in text and "J1 pin 11" in text
+    assert "DMM I (3A/mA jack) -> J1 pin 11 (INB), DMM LO (COM) -> J1 pin 9 (EN_VDD)" in text
     assert not any(ln.startswith("Scope 1") for ln in lines)  # a probe on EN_OUT would add ~24 pF
 
 

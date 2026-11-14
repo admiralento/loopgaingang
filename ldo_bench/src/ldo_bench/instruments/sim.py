@@ -45,6 +45,7 @@ from ldo_bench.instruments.base import Capture, ChannelSetup, DcReading, Edge, I
 # Fraction of the quiescent current drawn by each of the board's J1 supply rails (iq series test).
 # EN_VDD's static share is ~0.3 nA of the 150 uA, as in the PEX (0.28 nA); enable-current adds its
 # switching current (en_charge per EN_AIN cycle) on top.
+DMM_10MEG = 10e6  # ohm, the 34401A's fixed DC volts input impedance
 RAIL_SHARE = {"total": 1.0, "bgr": 0.15, "vdd": 0.40, "en": 2e-6, "ota": 0.45}
 
 
@@ -99,6 +100,7 @@ class LdoModel:
     vref_nominal: float = 1.2  # BGR output (V) at VIN 1.8 V and 25 C
     bgr_line: float = 0.5e-3  # V/V, BGR line sensitivity while it has headroom
     bgr_min_vin: float = 1.56  # V, below this VIN the BGR runs out of headroom: VREF falls 1 V/V
+    bgr_rout: float = 2e3  # ohm, the BGR's output resistance at TP3 (loaded by a 10 MOhm DMM)
     bgr_tc: float = 58.9e-6  # 1/C, VREF temperature coefficient (VOUT follows it)
     # temperature (temp logger): the TMP235 on VS_BUFF, read by the AD2 on J13 pin 5
     temp_profile: Callable[[float], float] | None = None  # clock (s) -> board temperature (C); None = 25 C
@@ -647,10 +649,15 @@ class SimDmm:
         self.mode = "dcv"
         self.range: float | None = None  # None = autorange
         self.last = 0.0
+        self.high_z = True  # input impedance: >10 GOhm (True) or 10 MOhm
 
     def configure_dcv(self, *, range: float | None, nplc: float) -> None:
         self.mode = "dcv"
         self.range = range
+        self.high_z = True  # as the real driver: >10 GOhm
+
+    def set_input_z(self, *, high: bool) -> None:
+        self.high_z = high
 
     def dcv_range(self) -> float:
         """Range (V) for the last reading: the configured one, or the smallest that holds it (120 %)."""
@@ -681,6 +688,8 @@ class SimDmm:
             return v + float(m.rng.normal(0.0, m.dmm_noise_v))
         sources = {"vref": m.bgr_vref, "psu": m.psu_actual}  # anything else: VOUT
         v = sources.get(m.dmm_probe, m.vout_dc)()
+        if m.dmm_probe == "vref" and not self.high_z:  # the 10 MOhm input loads the BGR's output
+            v *= DMM_10MEG / (DMM_10MEG + m.bgr_rout)
         return v + float(m.rng.normal(0.0, 20e-6))
 
     def close(self) -> None:

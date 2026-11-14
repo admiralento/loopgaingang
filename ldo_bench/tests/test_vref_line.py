@@ -72,3 +72,28 @@ def test_sweep_points_end_on_vin_low(jafwak):
     pts = vref_line.sweep_points(jafwak.vref_line)
     assert pts[0] == pytest.approx(1.9) and pts[-1] == pytest.approx(1.4)
     assert np.allclose(np.diff(pts), -0.02)
+
+
+def test_vref_read_at_10_meg_and_10_gig(jafwak):
+    """At vin_high the DMM reads VREF at 10 GOhm and at 10 MOhm: the difference shows how much the
+    DMM's input loads the BGR, and gives its output resistance."""
+    with open_bench(jafwak, sim=True) as b:
+        m = b.sim_model
+        res = vref_line.run(b, jafwak.vref_line)
+    s = res.summary()
+    drop = s["vref_hi_z_v"] - s["vref_10meg_v"]
+    assert drop == pytest.approx(s["vref_hi_z_v"] * m.bgr_rout / (10e6 + m.bgr_rout), rel=0.2)
+    assert s["bgr_rout_ohm"] == pytest.approx(m.bgr_rout, rel=0.3)
+    assert "10 MOhm" in res.report()
+    assert b.dmm.high_z  # left at 10 GOhm for the sweep
+
+
+def test_heavily_loaded_vref_is_a_note_not_an_issue(jafwak):
+    def high_rout(b):
+        b.sim_model.bgr_rout = 200e3  # 23 mV drop at 10 MOhm
+
+    with open_bench(jafwak, sim=True) as b:
+        high_rout(b)
+        res = vref_line.run(b, jafwak.vref_line)
+    assert not res.issues
+    assert any("10 MOhm" in n for n in res.notes)

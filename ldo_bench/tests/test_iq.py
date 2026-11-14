@@ -199,3 +199,16 @@ def test_shunt_wiring_includes_the_load_check(jafwak):
         assert any("VS_BUFF" in ln for ln in lines)
         no_check = iq.wiring(b, jafwak.iq.model_copy(update={"check_code": 0}))
     assert not any("J10" in ln for ln in no_check)
+
+
+def test_series_dmm_i_jack_goes_on_the_inb_side(jafwak):
+    """J1: pins 3 / 7 / 11 / 15 are INB, 1 / 5 / 9 / 13 the rails (KiCad nets). Current flows INB ->
+    rail, so the I jack goes on INB for a positive reading."""
+    with open_bench(jafwak, sim=True) as b:
+        lines = iq.wiring(
+            b, jafwak.iq.model_copy(update={"method": "series", "rail": "bgr", "check_code": 0})
+        )
+    assert (
+        "DMM I (3A/mA jack) -> J1 pin 3 (INB), DMM LO (COM) -> J1 pin 1 (BGR_VDD) (in place of the jumper)"
+        in lines
+    )

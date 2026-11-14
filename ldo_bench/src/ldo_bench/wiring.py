@@ -107,6 +107,9 @@ def buffer_supply(cfg: BenchConfig) -> list[str]:
 
 
 # JAFWAK's J1 "VDD CONNECTIONS": each rail's ON jumper (from INB). Shared by iq and enable-startup.
+# KiCad nets: in each row the first two pins are the rail (1-2 BGR_VDD, 5-6 VDD, 9-10 EN_VDD,
+# 13-14 OTA_VDD), the third INB (3, 7, 11, 15) and the fourth GND (4, 8, 12, 16): ON joins rail and
+# INB, OFF joins rail and GND.
 J1_RAILS = {
     "bgr": ("BGR_VDD", "1-3"),
     "vdd": ("VDD", "5-7"),

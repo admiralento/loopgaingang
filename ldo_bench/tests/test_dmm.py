@@ -153,3 +153,12 @@ def test_34401a_dcv_overload_is_inf_not_a_voltage():
             )
 
     assert HP34401A(T()).read_dcv() == -math.inf
+
+
+def test_34401a_input_impedance_switch():
+    ser = FakeSerial({"*IDN?": IDN, "SYST:ERR?": '+0,"No error"'})
+    dmm = HP34401A(SerialTransport("COM3", serial_obj=ser))
+    dmm.set_input_z(high=False)
+    dmm.set_input_z(high=True)
+    lines = ser.out.decode().split("\n")
+    assert lines.index("INP:IMP:AUTO OFF") < lines.index("INP:IMP:AUTO ON", lines.index("INP:IMP:AUTO OFF"))

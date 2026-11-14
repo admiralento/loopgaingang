@@ -217,7 +217,8 @@ def wiring(bench: Bench, iq: IqConfig) -> list[str]:
         lines = [
             *w.psu_on_vin(cfg),
             f"Remove the J1 {pins} jumper ({name})",
-            f"DMM I (3A/mA jack) -> J1 pin {a}, DMM LO (COM) -> J1 pin {b} (in place of the jumper)",
+            # current flows from INB (the higher pin) into the rail: the I jack goes on INB to read positive
+            f"DMM I (3A/mA jack) -> J1 pin {b} (INB), DMM LO (COM) -> J1 pin {a} ({name}) (in place of the jumper)",
             *w.j1_rails(skip=iq.rail),
         ]
     lines.append(w.scope_vout(cfg, "VOUT check"))

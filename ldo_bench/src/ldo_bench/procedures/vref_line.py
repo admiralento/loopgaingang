@@ -6,7 +6,9 @@ the BGR's lowest working VIN: where VREF falls drop_fraction below its value at 
 that the BGR, not the pass device, can set the LDO's dropout. docs/tests.md has the setup.
 
 run(): EN low (--enable dio), VIN to vin_high, EN high; each VIN down to vin_low: wait
-settle_time, measure; EN low, load off; analysis.line_regulation on (VIN, VREF).
+settle_time, measure; EN low, load off; analysis.line_regulation on (VIN, VREF). Before the sweep,
+at vin_high, VREF is read with the DMM at 10 GOhm and again at 10 MOhm (bring-up plan Test 3): the
+difference gives the BGR's output resistance, and a drop over LOADING_TOLERANCE is a note.
 Issues: VREF off vref_nominal at vin_high (DMM not on TP3, LDO off), VOUT off nominal, VIN off
 its setpoint, a stray low point above the knee, too few points to fit.
 """
@@ -31,6 +33,8 @@ from ldo_bench.procedures.line_reg import KNEE_STEPS  # the fit starts this many
 log = logging.getLogger(__name__)
 
 NAME = "vref-line"
+DMM_10MEG = 10e6  # ohm, the 34401A's fixed DC volts input impedance
+LOADING_TOLERANCE = 0.5e-3  # V: a bigger drop at 10 MOhm than at 10 GOhm is worth a note
 
 
 @dataclass
@@ -44,6 +48,15 @@ class VrefLineResult:
     vin_source: str = "ad2"
     issues: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    vref_hi_z: float = float("nan")  # V, VREF at vin_high with the DMM at >10 GOhm
+    vref_10meg: float = float("nan")  # V, the same with the DMM at 10 MOhm
+
+    @property
+    def bgr_rout(self) -> float:
+        """The BGR's output resistance (ohm) from how far the 10 MOhm input pulls VREF down."""
+        if not (np.isfinite(self.vref_hi_z) and np.isfinite(self.vref_10meg)) or self.vref_10meg <= 0:
+            return float("nan")
+        return DMM_10MEG * (self.vref_hi_z / self.vref_10meg - 1)
 
     @property
     def vout_minus_vref(self) -> float:
@@ -68,6 +81,9 @@ class VrefLineResult:
             "bgr_min_vin_v": r.dropout_vin,  # NaN: VREF never fell drop_fraction in this sweep
             "drop_fraction": r.dropout_fraction,
             "vout_minus_vref_v": self.vout_minus_vref,
+            "vref_hi_z_v": self.vref_hi_z,
+            "vref_10meg_v": self.vref_10meg,
+            "bgr_rout_ohm": self.bgr_rout,
         }
 
     def report(self) -> str:
@@ -88,6 +104,11 @@ class VrefLineResult:
             f"  line sens.    {r.slope * 1e3:.3f} mV/V  (R^2 {r.r2:.4f}, VIN {r.fit_vin_min:.2f} to {r.fit_vin_max:.2f} V)",
             f"  BGR min VIN   {knee}",
         ]
+        if np.isfinite(self.vref_10meg):
+            lines.append(
+                f"  DMM loading   VREF {self.vref_hi_z:.5f} V at 10 GOhm, {self.vref_10meg:.5f} V at 10 MOhm "
+                f"({(self.vref_10meg - self.vref_hi_z) * 1e3:+.3f} mV: BGR output ~{self.bgr_rout / 1e3:.3g} kOhm)"
+            )
         if np.isfinite(self.vout_minus_vref):
             lines.append(
                 f"  VOUT - VREF   {self.vout_minus_vref * 1e3:+.1f} mV at the top (VOUT on the AD2: its DC error, "
@@ -108,7 +129,7 @@ def wiring(bench: Bench, vl: VrefLineConfig) -> list[str]:
     lines = [
         *w.psu_on_vin(cfg),
         "Fit JP2 (the BGR drives VREF_IN)",
-        w.dmm("VREF (TP3)", "GND (TP2)", "the run sets its input to 10 GOhm"),
+        w.dmm("VREF (TP3)", "GND (TP2)", "the run sets its input to 10 GOhm, and to 10 MOhm once"),
     ]
     if vl.vin_source == "ad2":
         lines += [w.scope_vout(cfg), w.scope_vin(cfg)]
@@ -135,6 +156,7 @@ def run(bench: Bench, vl: VrefLineConfig) -> VrefLineResult:
     bank.set(vl.load_code)
     bench.vin_from_psu(float(vins[0]))
     bench.ldo_enable(True)
+    hi_z, lo_z = _loading_check(bench, vl)
     rows, vin_bad = [], []
     for k, v in enumerate(vins):
         bench.vin_from_psu(float(v))
@@ -186,9 +208,33 @@ def run(bench: Bench, vl: VrefLineConfig) -> VrefLineResult:
     for i in issues:
         log.warning("vref-line: %s", i)
     notes = []
+    if np.isfinite(hi_z) and np.isfinite(lo_z) and abs(hi_z - lo_z) > LOADING_TOLERANCE:
+        notes.append(
+            f"VREF reads {(lo_z - hi_z) * 1e3:+.2f} mV different at 10 MOhm than at 10 GOhm (more than "
+            f"{LOADING_TOLERANCE * 1e3:g} mV): the BGR's output is high-impedance, so only the 10 GOhm readings "
+            "are VREF (the sweep uses 10 GOhm)"
+        )
     if not issues and not np.isfinite(reg.dropout_vin):
         notes.append(f"VREF never fell {vl.drop_fraction:.0%}: the BGR still works at VIN {vins[-1]:.2f} V")
-    return VrefLineResult(rows, reg, vl.load_code, vl.vref_nominal, vl.vin_source, issues, notes)
+    return VrefLineResult(rows, reg, vl.load_code, vl.vref_nominal, vl.vin_source, issues, notes, hi_z, lo_z)
+
+
+def _loading_check(bench: Bench, vl: VrefLineConfig) -> tuple[float, float]:
+    """VREF (V) at vin_high read with the DMM at >10 GOhm, then at 10 MOhm; (nan, nan) if the DMM
+    driver can't switch. The input is always set back to 10 GOhm for the sweep."""
+    dmm = bench.dmm
+    if not hasattr(dmm, "set_input_z"):
+        return float("nan"), float("nan")
+    bench.sleep(vl.settle_time)
+    hi_z = bench.dmm_mean()[0]
+    dmm.set_input_z(high=False)
+    try:
+        bench.sleep(vl.settle_time)
+        lo_z = bench.dmm_mean()[0]
+    finally:
+        dmm.set_input_z(high=True)
+    log.info("VREF %.5f V at 10 GOhm, %.5f V at 10 MOhm", hi_z, lo_z)
+    return hi_z, lo_z
 
 
 def plot(res: VrefLineResult, dut: str):
