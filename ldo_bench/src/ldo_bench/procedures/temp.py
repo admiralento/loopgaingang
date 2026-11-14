@@ -114,7 +114,8 @@ def wiring(bench: Bench, tc: TempConfig) -> list[str]:
     lines = [
         *w.psu_on_vin(cfg),
         "Fit JP2 (the BGR drives VREF_IN)",
-        *cfg.board.bank_supply,  # VS_BUFF: powers the TMP235 on TEMP (TP7)
+        f"Separate supply + (5.0 V) -> {cfg.board.vs_buff} (powers the TMP235 on TEMP (TP7))",
+        f"Separate supply - -> {cfg.board.supply_gnd}",
         w.scope(cfg, "ref", "J13 pin 5 (TMP)"),
         w.scope_vout(cfg),
     ]
@@ -124,7 +125,6 @@ def wiring(bench: Bench, tc: TempConfig) -> list[str]:
         lines += w.enable_static(cfg)
     if tc.load_code:
         lines += w.load_bank(cfg, supply_given=True)
-    lines.append("Optional 1 mA load: 1.2 kOhm from VOUT (J5) to GND (J12)")
     return [*lines, w.ad2_gnd(cfg)]
 
 

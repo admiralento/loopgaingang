@@ -379,14 +379,16 @@ def run(bench: Bench, iq: IqConfig) -> IqResult:
                     for k, (d, bit) in enumerate(zip(cfg.loadbank.dio_pins, w.bank_bits(cfg), strict=True))
                     if c["code"] >> k & 1
                 ]
+                # the load bank's own supply, if this board's needs one ([board] bank_supply)
+                bits += [f"{ln} (on)" for ln in cfg.board.bank_supply[:1]]
                 setup_issues.append(
                     f"{head}, though it reads {fmt_a(c['before'])} before it, so it is across R13 and the load "
-                    f'didn\'t switch in: is J10 "LOAD" fitted, VS_BUFF (J4) at 5 V, and {" and ".join(bits)}?'
+                    f'didn\'t switch in: is J10 "LOAD" fitted, and {" and ".join(bits)}?'
                 )
             else:
                 setup_issues.append(
                     f"{head}: are the DMM V / COM leads on J13.1 / J13.2, and is it on the V terminals (not I)? "
-                    "If so, is the load switching in (J10 fitted, VS_BUFF at 5 V)?"
+                    "If so, is the load switching in (J10 fitted, the DIO on the bank's gates)?"
                 )
     for p in points:
         if not np.isfinite(p.current):

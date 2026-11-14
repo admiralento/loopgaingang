@@ -245,8 +245,8 @@ class LoadBankConfig(_Model):
         None,
         gt=0,
         description=(
-            "A fixed resistor from VOUT to GND (ohm), always connected (e.g. 1.2 kOhm on JAFWAK's J5 for "
-            "~1 mA): its current is added to every code's estimate and to the dut.i_max check. "
+            "A fixed resistor from VOUT to GND (ohm), always connected (e.g. 12 kOhm on JAFWAK's J5 for "
+            "0.1 mA): its current is added to every code's estimate and to the dut.i_max check. "
             "None = none (--ext-load-ohm sets it)"
         ),
     )
@@ -328,7 +328,7 @@ class LoadBankCheckConfig(_Model):
         1.0,
         gt=0,
         le=1.5,
-        description="PSU voltage on the bank (V). Capped at 1.5 V: 15.4 ohm at 1.5 V is already 0.15 W",
+        description="PSU voltage on the bank (V). Capped at 1.5 V: the demo board's 15.4 ohm at 1.5 V is already 0.15 W",
     )
     readings: int = Field(3, ge=1, description="PSU current readings averaged per state")
     settle_time: float = Field(0.2, ge=0, description="Wait after switching a bit (s)")

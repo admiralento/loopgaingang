@@ -92,3 +92,23 @@ def test_iq_and_startup_probe_outa(jafwak):
         for lines in (iq.wiring(b, jafwak.iq), startup.wiring(b, jafwak.startup)):
             vout = next(ln for ln in lines if ln.startswith(f"Scope {jafwak.ad2.vout_channel}+"))
             assert "J13 pin 4 (OUTA)" in vout
+
+
+def test_load_bank_needs_no_vs_buff_but_the_tmp235_does(jafwak):
+    """JAFWAK's load cell switches without VS_BUFF (confirmed at the bench, 2026-11-14); the TMP235
+    (temp) still runs from it."""
+    from ldo_bench.procedures import line_reg, load_tran, temp
+
+    assert jafwak.board.bank_supply == []
+    with open_bench(jafwak, sim=True) as b:
+        pin = jafwak.loadbank.dio_pins[-1]
+        for lines in (
+            load_reg.wiring(b),
+            line_reg.wiring(b, jafwak.line_reg),
+            load_tran.wiring(b, pin),
+            startup.wiring(b, jafwak.startup),
+        ):
+            assert any("J10" in ln for ln in lines)  # the load bank is wired
+            assert not any("VS_BUFF" in ln for ln in lines), lines
+        t = temp.wiring(b, jafwak.temp)
+    assert any("VS_BUFF (J4)" in ln and "TMP235" in ln for ln in t)

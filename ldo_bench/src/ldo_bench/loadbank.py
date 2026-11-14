@@ -1,8 +1,9 @@
 """Binary-weighted switched-resistor load bank driven by AD2 DIO pins.
 
 Bit k switches resistor R_k from VOUT to GND, so the load current for a code is
-``Vout * sum(1 / (R_k + R_switch))`` over the set bits. Both boards use the same
-bank: 250, 125, 62.5 (125 || 125), 31.6, 15.4 ohm on B0 (LSB) .. B4 (MSB).
+``Vout * sum(1 / (R_k + R_switch))`` over the set bits, B0 (LSB) .. B4 (MSB). The demo board has
+250, 125, 62.5 (125 || 125), 31.6, 15.4 ohm; JAFWAK's load cell was refitted (2026-11-14) with
+1200, 680, 330, 150, 82 ohm for a 1-20 mA sweep (see the [loadbank] section of each config).
 """
 
 from __future__ import annotations

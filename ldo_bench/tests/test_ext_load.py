@@ -1,4 +1,4 @@
-"""--ext-load-ohm: a fixed resistor on VOUT (e.g. 1.2 kOhm on J5) whose current the scripts add."""
+"""--ext-load-ohm: a fixed resistor on VOUT (e.g. 12 kOhm on J5) whose current the scripts add."""
 
 import numpy as np
 import pytest
@@ -18,7 +18,7 @@ def with_ext(cfg, ohm):
 
 
 def test_load_reg_adds_the_external_current(jafwak):
-    cfg = with_ext(jafwak, 12e3)  # 0.1 mA: the top code (19.2 mA) stays under dut.i_max
+    cfg = with_ext(jafwak, 12e3)  # 0.1 mA: the top code (21, 19.3 mA) stays under dut.i_max
     with open_bench(cfg, sim=True) as b:
         res = load_reg.run(b, cfg.load_reg)
     assert not res.issues, res.issues
@@ -32,8 +32,8 @@ def test_load_reg_adds_the_external_current(jafwak):
 
 
 def test_external_load_counts_toward_i_max_before_power_up(jafwak):
-    cfg = with_ext(jafwak, 1200.0)  # +1 mA: code 4 (19.2 mA) becomes 20.2 mA, over the 20 mA limit
-    assert cfg.line_reg.load_code == 4
+    cfg = with_ext(jafwak, 1200.0)  # +1 mA: code 21 (19.3 mA) becomes 20.3 mA, over the 20 mA limit
+    assert cfg.line_reg.load_code == 21
     with open_bench(cfg, sim=True) as b, pytest.raises(InstrumentError, match="external load"):
         line_reg.run(b, cfg.line_reg)
     assert not b.sim_model.psu_on  # refused before anything powered up
@@ -43,8 +43,8 @@ def test_load_reg_sweep_leaves_out_codes_over_the_limit_and_says_so(jafwak):
     cfg = with_ext(jafwak, 1200.0)
     with open_bench(cfg, sim=True) as b:
         res = load_reg.run(b, cfg.load_reg)
-    assert [r["code"] for r in res.rows] == [0, 1, 2, 3]
-    assert any("code(s) 4" in n for n in res.notes)
+    assert [r["code"] for r in res.rows] == list(range(21))
+    assert any("code(s) 21" in n for n in res.notes)
 
 
 def test_external_ohm_must_be_positive(jafwak):

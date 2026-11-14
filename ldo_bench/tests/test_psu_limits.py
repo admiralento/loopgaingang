@@ -54,12 +54,12 @@ def test_high_current_needs_a_high_limit(jafwak):
 @pytest.mark.parametrize(
     "section, fields",
     [
-        ("load_reg", {"high_current": False}),  # every code up to 19.2 mA on a 10 mA limit
-        ("line_reg", {"high_current": False}),  # load_code 4 = 19.2 mA
-        ("load_tran", {"high_current": False}),  # code_high 4
+        ("load_reg", {"high_current": False}),  # every code up to 19.3 mA on a 10 mA limit
+        ("line_reg", {"high_current": False}),  # load_code 21 = 19.3 mA
+        ("load_tran", {"high_current": False}),  # code_high 21
         ("smoke", {"high_current": False}),  # full load
-        ("loadbank_check", {"voltage": 1.0}),  # B4: 1.0 V / 15.4 ohm = 65 mA > 60 mA
-        ("iq", {"check_code": 4}),  # iq has no high limit: 19.2 mA > 10 mA
+        ("loadbank_check", {"high_current": False}),  # B4: 1.2 V / 82 ohm = 14.6 mA > 10 mA
+        ("iq", {"check_code": 21}),  # iq has no high limit: 19.3 mA > 10 mA
     ],
 )
 def test_a_load_above_the_limit_is_refused(jafwak, section, fields):
@@ -68,7 +68,7 @@ def test_a_load_above_the_limit_is_refused(jafwak, section, fields):
 
 
 def test_a_light_load_runs_on_the_normal_limit(jafwak):
-    cfg = _with(jafwak, line_reg={"high_current": False, "load_code": 1})  # 4.8 mA
+    cfg = _with(jafwak, line_reg={"high_current": False, "load_code": 1})  # 1.0 mA
     assert cfg.psu_limit_for(cfg.line_reg) == pytest.approx(0.010)
 
 

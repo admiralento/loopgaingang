@@ -106,7 +106,7 @@ The DC, transient, psrr and iq tests also take `--vref ext`. It drives VREF_IN f
 ## Configs
 
 There is one TOML file per board in `configs/`:
-- **`jafwak.toml`:** our LDO. VOUT 1.2 V, VIN nominal 1.8 V and **max 1.9 V**, load **max 20 mA** (codes 0–4). Supply limit **10 mA**, 60 mA for the load tests (`high_current = true`).
+- **`jafwak.toml`:** our LDO. VOUT 1.2 V, VIN nominal 1.8 V and **max 1.9 V**, load **max 20 mA** (codes 0–21: 1 mA steps from a load cell refitted 2026-11-14, top code 19.3 mA). Supply limit **10 mA**, 60 mA for the load tests (`high_current = true`).
 - **`demo_board.toml`:** TPS7A7001 evaluation board, VOUT 1.0 V, plus the Switched_R_Load_Bank.
 
 A config holds everything board-specific: the limits (`[dut]`, `[psu]`), the wiring (`[ad2]`, `[loadbank]`, `[enable]`), the instruments (`[dmm]`, `[xscope]`) and one section per test. It's validated before any instrument is touched:
@@ -155,7 +155,7 @@ Each run writes a folder under `results/<test>/`, e.g. `results/load-tran/202611
 
 `results/latest.png` is always the newest plot: keep it open in VS Code and it updates after each run. `results/` isn't in git, so runs stay on the machine that made them.
 
-## Status (2026-11-13)
+## Status (2026-11-14)
 
 | | Hardware-tested |
 |---|---|
@@ -169,6 +169,7 @@ Each run writes a folder under `results/<test>/`, e.g. `results/load-tran/202611
 | `enable-current` (added 2026-11-13; replaces `iq --rail en`) | simulator only |
 | `enable-sine --output vout`, `line-reg --split-rails`, `--ext-load-ohm`, vref-line's 10 GOhm / 10 MOhm check (added 2026-11-14) | simulator only |
 | `psu-hold`, `psu-sweep`, the 10 mA / 60 mA split current limit (added 2026-11-13) | simulator only |
+| JAFWAK load cell refitted (1200 / 680 / 330 / 150 / 82 Ω, 2026-11-14) | config updated; run `loadbank-check` before trusting the load estimates |
 | 54624A over RS-232: load-tran cross-check (averaged capture, readback, time window), demo board | yes (2026-11-10), peaks within 0.8 mV of the AD2 |
 | load-tran supply current check (VIN reaching the board), 54621A/54624A clipping check | yes (2026-11-10): passing, and failing with the supply leads unplugged |
 | supply over RS-232, Prologix adapters | simulator / fake instruments only |

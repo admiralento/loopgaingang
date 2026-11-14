@@ -18,11 +18,11 @@ CASES = [
     ("en_sine.vin over vin_max", {"en_sine": {"vin": 2.0}}, "en_sine.vin"),
     ("startup.vin over vin_max", {"startup": {"vin": 2.0}}, "startup.vin"),
     ("iq sweep over vin_max", {"iq": {"vin_stop": 2.0}}, "iq sweep"),
-    ("load_reg code over i_max", {"load_reg": {"codes": [5]}}, "load_reg.codes"),
-    ("line_reg code over i_max", {"line_reg": {"load_code": 5}}, "line_reg.load_code"),
-    ("startup code over i_max", {"startup": {"load_code": 5}}, "startup.load_code"),
-    ("iq check code over i_max", {"iq": {"check_code": 5}}, "iq.check_code"),
-    ("psrr code over i_max", {"psrr": {"load_code": 5}}, "psrr.load_code"),
+    ("load_reg code over i_max", {"load_reg": {"codes": [22]}}, "load_reg.codes"),
+    ("line_reg code over i_max", {"line_reg": {"load_code": 22}}, "line_reg.load_code"),
+    ("startup code over i_max", {"startup": {"load_code": 22}}, "startup.load_code"),
+    ("iq check code over i_max", {"iq": {"check_code": 22}}, "iq.check_code"),
+    ("psrr code over i_max", {"psrr": {"load_code": 22}}, "psrr.load_code"),
     ("load_tran low code not below high", {"load_tran": {"code_low": 4, "code_high": 4}}, "code_low"),
     ("OVP at or below v_max", {"psu": {"ovp": 5.0}}, "must be above psu.v_max"),
     ("line_tran rail over v_max", {"line_tran": {"psu_voltage": 6.0}}, "line_tran.psu_voltage"),
@@ -61,7 +61,7 @@ runner = CliRunner()
     [
         ["load-reg", "--vin", "2.5"],  # over JAFWAK's vin_max
         ["psrr", "--amp-mv", "200"],  # 1.8 V + 0.2 V peak
-        ["line-reg", "--load", "5"],  # over i_max
+        ["line-reg", "--load", "22"],  # over i_max
     ],
 )
 def test_cli_options_are_validated(args, tmp_path):

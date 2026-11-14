@@ -49,10 +49,10 @@ def test_dc_measurement_tracks_load(bench):
 
 def test_dut_current_limit_enforced_at_runtime(jafwak):
     with open_bench(jafwak, sim=True) as b:
-        assert b.loadbank.allowed_codes() == [0, 1, 2, 3, 4]  # <= 20 mA at 1.2 V
-        assert b.loadbank.max_allowed_code == 4
+        assert b.loadbank.allowed_codes() == list(range(22))  # <= 20 mA at 1.2 V (code 21: 19.3 mA)
+        assert b.loadbank.max_allowed_code == 21
         with pytest.raises(InstrumentError, match=r"dut\.i_max"):
-            b.loadbank.set(5)  # 24 mA
+            b.loadbank.set(22)  # 20.04 mA
         with b.loadbank.unrestricted():  # loadbank-check: no DUT connected
             b.loadbank.set(31)
         with pytest.raises(InstrumentError):
@@ -63,7 +63,7 @@ def test_dut_current_limit_enforced_in_config(jafwak):
     from ldo_bench.config import BenchConfig
 
     d = jafwak.model_dump()
-    d["load_tran"]["code_high"] = 17
+    d["load_tran"]["code_high"] = 22
     with pytest.raises(ValueError, match=r"dut\.i_max"):
         BenchConfig.model_validate(d)
 

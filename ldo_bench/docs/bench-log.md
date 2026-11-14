@@ -15,9 +15,32 @@ Bring-up plan Tests 1-4 have been run on JAFWAK. These changed since, so their r
 | 4 | `iq` (shunt) | The load-check wiring (VS_BUFF, J10, DIO 0 -> B0) wasn't printed; the 2026-11-13 run failed its load check for that reason |
 | 4 | `iq --method series` on `ota` / `vdd` | Same J1 polarity fix as Test 3 (`--rail total` was right) |
 | 1 | `enable-sine` | Only if J1 5-7 (VDD) wasn't fitted: VDD must be up in every test |
+| - | `loadbank-check` | Load cell refitted 2026-11-14 (1200 / 680 / 330 / 150 / 82 Ω): prove each bit before any load test |
 
 New, for Tests 5 onward (not run yet): `enable-sine --output vout` (Test 5), `line-reg --split-rails`
-(Test 7, Method B), `--ext-load-ohm` (Tests 6-8 with 1.2 kOhm on J5).
+(Test 7, Method B). The 1 mA the plan got from 1.2 kOhm on J5 is now load code 1, so `--ext-load-ohm`
+isn't needed for Tests 6-8; load-tran steps 1 <-> 19.3 mA (codes 1 <-> 21).
+
+## 2026-11-14: load cell refitted for a 1-20 mA sweep (no hardware run)
+
+- **What changed on the board:** B0..B4 are now 1200, 680, 330, 150, 82 Ω (1 %), for 1.00, 1.76, 3.64, 8.00, 14.63 mA at 1.2 V. Every bit is more than the sum of those below it, so the current rises with the code: 0 to 19.3 mA in ~1 mA steps over codes 0-21. Code 22 (20.04 mA) and up are refused by `dut.i_max` (20 mA, unchanged). `load_cell.kicad_sch` still shows the old values; it hasn't been touched.
+- **Config (`jafwak.toml`):**
+  - `[loadbank] resistors = [1200, 680, 330, 150, 82]`;
+  - `load_reg` sweeps codes 0-21 (22 points);
+  - `line_reg`, `line_tran`, `psrr`: `load_code = 21` (19.3 mA, was 4 = 19.2 mA);
+  - `load_tran`: codes 1 <-> 21 (1.0 <-> 19.3 mA), trigger on DIO 4 (B4);
+  - `startup.load_code` and `iq.check_code` = 5 (4.6 mA, was code 1 = 4.8 mA);
+  - `temp.load_code = 1` (1.0 mA): the plan's 1.2 kOhm on J5 is no longer fitted by hand, and the wiring printout no longer asks for it;
+  - `loadbank_check.voltage = 1.2 V` (was 0.8 V): B4 draws 14.6 mA, and B0's 1 mA reads better at the higher voltage.
+- **Not verified:** the new values on the board (run `loadbank-check`), and which reference designator holds which value.
+
+## 2026-11-14: the load cell doesn't need VS_BUFF
+
+- **Found at the bench:** JAFWAK's load bank switches without VS_BUFF (J4) powered. The config's note that VS_BUFF powers U4, the gate driver, came from the schematic and was wrong for this board.
+- **What changed:**
+  - `[board] bank_supply = []`, so no load-bank test (load-reg, line-reg, load-tran, smoke, iq's load check, enable-startup) asks for the separate 5 V supply any more;
+  - iq's "load didn't switch in" hint no longer names VS_BUFF;
+  - `temp` still asks for VS_BUFF, because the TMP235 runs from it.
 
 ## 2026-11-14: `enable-startup` with a load; the supply left at 1.8 V after runs (no hardware run)
 

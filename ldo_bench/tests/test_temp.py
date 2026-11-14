@@ -85,6 +85,9 @@ def test_wiring_names_the_board_points(jafwak):
         text = "\n".join(temp.wiring(b, jafwak.temp))
     for s in ("J13 pin 5 (TMP)", "VS_BUFF (J4)", "VREF (TP3)", "J13 pin 4 (OUTA)", "VIN_DC (J7)"):
         assert s in text
+    # the 1 mA comes from load code 1 (B0, 1.2 kOhm), not a resistor fitted by hand
+    assert jafwak.temp.load_code == 1 and "AD2 DIO 0 -> J13 pin 7 (B0)" in text
+    assert "Optional" not in text
 
 
 def test_duration_is_capped(jafwak):

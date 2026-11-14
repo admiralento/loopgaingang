@@ -61,7 +61,7 @@ def test_idle_voltage_within_the_vin_ceiling(jafwak):
         BenchConfig.model_validate(data)
 
 
-def test_startup_runs_with_a_4ma_load(jafwak):
+def test_startup_runs_with_a_4p6ma_load(jafwak):
     su = jafwak.startup
-    assert su.load_code == 1
-    assert jafwak.dut.vout_nominal * jafwak.loadbank.conductance(1) == pytest.approx(4.8e-3)
+    assert su.load_code == 5
+    assert jafwak.dut.vout_nominal * jafwak.loadbank.conductance(5) == pytest.approx(4.636e-3, rel=1e-3)

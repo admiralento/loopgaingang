@@ -58,7 +58,7 @@ def test_iq_series_one_rail(jafwak):
 
 def test_iq_dmm_not_on_r13_is_flagged(jafwak):
     res, _ = run_iq(jafwak, setup=lambda b: miswire(b, dmm_probe="open"))
-    assert any("load code 1 should add" in i for i in res.issues)
+    assert any("load code 5 should add" in i for i in res.issues)
     assert any("below the DMM floor" in i for i in res.issues)
 
 
@@ -183,11 +183,11 @@ def test_plot_shows_vout_at_outa_for_every_point(jafwak):
 
 
 def test_load_not_switching_in_points_at_the_load_wiring(jafwak):
-    """The DMM sees the LDO's current through R13, but the load never switches in (J10 out, VS_BUFF
-    off or DIO 0 not on B0): the issue names the load wiring, not the DMM leads."""
+    """The DMM sees the LDO's current through R13, but the load never switches in (J10 out or DIO 0 not
+    on B0): the issue names the load wiring, not the DMM leads. The load cell doesn't need VS_BUFF."""
     res, _ = run_iq(jafwak, setup=lambda b: miswire(b, dio_pins=[10, 11, 12, 13, 14]))
-    issue = next(i for i in res.issues if "load code 1 should add" in i)
-    assert 'J10 "LOAD"' in issue and "J13 pin 7" in issue and "VS_BUFF" in issue
+    issue = next(i for i in res.issues if "load code 5 should add" in i)
+    assert 'J10 "LOAD"' in issue and "J13 pin 7" in issue and "VS_BUFF" not in issue
     assert "V terminals" not in issue
 
 
@@ -196,7 +196,7 @@ def test_shunt_wiring_includes_the_load_check(jafwak):
         lines = iq.wiring(b, jafwak.iq)
         assert 'Fit J10 "LOAD" (VOUT -> load cell)' in lines
         assert "AD2 DIO 0 -> J13 pin 7 (B0)" in lines
-        assert any("VS_BUFF" in ln for ln in lines)
+        assert not any("VS_BUFF" in ln for ln in lines)  # the load cell runs without it
         no_check = iq.wiring(b, jafwak.iq.model_copy(update={"check_code": 0}))
     assert not any("J10" in ln for ln in no_check)
 

@@ -60,7 +60,7 @@ Lists every instrument it can reach over VISA (GPIB, USB), RS-232 and Prologix a
   - PSU OUT1 + -> load bank VIN (J5), PSU - -> load bank GND (J6)
   - AD2 DIO [0, 1, 2, 3, 4] -> load bank J0..J4
   - AD2 GND -> load bank GND (the FET gates are driven relative to it)
-- **Does:** at `loadbank_check.voltage` (1.0 V by default; 0.8 V on JAFWAK so B4's 15.4 Ω draws 52 mA, under its 60 mA limit), it reads the supply current with every bit off. Then it turns on each bit alone and compares the extra current with V/R for that bit.
+- **Does:** at `loadbank_check.voltage` (1.0 V by default; 1.2 V on JAFWAK, where B4's 82 Ω draws 14.6 mA, over the 10 mA normal limit, so it uses the 60 mA high limit), it reads the supply current with every bit off. Then it turns on each bit alone and compares the extra current with V/R for that bit.
   - The no-load current is subtracted first, which cancels the supply's current-readback offset.
   - `dut.i_max` doesn't apply here, since no DUT is connected.
 - **Diagnoses:**
@@ -94,7 +94,7 @@ uv run ldo-bench psu-sweep --start 0 --stop 1.8 --step 0.05      # --updown, --d
 
 ### Supply current limit
 - **Every run** sets `psu.current_limit` before the output first turns on (10 mA on JAFWAK). The limit is printed at the start of the run and saved in `meta.json` as `psu_current_limit_a`.
-- **Higher limit:** a test whose section has `high_current = true` uses `psu.high_current_limit` instead (60 mA on JAFWAK, approved 2026-11-13). The tests that can opt in are `load-reg`, `line-reg`, `load-tran`, `smoke` and `loadbank-check`; on JAFWAK all five do, since they switch in up to 19.2 mA (loadbank-check: 52 mA).
+- **Higher limit:** a test whose section has `high_current = true` uses `psu.high_current_limit` instead (60 mA on JAFWAK, approved 2026-11-13). The tests that can opt in are `load-reg`, `line-reg`, `load-tran`, `smoke` and `loadbank-check`; on JAFWAK all five do, since they switch in up to 19.3 mA (loadbank-check: 14.6 mA for B4 alone).
 - **Config check:** no test may be configured to draw at or above the limit it runs with: its heaviest load-bank code at `vout_nominal` (loadbank-check: `voltage` over the smallest resistor). This estimate leaves out the LDO's own few hundred µA. `line-tran`, `psrr` and `buffer-check` are separate: they power the buffer rail with `buffer.rail_current_limit`.
 
 ### `buffer-check`: the reworked U2 on its own (JAFWAK)
@@ -175,7 +175,7 @@ First bring-up plan, steps I.1–I.5. **Run it before `line-tran` or `psrr`, wit
   - `--vin-from psu`
   - `--no-dmm`
   - `--split-rails` (Method B)
-  - `--ext-load-ohm 1200` (e.g. 1 mA with `--load 0`)
+  - `--ext-load-ohm` (on JAFWAK, `--load 1` already gives 1 mA)
 - **Config:** `[line_reg]`, `[split_rails]`.
 
 ### `vref-line`: VREF against VIN (JAFWAK)
@@ -205,7 +205,7 @@ First bring-up plan, steps I.1–I.5. **Run it before `line-tran` or `psrr`, wit
   - DMM V (HI) -> J13.1 (VIN), COM -> J13.2 (INB): across R13. The DMM floats, so no ground lead; nothing else on the V terminals
   - J1: every rail you want powered (BGR_VDD 1-3, VDD 5-7, EN_VDD 9-11, OTA_VDD 13-15)
   - Scope 1+ -> J13 pin 4 (OUTA), Scope 1- -> J13 pin 6 (GND) (VOUT check; draws ~1 uA)
-  - Load check (shunt, enabled): separate 5.0 V supply -> VS_BUFF (J4), on first, then fit J10 "LOAD"; AD2 DIO 0-4 -> J13 pins 7, 9, 11, 13, 15 (B0-B4; the check uses B0)
+  - Load check (shunt, enabled): fit J10 "LOAD"; AD2 DIO 0-4 -> J13 pins 7, 9, 11, 13, 15 (B0-B4). The load cell doesn't need VS_BUFF
   - Enable path: J6 7-8 (EN_CTRL_18 -> EN_AIN), J8 1-2 (EN_OUT -> EN_IN), J8 9-10 (~EN_OUT -> ~EN_IN)
   - AD2 DIO 5 -> J13.12 (EN_CTRL_33), DIO 6 -> J13.10 (~EN_CTRL_33); AD2 V+ -> J13.14 (V_33)
   - AD2 GND -> board GND
@@ -214,12 +214,12 @@ First bring-up plan, steps I.1–I.5. **Run it before `line-tran` or `psrr`, wit
   - **`series`:** DMM DC amps (I and LO jacks) in place of one J1 jumper. The I jack goes on the INB pin (J1 3, 7, 15) and LO on the rail pin (1, 5, 13): current flows from INB into the rail, so the other way round reads negative (an issue). Until 2026-11-14 the wiring printout had them the other way round. Rails: `--rail bgr|vdd|ota` (in place of that J1 jumper; EN_VDD's ~0.3 nA is under the 10 nA count, so `--rail en` is refused: use `enable-current`), or between the PSU and VIN_DC (`--rail total`). It uses a fixed range, 10 mA unless `dmm_range` says otherwise, so the zero and every point are read on the same range. One count is 10 nA, so this resolves shutdown current. The meter's burden (~5 Ω on the 10 mA range) drops a little of that rail's voltage.
 - **Does:**
   1. Switches the supply output off (it may have been left on), then reads the DMM: the zero (offset, thermal EMF). It's subtracted from every point. The spread of those readings (at least 3) sets the floor, never below one DMM count at the chosen NPLC (1 µV on 100 mV at 10 NPLC; coarser at shorter integration times).
-  2. Shunt method: switches in a known load (`check_code`, 4.8 mA) once, to prove the DMM sees the current through R13.
+  2. Shunt method: switches in a known load (`check_code` 5 on JAFWAK, 4.6 mA) once, to prove the DMM sees the current through R13.
   3. Sweeps VIN (1.4–1.9 V) with the LDO enabled, then disabled through the enable path.
 - **Reports:** current per point. Points under the floor are shown as "< floor", not as a number.
 - **Plot:** current against VIN (left) and VOUT at OUTA against VIN (right), one row per state. Enabled, VOUT at nominal shows the LDO regulated, so the rail under test was powered (in the series method, through the meter: an open meter leaves that rail unpowered). Disabled, VOUT near 0 V shows the enable turned it off. What it can't show is a meter shorted out by a J1 jumper left fitted: the rail is still powered and the meter reads ~0.
 - **Setup checks:**
-  - the load check misses by more than 15 %. If the DMM reads the LDO's own current before the load goes in but the load adds nothing, the issue names the load wiring (J10, VS_BUFF, DIO 0 on B0); otherwise the DMM leads
+  - the load check misses by more than 15 %. If the DMM reads the LDO's own current before the load goes in but the load adds nothing, the issue names the load wiring (J10, the DIO pins on the bank's gates); otherwise the DMM leads
   - an enabled current under the floor (meter not across R13 / not in series, or the jumper still shorting it)
   - VOUT off nominal when enabled, or still up when disabled (enable path not working)
   - meter overload
@@ -447,8 +447,8 @@ Without `[buffer]` (the demo board) line-tran and psrr use the single-rail path 
   - INA or INB clipped at the edge of the 54621A's screen (VIN out of the zoomed window)
   - no data from the 54621A. With no `[xscope]` configured, the command is refused before anything powers up.
 - **Saves:** `waveform_<edge>.csv` (AD2: t, VOUT, EN_IN) and `waveform_<edge>_iin.csv` (54621A: t, INA, INB, I_in).
-- **Load:** `startup.load_code = 1` on JAFWAK (4.8 mA, R20), so there is a turn-on current to see. The load bank needs VS_BUFF (J4) powered before J10 goes in; the wiring prompt lists it. `--load 0` runs unloaded.
-- **Supply limit:** enable-startup runs on `psu.current_limit` (10 mA on JAFWAK); 4.8 mA plus the LDO's own current stays under it. The inrush charging the output capacitors can be far above that, so the supply may limit the startup; VIN sagging then shows up as INA / INB clipping.
+- **Load:** `startup.load_code = 5` on JAFWAK (4.6 mA, B0 + B2), so there is a turn-on current to see. The load bank needs J10 "LOAD" and DIO 0-4 (no VS_BUFF). `--load 0` runs unloaded.
+- **Supply limit:** enable-startup runs on `psu.current_limit` (10 mA on JAFWAK); 4.6 mA plus the LDO's own current stays under it. The inrush charging the output capacitors can be far above that, so the supply may limit the startup; VIN sagging then shows up as INA / INB clipping.
 - **Options:**
   - `--avg`
   - `--window-ms`
@@ -463,11 +463,11 @@ Without `[buffer]` (the demo board) line-tran and psrr use the single-rail path 
 ### `temp`: temperature log
 - **Wiring:**
   - PSU + -> VIN_DC (J7), PSU - -> GND (J11); JP4 2-3 "DC"; JP2 closed
-  - VS_BUFF (J4) at 5.0 V from a separate supply (powers the TMP235 on TEMP (TP7)); J10 "LOAD" only after VS_BUFF is up
+  - VS_BUFF (J4) at 5.0 V from a separate supply: it powers the TMP235 on TEMP (TP7). The load bank itself doesn't need it
   - Scope 2+ -> J13 pin 5 (TMP), Scope 1+ -> J13 pin 4 (OUTA); both - -> J13 pin 6 (GND)
   - DMM V / COM -> VREF (TP3) / GND (TP2), Hi-Z if the meter has it
   - LDO enabled (J6 1-2 "HI", J8 1-2 and 9-10 "LDO") or `--enable dio`
-  - Optional 1 mA load: 1.2 kOhm from VOUT (J5) to GND (J12)
+  - Load: `temp.load_code = 1` (1.0 mA through B0, 1.2 kOhm), the 1 mA of the first plan; J10 "LOAD" and DIO 0-4
 - **Does:** with the LDO on, samples every `interval` (2 s) for `duration` (30 min, at most 2 h): T from the TMP235 on the AD2's 5 V range, T = (V − 0.500 V) / 0.010 V/C; VREF on the DMM; VOUT on the AD2; the supply current. Ctrl-C ends the log early, keeps the data and still shuts down. First bring-up plan, Test 3.10: start at room temperature, then put ice in a sealed bag on U1.
 - **Computes:**
   - **Plateaus:** a sample is stable when T held within `stable_delta` (0.5 C) for `stable_window` (30 s). Each run of stable samples is averaged into one point (T, VREF, VOUT).
@@ -479,12 +479,13 @@ Without `[buffer]` (the demo board) line-tran and psrr use the single-rail path 
 
 ## External load: `--ext-load-ohm`
 
-A fixed resistor on VOUT (e.g. 1.2 kOhm on VOUT (J5) to GND (J12), ~1 mA) is part of the load the
-LDO sees. `--ext-load-ohm 1200` on `load-reg`, `line-reg`, `load-tran`, `enable-startup` and `temp`
+A fixed resistor on VOUT (on VOUT (J5) to GND (J12)) is part of the load the LDO sees.
+`--ext-load-ohm` on `load-reg`, `line-reg`, `load-tran`, `enable-startup` and `temp`
 (or `loadbank.external_ohm`) adds VOUT / R to every load estimate, and the wiring lists it.
-`dut.i_max` is checked with it included for the codes the run uses, before anything powers up: with
-1.2 kOhm, code 4 (19.2 mA) becomes 20.2 mA and is refused (use `--load 3`, a bigger resistor, or
-none). `load-reg`'s default sweep ("every code within dut.i_max") leaves such codes out and says so.
+JAFWAK's refitted load cell (2026-11-14) gives 1 mA at code 1, so the plan's 1.2 kOhm on J5 is no
+longer needed. `dut.i_max` is checked with it included for the codes the run uses, before anything
+powers up: with 1.2 kOhm, code 21 (19.3 mA) becomes 20.3 mA and is refused (use `--load 20`, a bigger
+resistor, or none). `load-reg`'s default sweep ("every code within dut.i_max") leaves such codes out and says so.
 
 ## Enable from the AD2: `--enable dio` (JAFWAK)
 

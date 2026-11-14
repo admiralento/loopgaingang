@@ -11,7 +11,7 @@
 name = "JAFWAK"
 vout_nominal = 1.2
 vin_max = 1.9                # absolute max VIN; nominal operating VIN is 1.8 V
-i_max = 0.020                # max load current: codes 0..4 (19.2 mA at 1.2 V); larger codes are refused
+i_max = 0.020                # max load current: codes 0..21 (19.3 mA at 1.2 V); code 22 (20.04 mA) and up are refused
 
 [psu]                        # Agilent E3648A (or E3638A) over GPIB
 resource = ""                # "" = search GPIB/USB/RS-232. Or GPIB0::5::INSTR, USB0::...::INSTR, prologix:COM5:5, serial:COM3
@@ -56,10 +56,11 @@ vout_range = 0.16            # V full scale (20 mV/div) centred on vout_nominal
 points = 2000
 
 [loadbank]
-# Binary-weighted load cell (load_cell.kicad_sch), B0 = LSB.
-# Current per bit at 1.2 V: 4.8, 9.6, 19.2, 38.0, 77.9 mA  (all on: ~150 mA)
+# Binary-weighted load cell (load_cell.kicad_sch), B0 = LSB. Refitted 2026-11-14 for a 1-20 mA sweep
+# (load_cell.kicad_sch still shows the old 250 / 125 / 62.5 / 31.6 / 15.4 ohm).
+# Current per bit at 1.2 V: 1.00, 1.76, 3.64, 8.00, 14.63 mA  (all on: ~29 mA; code 21 = 19.3 mA is the top allowed)
 dio_pins = [0, 1, 2, 3, 4]
-resistors = [250.0, 125.0, 62.5, 31.6, 15.4]   # R20, R19, R17||R18, R16, R15
+resistors = [1200.0, 680.0, 330.0, 150.0, 82.0]   # B0..B4 (R20, R19, R17/R18, R16, R15 on the schematic)
 switch_resistance = 0.0      # FDV305N Rds(on) (ohm), if you want it in the current estimate
 active_high = true
 
@@ -71,11 +72,11 @@ blank_time = 0.5e-6
 settle_reference = "pre"
 
 [loadbank_check]             # bank straight on the supply, one bit at a time
-voltage = 0.8                # V: B4 (15.4 ohm) draws 52 mA, under the 60 mA high limit (at 1.0 V it would be 65 mA)
+voltage = 1.2                # V (= vout_nominal): B4 (82 ohm) draws 14.6 mA, over the 10 mA normal limit
 high_current = true
 
 [smoke]
-high_current = true          # full load: 19.2 mA
+high_current = true          # full load: code 21, 19.3 mA
 
 [psu_hold]                   # psu-hold: the supply on VIN until Ctrl-C (--v / --ilim / --minutes on the command line)
 voltage = 1.8
@@ -90,16 +91,16 @@ dwell = 0.5                  # s at each setpoint before reading
 
 [load_reg]
 vin = 1.8
-codes = []                   # [] = every code within dut.i_max (0..4)
+codes = []                   # [] = every code within dut.i_max (0..21: 0 to 19.3 mA)
 settle_time = 0.05
 dc_window = 0.1
-high_current = true          # up to 19.2 mA: psu.high_current_limit
+high_current = true          # up to 19.3 mA: psu.high_current_limit
 
 [line_reg]
 vin_start = 1.25
 vin_stop = 1.9               # = dut.vin_max
 vin_step = 0.05
-load_code = 4                # 19.2 mA
+load_code = 21               # 19.3 mA (B0 + B2 + B4)
 high_current = true          # psu.high_current_limit
 
 [vref_line]                  # VREF (TP3) on the DMM while VIN steps down, LDO on: BGR line sensitivity and minimum VIN
@@ -112,7 +113,7 @@ drop_fraction = 0.01         # BGR minimum VIN: VREF 1 % below its value at vin_
 
 [temp]                       # TMP235 (TEMP, TP7) on AD2 scope 2 via J13 pin 5, VREF (TP3) on the DMM, VOUT on scope 1
 vin = 1.8
-load_code = 0                # 1 mA as in the first plan: 1.2 kOhm on VOUT (J5) by hand
+load_code = 1                # 1.0 mA (B0, 1.2 kOhm) as in the first plan; no resistor on J5 needed
 interval = 2.0               # s between samples
 duration = 1800              # s (max 2 h); Ctrl-C ends the log early and keeps the data
 stable_window = 30           # s: a plateau is T within stable_delta for this long (first plan 3.10)
@@ -120,8 +121,8 @@ stable_delta = 0.5           # C
 
 [load_tran]
 vin = 1.8
-code_low = 1                 # 4.8 mA
-code_high = 4                # 19.2 mA; trigger on the MSB that changes: DIO 2 (B2)
+code_low = 1                 # 1.0 mA
+code_high = 21               # 19.3 mA; trigger on the MSB that changes: DIO 4 (B4)
 high_current = true          # psu.high_current_limit
 sample_rate = 10e6
 n_samples = 8192
@@ -142,7 +143,7 @@ v_plus = 5.0                 # V on VS_BUFF for buffer-check
 psu_voltage = 5.0            # on VS_BUFF (not VIN!); >= vin_high + buffer_headroom
 vin_low = 1.75               # +/-50 mV around the 1.8 V nominal; keeps 50 mV below vin_max
 vin_high = 1.85
-load_code = 4                # 19.2 mA
+load_code = 21               # 19.3 mA (B0 + B2 + B4)
 buffer_headroom = 2.0
 sample_rate = 10e6
 n_samples = 8192
@@ -161,10 +162,7 @@ probe_gnd = "J13 pin 6 (GND)"
 dmm_vout = "OUTA (TP4)"
 dmm_gnd = "GND (TP12)"
 bank_bits = ["J13 pin 7 (B0)", "J13 pin 9 (B1)", "J13 pin 11 (B2)", "J13 pin 13 (B3)", "J13 pin 15 (B4)"]
-bank_supply = [               # VS_BUFF also feeds U4 and the TMP235; on BEFORE J10, or VOUT back-powers U4
-    'Separate supply + (5.0 V) -> VS_BUFF (J4), on before J10 "LOAD" goes in',
-    "Separate supply - -> GND (J12)",
-]
+bank_supply = []             # the load cell switches without VS_BUFF (bench, 2026-11-14); temp still powers the TMP235 from it
 bank_jumpers = ['J10 "LOAD" (VOUT -> load cell)']
 ad2_gnd = "J13 pin 8 (GND)"
 vs_buff = "VS_BUFF (J4)"
@@ -211,7 +209,7 @@ settle_time = 0.5
 
 [startup]                    # EN_CTRL_33 step -> enable block -> EN_IN: VOUT, EN_IN and the input current
 vin = 1.8
-load_code = 1                # 4.8 mA (code 1, R20): enough to see the turn-on current; under the 10 mA limit
+load_code = 5                # 4.6 mA (B0 + B2): enough to see the turn-on current; under the 10 mA limit
 edges = ["rising", "falling"]
 window = 10e-3               # s; 8192 samples -> 0.82 MS/s. 1 ms was too short for VOUT to settle (2026-11-14)
 pre_trigger = 0.1
@@ -237,7 +235,7 @@ vin_step = 0.1
 states = ["enabled", "disabled"]   # disabled: through the [enable] path
 readings = 5                 # DMM readings per point (10 NPLC: ~1 s)
 settle_time = 0.5
-check_code = 1               # shunt: switch in 4.8 mA once to prove the DMM sees R13's current (0 = skip)
+check_code = 5               # shunt: switch in 4.6 mA once to prove the DMM sees R13's current (0 = skip)
 
 [psrr]                       # sine on VIN through the BUF634 (line-tran path: JP4 to the buffer, PSU on VS_BUFF)
 psu_voltage = 5.0            # on VS_BUFF (not VIN!)
@@ -246,7 +244,7 @@ amplitude = 0.05             # V peak (100 mV p-p)
 f_start = 100
 f_stop = 1e6
 points_per_decade = 3
-load_code = 4                # 19.2 mA
+load_code = 21               # 19.3 mA (B0 + B2 + B4)
 averages = 4                 # captures per frequency, averaged coherently
 cycles = 20                  # min sine cycles per capture (8192 samples, up to 100 MS/s)
 
