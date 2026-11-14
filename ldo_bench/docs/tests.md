@@ -60,17 +60,42 @@ Lists every instrument it can reach over VISA (GPIB, USB), RS-232 and Prologix a
   - PSU OUT1 + -> load bank VIN (J5), PSU - -> load bank GND (J6)
   - AD2 DIO [0, 1, 2, 3, 4] -> load bank J0..J4
   - AD2 GND -> load bank GND (the FET gates are driven relative to it)
-- **Does:** at 1.0 V, it reads the supply current with every bit off. Then it turns on each bit alone and compares the extra current with V/R for that bit.
+- **Does:** at `loadbank_check.voltage` (1.0 V by default; 0.8 V on JAFWAK so B4's 15.4 Ω draws 52 mA, under its 60 mA limit), it reads the supply current with every bit off. Then it turns on each bit alone and compares the extra current with V/R for that bit.
   - The no-load current is subtracted first, which cancels the supply's current-readback offset.
   - `dut.i_max` doesn't apply here, since no DUT is connected.
 - **Diagnoses:**
   - a bit that draws nothing (open wire, missing ground, bad solder)
   - a DIO pin that seems to be wired to a different J header
 - **Note:** J0–J4 carry only the gate signal, with no ground. Without the AD2 GND wire nothing switches.
-- **Config:** `[loadbank_check]`.
+- **Config:** `[loadbank_check]` (`high_current = true` on JAFWAK: see [Supply current limit](#supply-current-limit)).
 
 ### `smoke`
-Powers VIN up (default `load_reg.vin`), then reads VOUT, VIN and the supply's V and I at no load and at the largest allowed load, and powers down. Prints a table; saves nothing. Use `--vin` to set VIN.
+Powers VIN up (default `load_reg.vin`), then reads VOUT, VIN and the supply's V and I at no load and at the largest allowed load, and powers down. Prints a table; saves nothing. Use `--vin` to set VIN. `[smoke] high_current = true` runs it on `psu.high_current_limit`.
+
+### `psu-hold`: the supply at a set voltage until Ctrl-C
+```
+uv run ldo-bench psu-hold --v 1.8 --ilim 5mA            # --to bench, --interval 2, --minutes 30
+```
+- **Wiring:** `--to vin` (default): PSU OUT1 on the board's DC input, as in the DC tests. `--to bench`: nothing but your own load or meter on the supply.
+- **Does:** sets the current limit (`--ilim`, at most `psu.current_limit`; default `psu.current_limit`) and OVP, turns the output on at 0 V, ramps to `--v` and holds it. Every `--interval` seconds it prints the supply's own V and I readback. Ctrl-C ends it and the output turns off; so does the hard timeout, `--minutes` / `psu_hold.max_minutes` (at most 60).
+- **Ceiling:** `--to vin`: min(`dut.vin_max`, `psu.v_max`), 1.9 V on JAFWAK. `--to bench`: `psu.v_max`.
+- **Saves nothing:** it prints the readings and a summary (V and I min / mean / max).
+- **Flags:** a current at or above `near_limit` (90 %) of the limit is printed NEAR LIMIT: the supply may be in constant current, below the setpoint. This is judged from the readback; the supply's CV / CC mode isn't queried. A voltage readback more than `v_tolerance` (50 mV) off the setpoint while the current isn't near the limit is a setup problem (exit 3): OVP tripped, output off from the front panel, or the wrong output.
+- **Config:** `[psu_hold]`.
+
+### `psu-sweep`: step the supply, read V and I
+```
+uv run ldo-bench psu-sweep --start 0 --stop 1.8 --step 0.05      # --updown, --dwell 1, --ilim 5mA, --to bench
+```
+- **Wiring, ceiling, current limit, flags:** as `psu-hold`.
+- **Does:** steps from `--start` to `--stop` (down if stop is below start), and back with `--updown`. At each setpoint it waits `--dwell` seconds and reads the supply's V and I. Ctrl-C stops it and keeps the points so far (`summary.json`: `complete: false`).
+- **Saves:** `data.csv` (direction, setpoint, V and I readback, near_limit), `summary.json`, and a plot of I against setpoint with readback minus setpoint below it.
+- **Config:** `[psu_sweep]`.
+
+### Supply current limit
+- **Every run** sets `psu.current_limit` before the output first turns on (10 mA on JAFWAK). The limit is printed at the start of the run and saved in `meta.json` as `psu_current_limit_a`.
+- **Higher limit:** a test whose section has `high_current = true` uses `psu.high_current_limit` instead (60 mA on JAFWAK, approved 2026-11-13). The tests that can opt in are `load-reg`, `line-reg`, `load-tran`, `smoke` and `loadbank-check`; on JAFWAK all five do, since they switch in up to 19.2 mA (loadbank-check: 52 mA).
+- **Config check:** no test may be configured to draw at or above the limit it runs with: its heaviest load-bank code at `vout_nominal` (loadbank-check: `voltage` over the smallest resistor). This estimate leaves out the LDO's own few hundred µA. `line-tran`, `psrr` and `buffer-check` are separate: they power the buffer rail with `buffer.rail_current_limit`.
 
 ### `buffer-check`: the reworked U2 on its own (JAFWAK)
 First bring-up plan, steps I.1–I.5. **Run it before `line-tran` or `psrr`, with the chip disconnected.** Needs `[buffer]`.

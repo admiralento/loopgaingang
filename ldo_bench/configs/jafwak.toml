@@ -22,7 +22,8 @@ parity = "none"              # "none" = 8 data bits, "even" / "odd" = 7 data bit
 stopbits = 2
 flow = "dsr-pacing"          # HP DTR/DSR handshake
 channel = 1                  # E3648A output (OUT1 / OUT2); the other one is held at 0 V
-current_limit = 0.06         # A, applied before the output turns on (20 mA load + LDO / BUF634 quiescent)
+current_limit = 0.010        # A, applied before the output turns on: every test unless its section says high_current
+high_current_limit = 0.06    # A, only for sections with high_current = true (20 mA load + quiescent; approved 2026-11-13)
 v_max = 5.5                  # PSU ceiling; above dut.vin_max only so line_tran can power VS_BUFF
 ovp = 6.0
 settle_time = 0.3
@@ -68,17 +69,37 @@ peak_window = 20e-6
 blank_time = 0.5e-6
 settle_reference = "pre"
 
+[loadbank_check]             # bank straight on the supply, one bit at a time
+voltage = 0.8                # V: B4 (15.4 ohm) draws 52 mA, under the 60 mA high limit (at 1.0 V it would be 65 mA)
+high_current = true
+
+[smoke]
+high_current = true          # full load: 19.2 mA
+
+[psu_hold]                   # psu-hold: the supply on VIN until Ctrl-C (--v / --ilim / --minutes on the command line)
+voltage = 1.8
+interval = 1.0               # s between readbacks
+max_minutes = 60             # hard timeout (at most 60)
+
+[psu_sweep]                  # psu-sweep: step the supply on VIN, read back V and I
+start = 0.0
+stop = 1.8
+step = 0.05
+dwell = 0.5                  # s at each setpoint before reading
+
 [load_reg]
 vin = 1.8
 codes = []                   # [] = every code within dut.i_max (0..4)
 settle_time = 0.05
 dc_window = 0.1
+high_current = true          # up to 19.2 mA: psu.high_current_limit
 
 [line_reg]
 vin_start = 1.25
 vin_stop = 1.9               # = dut.vin_max
 vin_step = 0.05
 load_code = 4                # 19.2 mA
+high_current = true          # psu.high_current_limit
 
 [vref_line]                  # VREF (TP3) on the DMM while VIN steps down, LDO on: BGR line sensitivity and minimum VIN
 vin_high = 1.9               # = dut.vin_max
@@ -100,6 +121,7 @@ stable_delta = 0.5           # C
 vin = 1.8
 code_low = 1                 # 4.8 mA
 code_high = 4                # 19.2 mA; trigger on the MSB that changes: DIO 2 (B2)
+high_current = true          # psu.high_current_limit
 sample_rate = 10e6
 n_samples = 8192
 pre_trigger = 0.2

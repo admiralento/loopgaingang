@@ -16,6 +16,7 @@ Bench automation for characterizing our LDO (the JAFWAK board) and the TPS7A7001
 | Startup | `enable-startup` | VOUT / VREF / current after the enable edge (JAFWAK) |
 | Temperature | `temp` | TMP235 (J13 pin 5), VREF and VOUT over time → tempco from stable plateaus (JAFWAK) |
 | Bench checks | `discover`, `psu-check`, `loadbank-check`, `smoke` | instruments found, supply accuracy, load bank wiring, quick power-up |
+| Supply control | `psu-hold`, `psu-sweep` | hold a voltage and current limit until Ctrl-C (prints V / I, saves nothing); step the voltage and save V / I |
 | Buffer check | `buffer-check` | JAFWAK's reworked U2 on its own (chip off, 100 Ω dummy): split supply, 1.70–1.85 V levels, step, sine. Run before line-tran / psrr |
 | BGR vs external reference | any DC, transient, psrr or iq test with `--vref ext`, then `compare` | the same test with 1.204 V on VREF_IN in place of the BGR (JP2 removed), side by side with the BGR run |
 
@@ -68,6 +69,8 @@ uv run ldo-bench check-config                            # validate the config, 
 uv run ldo-bench psu-check      -c configs/demo_board.toml   # supply setpoint/readback vs DMM
 uv run ldo-bench loadbank-check -c configs/demo_board.toml   # load bank straight on the supply: DIO -> J0..J4
 uv run ldo-bench smoke          -c configs/demo_board.toml   # power up, VOUT at no / full load
+uv run ldo-bench psu-hold --v 1.8 --ilim 5mA             # hold VIN until Ctrl-C (60 min hard timeout)
+uv run ldo-bench psu-sweep --stop 1.8 --step 0.05        # --updown, --dwell 1, --to bench
 uv run ldo-bench load-reg       -c configs/demo_board.toml   # --vin 2.0
 uv run ldo-bench line-reg       -c configs/demo_board.toml   # --load 30mA --vin-from psu
 uv run ldo-bench load-tran      -c configs/demo_board.toml   # --from 4mA --to 67mA --avg 32 --plot-us 100
@@ -99,7 +102,7 @@ The DC, transient, psrr and iq tests also take `--vref ext`. It drives VREF_IN f
 ## Configs
 
 There is one TOML file per board in `configs/`:
-- **`jafwak.toml`:** our LDO. VOUT 1.2 V, VIN nominal 1.8 V and **max 1.9 V**, load **max 20 mA** (codes 0–4).
+- **`jafwak.toml`:** our LDO. VOUT 1.2 V, VIN nominal 1.8 V and **max 1.9 V**, load **max 20 mA** (codes 0–4). Supply limit **10 mA**, 60 mA for the load tests (`high_current = true`).
 - **`demo_board.toml`:** TPS7A7001 evaluation board, VOUT 1.0 V, plus the Switched_R_Load_Bank.
 
 A config holds everything board-specific: the limits (`[dut]`, `[psu]`), the wiring (`[ad2]`, `[loadbank]`, `[enable]`), the instruments (`[dmm]`, `[xscope]`) and one section per test. It's validated before any instrument is touched:
@@ -112,6 +115,8 @@ Command-line options go through the same checks.
 
 - **Voltage limits:** the PSU and W1 can only reach the DUT through methods that enforce `dut.vin_max` and `psu.v_max`. The load bank refuses any code over `dut.i_max`.
 - **Supply setup:** the current limit and OVP are set before the supply output turns on, and voltage changes are ramped.
+- **Current limit:** `psu.current_limit` (JAFWAK: 10 mA) for every run. Only tests whose section has `high_current = true` (load-reg, line-reg, load-tran, smoke, loadbank-check) use `psu.high_current_limit` (JAFWAK: 60 mA). The config refuses any test whose load would reach the limit it runs with. `psu-hold` / `psu-sweep --ilim` can only go lower than `psu.current_limit`.
+- **psu-hold:** stops on its own after 60 minutes at most (`psu_hold.max_minutes`), even without Ctrl-C.
 - **Buffer interlock:** line-tran and psrr power the BUF634 rail above the LDO's VIN limit. Before doing that, they check at 1 V that the supply isn't on VIN, then, with the rail at `dut.vin_max`, that VIN follows W1 (which also proves the VIN probe is on VIN).
 - **Split-supply U2** (`[buffer]`, JAFWAK after the U2 rework): U2's V− is on −5 V from PSU OUT2 wired reversed. W1 holds U2's input at DC 0 V before either rail comes up and is never turned off while they are up (a floating input sends U2's output to a rail). VS_BUFF and V− ramp together in 0.1 V steps with VIN read after each one; outside −0.1…+0.3 V both come down and the run stops. Shutdown keeps W1 at 0 V until both rails are off. `--vref ext` is refused for line-tran / psrr (it also needs OUT2).
 - **VIN margin:** with VIN driven through the buffer, every limit check keeps the AD2's measurement error (about 20 mV at 1.9 V, an unverified datasheet figure) below `dut.vin_max`.
@@ -157,6 +162,7 @@ Each run writes a folder under `results/<test>/`, e.g. `results/load-tran/202611
 | `--vref ext` (PSU OUT2 on VREF_IN) and `compare` | simulator only |
 | `vref-line`, `temp`, `enable-sine --shape square`, `--enable dio` (added 2026-11-13) | simulator only |
 | `enable-current` (added 2026-11-13; replaces `iq --rail en`) | simulator only |
+| `psu-hold`, `psu-sweep`, the 10 mA / 60 mA split current limit (added 2026-11-13) | simulator only |
 | 54624A over RS-232: load-tran cross-check (averaged capture, readback, time window), demo board | yes (2026-11-10), peaks within 0.8 mV of the AD2 |
 | load-tran supply current check (VIN reaching the board), 54621A/54624A clipping check | yes (2026-11-10): passing, and failing with the supply leads unplugged |
 | supply over RS-232, Prologix adapters | simulator / fake instruments only |

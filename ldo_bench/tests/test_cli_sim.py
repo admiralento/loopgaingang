@@ -14,10 +14,11 @@ NOT_RUNS = {"check-config", "discover", "compare"}  # these don't run a test (co
 COMMANDS = sorted((c.name or c.callback.__name__.replace("_", "-")) for c in app.registered_commands)
 TESTS = [c for c in COMMANDS if c not in NOT_RUNS]
 BOARDS = ["jafwak", "demo_board"]
+SAVES_NOTHING = {"smoke", "psu-hold"}  # no -o option: they only print
 
 
 def _run(cmd, board, tmp_path):
-    out = [] if cmd == "smoke" else ["-o", str(tmp_path)]  # smoke saves nothing anyway
+    out = [] if cmd in SAVES_NOTHING else ["-o", str(tmp_path)]
     return invoke(cmd, "-c", config_path(board), "--sim", "--yes", *out)
 
 

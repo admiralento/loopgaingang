@@ -123,6 +123,7 @@ def run(bench: Bench, lc: LoadBankCheckConfig) -> LoadBankCheckResult:
         ref_probe=("vin", 0),
         bank_on_psu=True,
     )
+    bench.set_psu_limit(high=lc.high_current)  # psu.high_current_limit if the section asks
     with bank.unrestricted():  # no DUT here: dut.i_max doesn't apply
         return _run(bench, lc)
 

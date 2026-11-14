@@ -71,6 +71,7 @@ Everything that depends on the board, the wiring or the test conditions is in th
 - **VIN ceilings:** any VIN a test can apply (sweep ends, step levels, sine peaks) must be within `dut.vin_max`, and within `psu.v_max` whenever the PSU drives VIN directly.
 - **Buffer tests:** in line-tran and psrr the PSU powers the BUF634 rail, which sits *above* `dut.vin_max`. The rail must be within `psu.v_max`, and must be at least 2 V (`buffer_headroom`) above the highest VIN, or the buffer clips.
 - **Load:** every load code a test uses must draw no more than `dut.i_max` at `vout_nominal`.
+- **Supply current limit:** each test's heaviest load on the supply (`BenchConfig.supply_loads()`) must be below the limit it runs with (`psu_limit_for(section)`: `psu.high_current_limit` if the section has `high_current = true`, else `psu.current_limit`). `[psu_hold]` / `[psu_sweep]`: `current_limit` at most `psu.current_limit`, voltages within the ceiling for `to` (`vin`: the VIN ceiling; `bench`: `psu.v_max`).
 - **Pins:** the enable DIO pins must not also be load-bank pins (`BenchConfig.enable_pin_clash()`, also used by `--enable dio`).
 - **Split buffer** (`[buffer]`): its output isn't `psu.channel`, `v_minus` covers the buffer tests' headroom, and the check levels stay within `dut.vin_max`.
 - **External reference** (`[vref]`, if present): it needs the PSU's other output, `vref.v_max` within `dut.vin_max`, and `vref.external_v` no more than `vref.above_vin` (0.3 V) above any test's lowest VIN (`BenchConfig.lowest_vin()`).
@@ -88,7 +89,8 @@ Procedures never program a voltage onto the DUT directly. They call Bench method
 | `vin_from_psu(v)` | PSU → VIN | `min(dut.vin_max, psu.v_max)` |
 | `buffer_rail(v)` | PSU → BUF634 rail (single-rail buffer; refused with `[buffer]`) | `psu.v_max` |
 | `buffer_rails_on(v_plus)` / `buffer_rails_off()` | PSU → VS_BUFF and the other output (reversed) → U2's V−, together, W1 at DC 0 V (`[buffer]`) | `psu.v_max`; VIN within `buffer.vin_window` after every step |
-| `psu_output(v)` | PSU with only a meter on it (psu-check) | `psu.v_max` |
+| `psu_output(v)` | PSU with only a meter or load on it (psu-check, loadbank-check, `psu-hold` / `psu-sweep --to bench`) | `psu.v_max` |
+| `set_psu_limit(high=, amps=)` | the PSU's current limit, before the output first turns on | `psu.current_limit`, or `psu.high_current_limit` with `high=True`; `amps` only lower |
 | `vin_from_wavegen(v)` | W1 DC → buffer → VIN | `min(dut.vin_max, 5 V)` |
 | `vin_sine_from_wavegen(dc, amplitude, f)` | W1 sine → buffer → VIN | peak within `min(dut.vin_max, 5 V)` |
 | `en_ain_sine(ch, f, low, high, shape)` | W1 sine, triangle or square → EN_AIN (enable-sine) | −0.3 V to `min(dut.vin_max, 5 V)` |
@@ -99,6 +101,7 @@ Procedures never program a voltage onto the DUT directly. They call Bench method
 | `reference_on()` / `reference_off()` | PSU's other output → VREF_IN (`--vref ext` only) | `vref.v_max`, and at most `vref.above_vin` above VIN |
 
 Other things the Bench does:
+- **Current limit:** a procedure whose section has `high_current` calls `set_psu_limit(high=...)` right after the wiring prompt (psu-hold / psu-sweep pass `amps=`); otherwise the first PSU use sets `psu.current_limit`. It is logged and saved in `meta.json` (`psu_current_limit_a`, from `Bench.psu_current_limit`). A later request for a different limit is refused: the limit never changes with the output on.
 - **Supply setup:** the PSU current limit and OVP are set before the output is first turned on, and voltage changes are ramped in `psu.ramp_step` steps. If the supply rejects the OVP setting, the run stops; only `psu.ovp` left out of the config runs without hardware OVP.
 - **VIN through the buffer** (line-tran, psrr): VIN is read on the AD2's fine 5 V range whenever `dut.vin_max` fits on it, and every limit check keeps a margin for the AD2's error below `dut.vin_max` (`ad2.vin_offset_error` + `ad2.vin_gain_error` × V: about 20 mV at 1.9 V; these figures are from memory of the AD2 datasheet and still need checking). The interlock is in two stages; see [tests.md](tests.md#line-tran-line-transient).
 - **Wiring prompt:** `confirm_wiring()` prints the wiring a test needs and waits for a yes (`--yes` skips it). Its keyword arguments (`ref_probe`, `dmm_probe`, `psu_to`, ...) don't affect real hardware: they tell the simulator how the bench is wired.

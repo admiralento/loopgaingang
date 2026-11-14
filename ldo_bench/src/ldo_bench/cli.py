@@ -35,7 +35,15 @@ from pydantic import ValidationError
 
 from ldo_bench import wiring
 from ldo_bench.bench import Bench, open_bench
-from ldo_bench.config import BenchConfig, EnSineConfig, IqConfig, LineRegConfig, StartupConfig, load_config
+from ldo_bench.config import (
+    BenchConfig,
+    EnSineConfig,
+    IqConfig,
+    LineRegConfig,
+    PsuHoldConfig,
+    StartupConfig,
+    load_config,
+)
 from ldo_bench.instruments.base import InstrumentError
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
@@ -54,6 +62,7 @@ Method = _choices("Method", IqConfig, "method")
 Rail = _choices("Rail", IqConfig, "rail")
 Ch2 = _choices("Ch2", StartupConfig, "ch2")
 VinFrom = _choices("VinFrom", LineRegConfig, "vin_source")
+To = _choices("To", PsuHoldConfig, "to")
 
 # The config used when neither -c nor LDO_BENCH_CONFIG names one: the JAFWAK board's, found from the
 # project folder (src/ldo_bench/cli.py -> ldo_bench/configs), so it works from any directory.
@@ -202,6 +211,18 @@ def _load_code(cfg: BenchConfig, spec: str | None) -> int | None:
 
     try:
         return parse_load(spec, LoadBank(cfg.loadbank, None), cfg.dut.vout_nominal)
+    except ValueError as e:
+        _fail(str(e))
+
+
+def _amps(spec: str | None) -> float | None:
+    """An --ilim value (e.g. 5mA, 0.01A) in amps; exit 2 if it isn't a current."""
+    if spec is None:
+        return None
+    from ldo_bench.loadbank import parse_current
+
+    try:
+        return parse_current(spec)
     except ValueError as e:
         _fail(str(e))
 
@@ -359,7 +380,11 @@ def _save(
         run.write_meta(
             idns=bench.idns(),
             sim=bench.is_sim,
-            extra={"vref": bench.vref_info(), "enable": "dio" if bench.enable_dio else "static"},
+            extra={
+                "vref": bench.vref_info(),
+                "enable": "dio" if bench.enable_dio else "static",
+                "psu_current_limit_a": bench.psu_current_limit,
+            },
         )
         figs = {"plot.png": module.plot(res, cfg.dut.name)}
         figs.update(getattr(module, "extra_plots", lambda r, d: {})(res, cfg.dut.name))
@@ -554,6 +579,7 @@ def _smoke(bench: Bench, vin: float) -> None:
         ],
         ref_probe=("vin", 0),
     )
+    bench.set_psu_limit(high=cfg.smoke.high_current)  # full load: psu.high_current_limit if [smoke] asks
     bench.ldo_enable(False)  # --enable dio only: EN held low while VIN comes up
     bench.loadbank.off()
     bench.vin_from_psu(vin)
@@ -595,6 +621,114 @@ def buffer_check(
         config,
         proc,
         lambda b: proc.run(b, cfg.buffer),
+        out=out,
+        sim=sim,
+        save_sim=save_sim,
+        psu=psu,
+        ad=ad_serial,
+        yes=yes,
+        use_dmm=False,
+    )
+
+
+# --- the supply on its own ------------------------------------------------------
+IlimOpt = Annotated[
+    str | None,
+    typer.Option("--ilim", help="Current limit for this run, e.g. 5mA (at most psu.current_limit)"),
+]
+ToOpt = Annotated[
+    To | None,
+    typer.Option(
+        "--to",
+        help="Where the supply goes: vin (a board's VIN, at most dut.vin_max) or bench (only a load or "
+        "meter on it, at most psu.v_max)",
+    ),
+]
+
+
+@app.command("psu-hold")
+def psu_hold(
+    config: ConfigOpt = DEFAULT_CONFIG,
+    v: Annotated[
+        float | None, typer.Option("--v", help="Voltage to hold (V); default psu_hold.voltage")
+    ] = None,
+    ilim: IlimOpt = None,
+    to: ToOpt = None,
+    interval: Annotated[float | None, typer.Option(help="Seconds between readbacks")] = None,
+    minutes: Annotated[
+        float | None, typer.Option(help="Hard timeout (min, at most 60); Ctrl-C ends it sooner")
+    ] = None,
+    sim: SimOpt = False,
+    psu: PsuOpt = None,
+    ad_serial: AdOpt = None,
+    yes: YesOpt = False,
+    verbose: VerboseOpt = False,
+) -> None:
+    """Hold the supply at a voltage and current limit, printing V and I, until Ctrl-C. Saves nothing."""
+    from ldo_bench.procedures import psu_hold as proc
+
+    cfg, hc = _override(
+        _load(config, verbose),
+        "psu_hold",
+        voltage=v,
+        current_limit=_amps(ilim),
+        to=to.value if to else None,
+        interval=interval,
+        max_minutes=minutes,
+    )
+    typer.secho(
+        f"Holding {hc.voltage:g} V, limit {(hc.current_limit or cfg.psu.current_limit) * 1e3:g} mA, "
+        f"for up to {hc.max_minutes:g} min. Ctrl-C stops it and turns the output off.",
+        fg="cyan",
+    )
+    with _bench(cfg, sim, psu, ad_serial, yes, use_dmm=False) as bench:
+        res = proc.run(bench, hc)
+    _echo_report(bench, res)
+    for i in res.issues:
+        typer.secho(f"SETUP PROBLEM: {i}", fg="red")
+    if res.issues:
+        raise typer.Exit(3)
+
+
+@app.command("psu-sweep")
+def psu_sweep(
+    config: ConfigOpt = DEFAULT_CONFIG,
+    start: Annotated[float | None, typer.Option(help="First setpoint (V)")] = None,
+    stop: Annotated[float | None, typer.Option(help="Last setpoint (V)")] = None,
+    step: Annotated[float | None, typer.Option(help="Step (V)")] = None,
+    dwell: Annotated[float | None, typer.Option(help="Seconds at each setpoint before reading")] = None,
+    updown: Annotated[
+        bool | None, typer.Option("--updown/--up-only", help="Also sweep back to start")
+    ] = None,
+    ilim: IlimOpt = None,
+    to: ToOpt = None,
+    out: OutOpt = Path("results"),
+    sim: SimOpt = False,
+    save_sim: SaveSimOpt = False,
+    psu: PsuOpt = None,
+    ad_serial: AdOpt = None,
+    yes: YesOpt = False,
+    verbose: VerboseOpt = False,
+) -> None:
+    """Step the supply's voltage and save its V and I readback at each step (Ctrl-C keeps the points so far)."""
+    from ldo_bench.procedures import psu_sweep as proc
+
+    cfg, sc = _override(
+        _load(config, verbose),
+        "psu_sweep",
+        start=start,
+        stop=stop,
+        step=step,
+        dwell=dwell,
+        updown=updown,
+        current_limit=_amps(ilim),
+        to=to.value if to else None,
+    )
+    _run(
+        cfg,
+        config,
+        proc,
+        lambda b: proc.run(b, sc),
         out=out,
         sim=sim,
         save_sim=save_sim,

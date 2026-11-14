@@ -283,12 +283,14 @@ class Bench:
     def _ensure_psu(self, current_limit: float | None = None) -> None:
         """First use only: output off, then current limit / OVP / range, then 0 V.
 
-        current_limit (A) replaces psu.current_limit (buffer.rail_current_limit for the split buffer).
+        current_limit (A) replaces psu.current_limit (buffer.rail_current_limit for the split buffer,
+        or what set_psu_limit chose). Once set up, a call without one keeps the limit already set; a
+        call with a different one is refused (the limit is never changed with the output on).
         """
         p = self.cfg.psu
         limit = p.current_limit if current_limit is None else current_limit
         if self._psu_ready:
-            if abs(limit - self._psu_limit) > 1e-12:
+            if current_limit is not None and abs(limit - self._psu_limit) > 1e-12:
                 raise InstrumentError(
                     f"the PSU is already set up with a {self._psu_limit * 1e3:g} mA current limit; this needs "
                     f"{limit * 1e3:g} mA (set before the output turns on)"
@@ -297,6 +299,7 @@ class Bench:
         self.psu.output(False)
         self.psu.setup(current_limit=limit, ovp=p.ovp, voltage_range=p.voltage_range)
         self._psu_limit = limit
+        log.info("PSU OUT%d: current limit %g mA", p.channel, limit * 1e3)
         self.psu.set_voltage(0.0)
         if self.vref_external:
             vr = self.cfg.vref
@@ -305,6 +308,32 @@ class Bench:
             self.vref_out = self.psu.aux(vr.psu_channel)
             self.vref_out.setup(current_limit=vr.current_limit, ovp=vr.ovp)
         self._psu_ready = True
+
+    def set_psu_limit(self, *, high: bool = False, amps: float | None = None) -> float:
+        """Set the PSU up now with the current limit (A) this run uses, and return it.
+
+        high: psu.high_current_limit, for the tests whose section has high_current = true (InstrumentError
+        if the config has none). amps: a lower limit (psu-hold / psu-sweep --ilim), at most that ceiling.
+        Call it before the output first turns on; a PSU already set up with a different limit is refused
+        (the limit is never changed with the output on). Without a call, runs use psu.current_limit.
+        """
+        p = self.cfg.psu
+        if high and p.high_current_limit is None:
+            raise InstrumentError("this test asks for psu.high_current_limit, but the config has none")
+        ceiling = p.high_current_limit if high else p.current_limit
+        limit = ceiling if amps is None else amps
+        if not 0 < limit <= ceiling + 1e-12:
+            name = "psu.high_current_limit" if high else "psu.current_limit"
+            raise InstrumentError(
+                f"refusing a {limit * 1e3:g} mA current limit: above {name} ({ceiling * 1e3:g} mA)"
+            )
+        self._ensure_psu(current_limit=limit)
+        return limit
+
+    @property
+    def psu_current_limit(self) -> float | None:
+        """The current limit (A) the PSU was set up with in this run; None if it hasn't been set up."""
+        return self._psu_limit if self._psu_ready else None
 
     def _psu_ramp(self, target: float, limit: float) -> None:
         """Ramp the PSU from its present setpoint to `target` (V), refusing anything above `limit` (V)."""

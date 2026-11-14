@@ -17,7 +17,7 @@ from __future__ import annotations
 import math
 import tomllib
 from pathlib import Path
-from typing import Literal
+from typing import ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -101,6 +101,14 @@ class PsuConfig(_Instrument):
     channel: int = Field(1, ge=1, le=2, description="Output to use on a dual-output supply (E3648A)")
     voltage_range: Literal["LOW", "HIGH"] | None = Field(None, description="Output range (LOW/HIGH)")
     current_limit: float = Field(gt=0, description="Applied before the output is enabled (A)")
+    high_current_limit: float | None = Field(
+        None,
+        gt=0,
+        description=(
+            "Higher limit (A) for the tests whose section has high_current = true (load-reg, line-reg, "
+            "load-tran, smoke, loadbank-check); None = every test uses current_limit"
+        ),
+    )
     ovp: float | None = Field(None, gt=0, description="Over-voltage protection level (V)")
     v_max: float = Field(
         gt=0,
@@ -117,6 +125,11 @@ class PsuConfig(_Instrument):
         # OVP is the hardware backstop: if it sat at or below v_max, a legal setpoint could trip it.
         if self.ovp is not None and self.ovp <= self.v_max:
             raise ValueError(f"psu.ovp ({self.ovp} V) must be above psu.v_max ({self.v_max} V)")
+        if self.high_current_limit is not None and self.high_current_limit <= self.current_limit:
+            raise ValueError(
+                f"psu.high_current_limit ({self.high_current_limit} A) must be above psu.current_limit "
+                f"({self.current_limit} A)"
+            )
         return self
 
 
@@ -298,6 +311,91 @@ class LoadBankCheckConfig(_Model):
     settle_time: float = Field(0.2, ge=0, description="Wait after switching a bit (s)")
     tolerance: float = Field(0.10, gt=0, lt=1, description="Allowed relative current error per bit")
     abs_tolerance: float = Field(1.5e-3, ge=0, description="Plus this absolute error (A): readback noise")
+    high_current: bool = Field(
+        False, description="Run with psu.high_current_limit instead of psu.current_limit (it draws more)"
+    )
+
+
+class SmokeConfig(_Model):
+    """[smoke] (smoke): power up, VOUT at no load and at the heaviest code within dut.i_max."""
+
+    high_current: bool = Field(
+        False, description="Run with psu.high_current_limit instead of psu.current_limit (it draws more)"
+    )
+
+
+class PsuDriveConfig(_Model):
+    """Shared by [psu_hold] and [psu_sweep]: the supply on its own, read back by itself (no AD2, no DMM)."""
+
+    current_limit: float | None = Field(
+        None,
+        gt=0,
+        description="Current limit for this run (A), at most psu.current_limit; None = psu.current_limit",
+    )
+    to: Literal["vin", "bench"] = Field(
+        "vin",
+        description=(
+            "'vin' = the supply is on a board's VIN (ceiling min(dut.vin_max, psu.v_max)); "
+            "'bench' = nothing but a load or meter on it (ceiling psu.v_max)"
+        ),
+    )
+    v_tolerance: float = Field(
+        0.05,
+        gt=0,
+        description=(
+            "Readback more than this from the setpoint (V) while the current isn't near the limit is a "
+            "setup problem (output off, OVP tripped, readback from another output)"
+        ),
+    )
+    near_limit: float = Field(
+        0.9,
+        gt=0,
+        le=1,
+        description=(
+            "Readback current at or above this fraction of the limit is flagged 'near the current limit' "
+            "(the supply may be in constant current). From the readback: the supply's mode isn't queried"
+        ),
+    )
+
+
+class PsuHoldConfig(PsuDriveConfig):
+    """[psu_hold] (psu-hold): hold the supply at one voltage until Ctrl-C or max_minutes, printing V and I."""
+
+    voltage: float = Field(gt=0, description="Voltage to hold (V)")
+    interval: float = Field(1.0, gt=0, description="Time between readbacks (s)")
+    max_minutes: float = Field(
+        60.0, gt=0, le=60, description="Hard timeout (min): the hold ends on its own after this (at most 60)"
+    )
+
+
+class PsuSweepConfig(PsuDriveConfig):
+    """[psu_sweep] (psu-sweep): step the supply from start to stop (and back with updown), reading V and I."""
+
+    start: float = Field(0.0, ge=0, description="First setpoint (V)")
+    stop: float = Field(ge=0, description="Last setpoint (V); below start sweeps down")
+    step: float = Field(gt=0, description="Step between setpoints (V)")
+    dwell: float = Field(0.5, ge=0, description="Wait at each setpoint before reading back (s)")
+    updown: bool = Field(False, description="Sweep back to start after reaching stop")
+
+    MAX_POINTS: ClassVar[int] = 2000
+
+    def setpoints(self) -> list[float]:
+        """The setpoints in order (V): start, start ± step, ..., stop (always included), then back if updown."""
+        span = self.stop - self.start
+        n = math.floor(abs(span) / self.step + 1e-9)
+        sign = 1.0 if span >= 0 else -1.0
+        pts = [round(self.start + sign * k * self.step, 9) for k in range(n + 1)]
+        if abs(pts[-1] - self.stop) > 1e-9:
+            pts.append(self.stop)
+        return pts + pts[-2::-1] if self.updown else pts
+
+    @model_validator(mode="after")
+    def _check(self) -> PsuSweepConfig:
+        if self.stop == self.start:
+            raise ValueError("psu_sweep.stop must differ from start")
+        if abs(self.stop - self.start) / self.step > self.MAX_POINTS:
+            raise ValueError(f"psu_sweep: more than {self.MAX_POINTS} points; use a bigger step")
+        return self
 
 
 class LoadRegConfig(_Model):
@@ -312,6 +410,9 @@ class LoadRegConfig(_Model):
         0.1, gt=0, description="DC averaging window (s); 0.1 s spans whole 50/60 Hz cycles"
     )
     psu_readback: bool = Field(True, description="Also record the PSU's V/I readback (~0.8 s per point)")
+    high_current: bool = Field(
+        False, description="Run with psu.high_current_limit instead of psu.current_limit (it draws more)"
+    )
 
 
 class LineRegConfig(_Model):
@@ -335,6 +436,9 @@ class LineRegConfig(_Model):
             "'ad2' = VIN measured at the board by scope ref channel; "
             "'psu' = the PSU's readback (no scope wiring; includes cable drop and ~1-3 mV readback error)"
         ),
+    )
+    high_current: bool = Field(
+        False, description="Run with psu.high_current_limit instead of psu.current_limit (it draws more)"
     )
 
     @model_validator(mode="after")
@@ -458,6 +562,9 @@ class LoadTranConfig(TransientCaptureConfig):
         None, description="DIO pin wired to the ref channel; default = MSB that changes"
     )
     dio_high_level: float = Field(3.3, gt=0, description="DIO logic-high voltage, for the trigger level")
+    high_current: bool = Field(
+        False, description="Run with psu.high_current_limit instead of psu.current_limit (it draws more)"
+    )
 
 
 class BoardConfig(_Model):
@@ -946,6 +1053,9 @@ class BenchConfig(_Model):
     analysis: AnalysisConfig = AnalysisConfig()
     psu_check: PsuCheckConfig = PsuCheckConfig()
     loadbank_check: LoadBankCheckConfig = LoadBankCheckConfig()
+    smoke: SmokeConfig = SmokeConfig()
+    psu_hold: PsuHoldConfig | None = None
+    psu_sweep: PsuSweepConfig | None = None
     load_reg: LoadRegConfig | None = None
     line_reg: LineRegConfig | None = None
     vref_line: VrefLineConfig | None = None
@@ -965,6 +1075,53 @@ class BenchConfig(_Model):
     def enable_pin_clash(self) -> set[int]:
         """Enable DIO pins that are also load bank pins (they would fight); empty if none."""
         return self.enable.pins & set(self.loadbank.dio_pins)
+
+    def psu_limit_for(self, section) -> float:
+        """The supply current limit (A) a test runs with: psu.high_current_limit if its section has
+        high_current = true, else psu.current_limit. ValueError if it asks for a high limit there isn't."""
+        if getattr(section, "high_current", False):
+            if self.psu.high_current_limit is None:
+                raise ValueError("high_current = true needs psu.high_current_limit")
+            return self.psu.high_current_limit
+        return self.psu.current_limit
+
+    def _load_current(self, code: int) -> float:
+        """Estimated load bank current (A) for `code` at vout_nominal (what LoadBank.current gives)."""
+        return self.dut.vout_nominal * self.loadbank.conductance(code)
+
+    def heaviest_allowed_code(self) -> int:
+        """The code within dut.i_max that draws the most current (what smoke and load-reg's [] use)."""
+        codes = [
+            c
+            for c in range(self.loadbank.max_code + 1)
+            if self.dut.i_max is None or self._load_current(c) <= self.dut.i_max
+        ]
+        return max(codes, key=self._load_current)
+
+    def supply_loads(self) -> dict[str, tuple[object, float]]:
+        """The heaviest load (A) each configured test puts on psu.channel, with that test's section.
+
+        Estimated from the load bank's resistors (at vout_nominal, or at loadbank_check.voltage for the
+        bank straight on the supply); the LDO's own few hundred uA aren't included. line-tran, psrr and
+        buffer-check aren't here: they power the buffer rail with buffer.rail_current_limit.
+        """
+        out: dict[str, tuple[object, float]] = {}
+        lc = self.loadbank_check
+        r_min = min(self.loadbank.resistors) + self.loadbank.switch_resistance
+        out["loadbank_check"] = (lc, lc.voltage / r_min)  # one bit at a time; the smallest resistor
+        out["smoke"] = (self.smoke, self._load_current(self.heaviest_allowed_code()))
+        if self.load_reg:
+            codes = self.load_reg.codes or [self.heaviest_allowed_code()]
+            out["load_reg"] = (self.load_reg, max(self._load_current(c) for c in codes))
+        if self.load_tran:
+            lt = self.load_tran
+            out["load_tran"] = (lt, max(self._load_current(lt.code_low), self._load_current(lt.code_high)))
+        for name in ("line_reg", "temp", "vref_line", "startup"):
+            if (sec := getattr(self, name)) is not None:
+                out[name] = (sec, self._load_current(sec.load_code))
+        if self.iq:
+            out["iq"] = (self.iq, self._load_current(self.iq.check_code))
+        return out
 
     def lowest_vin(self) -> dict[str, float]:
         """The lowest VIN (V) each configured test puts on the LDO while it runs, by test name.
@@ -1003,6 +1160,10 @@ class BenchConfig(_Model):
           buffer_headroom above VIN's peak, or the BUF634 clips and the step / sine on VIN is wrong.
         - vref (only if [vref] is present): its own PSU output, v_max within dut.vin_max, and the
           external reference within vref.above_vin of every test's lowest VIN.
+        - psu current limit: every test's heaviest load (supply_loads) below the limit it runs with
+          (psu_limit_for: psu.high_current_limit with high_current = true), so no test is configured
+          to put the supply into current limit. psu_hold / psu_sweep: current_limit at most
+          psu.current_limit, and their voltages within the ceiling for where the supply goes (`to`).
         - en_sine / en_current: the wave into EN_AIN within dut.vin_max (EN_AIN runs from VIN).
         - enable-pin clashes: tests that drive the enable line (en_sine, startup, iq 'disabled')
           would fight the load bank if an enable DIO pin were also a load bank pin.
@@ -1136,6 +1297,34 @@ class BenchConfig(_Model):
                 raise ValueError(
                     f"buffer.check_sine_dc + check_sine_amplitude exceed dut.vin_max ({self.dut.vin_max} V)"
                 )
+        for name, (sec, amps) in self.supply_loads().items():
+            limit = self.psu_limit_for(sec)
+            if amps >= limit:
+                high = getattr(sec, "high_current", False)
+                which = "psu.high_current_limit" if high else "psu.current_limit"
+                hint = (
+                    f", or set high_current = true in [{name}]"
+                    if hasattr(sec, "high_current") and not high
+                    else ""
+                )
+                raise ValueError(
+                    f"{name} draws ~{amps * 1e3:.1f} mA, at or above its current limit {which} "
+                    f"({limit * 1e3:g} mA): use a lighter load{hint}"
+                )
+        for name in ("psu_hold", "psu_sweep"):
+            sec = getattr(self, name)
+            if sec is None:
+                continue
+            if sec.current_limit is not None and sec.current_limit > self.psu.current_limit:
+                raise ValueError(
+                    f"{name}.current_limit ({sec.current_limit * 1e3:g} mA) is above psu.current_limit "
+                    f"({self.psu.current_limit * 1e3:g} mA)"
+                )
+            top = sec.voltage if name == "psu_hold" else max(sec.start, sec.stop)
+            if sec.to == "vin":
+                vin_ok(f"{name} voltage", top)
+            elif top > self.psu.v_max:
+                raise ValueError(f"{name} voltage {top} V exceeds psu.v_max ({self.psu.v_max} V)")
         if self.vref:
             vr = self.vref
             if vr.psu_channel == self.psu.channel:

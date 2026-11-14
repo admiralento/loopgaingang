@@ -138,6 +138,7 @@ def run(bench: Bench, lr: LineRegConfig) -> LineRegResult:
     bank = bench.loadbank
     vins = sweep_points(lr)
     bench.confirm_wiring("line regulation", wiring(bench, lr), ref_probe=("vin", 0))
+    bench.set_psu_limit(high=lr.high_current)  # psu.high_current_limit if the section asks
 
     bank.set(lr.load_code)
     rows = []

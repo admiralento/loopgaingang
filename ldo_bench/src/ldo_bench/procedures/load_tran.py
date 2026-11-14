@@ -239,6 +239,7 @@ def run(bench: Bench, lt: LoadTranConfig, an: AnalysisConfig) -> LoadTranResult:
     bank, a = bench.loadbank, bench.cfg.ad2
     pin, rises_with_load = trigger_setup(bench, lt)
     bench.confirm_wiring("load transient", wiring(bench, pin), ref_probe=("dio", pin))
+    bench.set_psu_limit(high=lt.high_current)  # psu.high_current_limit if the section asks
     setups = bench.scope_setups()
     bench.ldo_enable(False)  # --enable dio only: EN held low while VIN comes up
     bank.set(lt.code_low)

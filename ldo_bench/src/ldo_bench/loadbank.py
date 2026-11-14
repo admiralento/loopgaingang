@@ -138,6 +138,14 @@ _CURRENT_RE = re.compile(r"^\s*([0-9.]+)\s*(ma|a|ua)\s*$", re.IGNORECASE)
 _SCALE = {"a": 1.0, "ma": 1e-3, "ua": 1e-6}
 
 
+def parse_current(spec: str) -> float:
+    """Parse a current like "5mA", "0.01A" or "500uA" into amps. ValueError if it isn't one."""
+    m = _CURRENT_RE.match(spec)
+    if not m:
+        raise ValueError(f"'{spec}' is not a current like '5mA', '0.01A' or '500uA'")
+    return float(m.group(1)) * _SCALE[m.group(2).lower()]
+
+
 def parse_load(spec: str, bank: LoadBank, vout: float) -> int:
     """Parse a CLI load spec: a code ("17") or a current ("67mA", "0.1A", "500uA").
 
@@ -149,7 +157,6 @@ def parse_load(spec: str, bank: LoadBank, vout: float) -> int:
         code = int(spec)
         bank._check(code)
         return code
-    m = _CURRENT_RE.match(spec)
-    if not m:
+    if not _CURRENT_RE.match(spec):
         raise ValueError(f"load '{spec}' is neither a code nor a current like '67mA'")
-    return bank.code_for_current(float(m.group(1)) * _SCALE[m.group(2).lower()], vout)
+    return bank.code_for_current(parse_current(spec), vout)

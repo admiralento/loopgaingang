@@ -104,6 +104,7 @@ def run(bench: Bench, lr: LoadRegConfig) -> LoadRegResult:
     bank = bench.loadbank
     codes = lr.codes or bank.allowed_codes()  # [] = every code within dut.i_max
     bench.confirm_wiring("load regulation", wiring(bench), ref_probe=("vin", 0))
+    bench.set_psu_limit(high=lr.high_current)  # psu.high_current_limit if the section asks
 
     bench.ldo_enable(False)  # --enable dio only: EN held low while VIN comes up
     bank.off()

@@ -54,7 +54,7 @@ Each scan runs once per run, and a port that one instrument has claimed is never
   - **Blinking:** the supply is off or its GPIB port is disabled. Invisible on USB.
   - **Off:** no USB power.
 - **E3648A outputs:** it's a dual-output supply. `psu.channel` picks OUT1 or OUT2, and the other output is held at 0 V. With `--vref ext` the other output drives JAFWAK's VREF_IN (`[vref]`), with its own 5 mA limit and OVP. `OUTP` switches both outputs together, so it sits at 0 V until the Bench turns the reference on.
-- **Before the output turns on:** the current limit (`psu.current_limit`) and OVP (`psu.ovp`, which must be above `psu.v_max`) are set first.
+- **Before the output turns on:** the current limit (`psu.current_limit`, or `psu.high_current_limit` for a test with `high_current = true`; see [tests.md](tests.md#supply-current-limit)) and OVP (`psu.ovp`, which must be above `psu.v_max`) are set first.
 - **Accuracy** (measured with `psu-check` on 2026-11-06):
   - **Output:** within 1.2 mV of the setpoint over 0.5–5 V.
   - **Readback:** reads 1–2.7 mV high. That's within spec, but as big as an LDO's whole load-regulation change. So VOUT always comes from the DMM or the AD2 at the board, never from the supply.
