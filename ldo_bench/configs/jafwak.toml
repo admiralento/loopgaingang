@@ -207,19 +207,21 @@ low = 0.0
 readings = 5                 # DMM readings per point (10 NPLC: ~1 s)
 settle_time = 0.5
 
-[startup]                    # EN_CTRL_33 step -> enable block -> EN_IN: VOUT + VREF (or current) timing
+[startup]                    # EN_CTRL_33 step -> enable block -> EN_IN: VOUT and the supply currents
 vin = 1.8
 load_code = 0
 edges = ["rising", "falling"]
-window = 1e-3                # s; 8192 samples -> 8.2 MS/s
+window = 10e-3               # s; 8192 samples -> 0.82 MS/s. 1 ms was too short for VOUT to settle (2026-11-14)
 pre_trigger = 0.1
 averages = 8
 off_time = 0.05
 on_time = 0.05
-ch2 = "vref"                 # "vref" (TP3), "iin" (across R13), "iout" (across R1)
+channels = "currents"        # AD2 1 across R13 (in), 2 across R1 (out), VOUT on the 54621A; or "iin" / "iout" (AD2 only)
 sense_ohm = 0.1
+xscope_vout_range = 1.6      # V full scale on the 54621A (0.2 V/div), centred on 0.6 V
+xscope_trigger_high = 1.8    # V: the 54621A's trigger channel is on EN_AIN (TP6), 1.8 V logic; triggers at 0.9 V
 settle_fraction = 0.02
-# vref_nominal = 1.2         # set to check the BGR output level
+# No VREF: a scope on TP3 loads the BGR and pulled VREF and VOUT to ~0.98 V (2026-11-14)
 
 
 [iq]                         # quiescent / shutdown current vs VIN, no load, from the DMM

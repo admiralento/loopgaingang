@@ -155,6 +155,8 @@ class Result:
     def extra_csvs(self)       # optional: {"waveform_rising.csv": rows, ...}
 ```
 
+enable-startup (`startup.py`) arms and collects the 54621A itself (`_capture_edge`), since its 54621A runs on VOUT's full 0 → 1.2 V swing and triggers on EN_AIN (1.8 V logic), not on load-tran's narrow VOUT window and DIO trigger.
+
 `transient.py` holds what load-tran and line-tran share: averaged triggered captures (`averaged_step`), the 54621A cross-check, the setup checks on a captured edge, the per-edge report, and the plot with a common time span.
 
 ## Real data only: the validity model
@@ -171,7 +173,8 @@ This is the rule the whole package is built around: **nothing saved or plotted i
   - the terminal prints the problems in red
   - the command exits with code 3
 - **Measurement floors are bounds, not numbers.** A reading under a meter's resolution is reported as one: Iq "< 4 µA", PSRR "≥ 72 dB".
-- **The 54621A never invalidates an AD2 result.** Its problems are listed under the cross-check only.
+- **The 54621A never invalidates an AD2 result.** Its problems are listed under the cross-check only. The exception is enable-startup's `currents` mode: there the 54621A isn't a cross-check but the only VOUT measurement (the AD2's two channels are on R13 and R1). Without its VOUT the VOUT checks can't run, so the edge is a setup problem. The currents are still saved.
+- **No scope on VREF.** A scope input loads the BGR and pulls VREF, and VOUT with it, down (2026-11-14). VREF is read only with the DMM at 10 GOhm.
 
 ## The simulator (`instruments/sim.py`)
 

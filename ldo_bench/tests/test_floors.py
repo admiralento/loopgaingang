@@ -32,23 +32,24 @@ def test_psrr_still_measures_a_clean_tone(jafwak):
 # --- startup -------------------------------------------------------------------------
 def run_startup(cfg, setup=None, **upd):
     su = cfg.startup.model_copy(update={"averages": 2, **upd})
-    with open_bench(cfg, sim=True) as b:
+    with open_bench(cfg, sim=True, use_xscope=True) as b:
         if setup:
             setup(b)
         return startup.run(b, su)
 
 
 def test_input_current_under_the_ad2_resolution_is_a_bound(jafwak):
-    res = run_startup(jafwak, ch2="iin", load_code=0)  # ~150 uA of Iq: 0.05 counts on 0.1 ohm
+    res = run_startup(jafwak, load_code=0)  # ~150 uA of Iq: 0.05 counts on 0.1 ohm
     for e in res.edges:
-        assert not e.ch2_resolved
-        assert np.isnan(e.ch2_m.t10) and np.isnan(e.ch2_m.t90)
+        iin = e.currents[0]
+        assert iin.name == "iin" and not iin.resolved
+        assert np.isnan(iin.m.t10) and np.isnan(iin.m.t90)
     assert "resolve" in res.report()
 
 
 def test_output_current_step_above_the_resolution_is_measured(jafwak):
-    res = run_startup(jafwak, ch2="iout", load_code=4)  # 19.2 mA: ~6 counts
-    assert all(e.ch2_resolved for e in res.edges)
+    res = run_startup(jafwak, load_code=4)  # 19.2 mA: ~6 counts
+    assert all(e.currents[1].name == "iout" and e.currents[1].resolved for e in res.edges)
 
 
 def test_unsettled_edge_is_flagged(jafwak):

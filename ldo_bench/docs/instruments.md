@@ -78,7 +78,7 @@ How each test uses it:
 
 How the tests use each part of it:
 - **Scope 1:** VOUT.
-- **Scope 2:** the reference: VIN at the board, the DIO trigger line in load-tran, TP3 / R13 / R1 in enable-startup, or EN_AIN in enable-sine.
+- **Scope 2:** the reference: VIN at the board, the DIO trigger line in load-tran, R1 (or R13) in enable-startup, or EN_AIN in enable-sine. In enable-startup's default `currents` mode scope 1 is across R13 and VOUT is on the 54621A. No scope goes on VREF (TP3): it loads the BGR.
   - Ranges: 5 V (±2.5 V, the fine one) or 50 V.
   - DC accuracy: taken as ±10 mV ± 0.5 % on the 5 V range (`ad2.vin_offset_error`, `vin_gain_error`), recalled from the datasheet and **not yet checked**. It sets the margin kept below `dut.vin_max` when the wavegen drives VIN.
   - Samples: 8192 per channel, at up to 100 MS/s. The rate is rounded to 100 MHz / an integer, and the analysis always uses the rate the AD2 reports.

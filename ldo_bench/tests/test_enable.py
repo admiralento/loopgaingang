@@ -83,10 +83,10 @@ def test_en_sine_output_not_switching_is_flagged(jafwak):
     en_sine.plot(res, "x")
 
 
-@pytest.mark.parametrize("ch2", ["vref", "iin", "iout"])
-def test_startup_on_sim(jafwak, ch2):
-    su = jafwak.startup.model_copy(update={"ch2": ch2, "averages": 2, "load_code": 2})
-    with open_bench(jafwak, sim=True) as b:
+@pytest.mark.parametrize("channels", ["currents", "iin", "iout"])
+def test_startup_on_sim(jafwak, channels):
+    su = jafwak.startup.model_copy(update={"channels": channels, "averages": 2, "load_code": 2})
+    with open_bench(jafwak, sim=True, use_xscope=True) as b:
         vplus = spy(b.scope, "set_vplus")
         res = startup.run(b, su)
         m = b.sim_model
@@ -95,18 +95,15 @@ def test_startup_on_sim(jafwak, ch2):
     on = res.edges[0]
     assert on.vout_m.after == pytest.approx(jafwak.dut.vout_nominal, abs=0.02)
     assert on.vout_m.t10 > m.vref_delay  # VOUT starts after the reference
-    if ch2 == "vref":
-        assert on.ch2_m.after == pytest.approx(m.vref_nominal, abs=0.01)
-        assert on.ch2_m.t90 < on.vout_m.t90
-    else:  # inrush: C dV/dt on top of the load current
-        assert on.ch2_m.peak > on.ch2_m.after
+    for c in on.currents:  # inrush: C dV/dt on top of the load current
+        assert c.m.peak > c.m.after
     assert not m.dio.get(jafwak.enable.dio_pin) and b.scope.vplus is None  # off afterwards
     startup.plot(res, "x")
 
 
 def test_startup_flags_enable_not_controlling_ldo(jafwak):
     su = jafwak.startup.model_copy(update={"averages": 2})
-    with open_bench(jafwak, sim=True) as b:
+    with open_bench(jafwak, sim=True, use_xscope=True) as b:
         miswire(b, wiring_kw={"en_pin": None})  # the LDO ignores the enable path (e.g. EN_IN tied to VIN)
         res = startup.run(b, su)
     assert any("already" in i and "before the enable edge" in i for i in res.issues)

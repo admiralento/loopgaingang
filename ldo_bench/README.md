@@ -13,7 +13,7 @@ Bench automation for characterizing our LDO (the JAFWAK board) and the TPS7A7001
 | Quiescent current | `iq` | supply current enabled / disabled vs VIN |
 | Enable thresholds | `enable-sine` | enable comparator VT+, VT-, hysteresis; `--shape square`: EN_AIN → EN_OUT propagation delay (JAFWAK) |
 | Enable switching current | `enable-current` | EN_VDD current (DMM in place of J1 9-11) vs the frequency of a square on EN_AIN, 10 Hz – 1 MHz → charge per cycle (JAFWAK) |
-| Startup | `enable-startup` | VOUT / VREF / current after the enable edge (JAFWAK) |
+| Startup | `enable-startup` | VOUT, input and output current after the enable edge (AD2 on R13 / R1, VOUT on the 54621A; JAFWAK) |
 | Temperature | `temp` | TMP235 (J13 pin 5), VREF and VOUT over time → tempco from stable plateaus (JAFWAK) |
 | Bench checks | `discover`, `psu-check`, `loadbank-check`, `smoke` | instruments found, supply accuracy, load bank wiring, quick power-up |
 | Supply control | `psu-hold`, `psu-sweep` | hold a voltage and current limit until Ctrl-C (prints V / I, saves nothing); step the voltage and save V / I |
@@ -84,7 +84,7 @@ uv run ldo-bench enable-sine --output vout --shape triangle --freq 0.1   # VOUT 
 uv run ldo-bench line-reg --split-rails                  # dropout Method B: BGR_VDD / OTA_VDD on PSU OUT2
 uv run ldo-bench enable-current                          # --fstart 10 --fstop 1e6 (EN_VDD current vs frequency)
 uv run ldo-bench temp                                    # --minutes 30 --interval 2 (Ctrl-C ends it, data kept)
-uv run ldo-bench enable-startup                          # --ch2 iin
+uv run ldo-bench enable-startup                          # --channels iin (AD2 only, no 54621A)
 uv run ldo-bench load-reg --vref ext                     # JP2 removed: PSU OUT2 on VREF_IN
 uv run ldo-bench load-reg --enable dio                   # EN driven from the AD2, not tied on
 uv run ldo-bench compare results/load-reg/<bgr run> results/load-reg/<extref run>
@@ -161,7 +161,7 @@ Each run writes a folder under `results/<test>/`, e.g. `results/load-tran/202611
 | psu-check, loadbank-check, load-reg, line-reg, load-tran (demo board) | yes, valid results in [bench-log.md](docs/bench-log.md); load-reg's AD2 / DMM agreement check (2026-11-10) has only flagged on the simulator |
 | E3648A over GPIB (UsbGpib), 34401A over RS-232, AD2 DC / DIO / triggered capture | yes |
 | enable-sine `--shape triangle` (JAFWAK) | yes (2026-11-12), valid; the 1 kHz sine hit an AD2 arm race, fixed but not yet re-run |
-| line-tran, psrr, iq, enable-startup | simulator only (line-tran / psrr on the split-supply U2 since 2026-11-13) |
+| line-tran, psrr, iq, enable-startup (`--channels currents` with the 54621A since 2026-11-14) | simulator only (line-tran / psrr on the split-supply U2 since 2026-11-13) |
 | `buffer-check` (added 2026-11-13) | simulator only: run it first on the reworked board, chip disconnected |
 | `--vref ext` (PSU OUT2 on VREF_IN) and `compare` | simulator only |
 | `vref-line`, `temp`, `enable-sine --shape square`, `--enable dio` (added 2026-11-13) | simulator only |

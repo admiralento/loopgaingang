@@ -194,8 +194,9 @@ class DmmConfig(_Instrument):
 class XScopeConfig(_Instrument):
     """[xscope]: Agilent 54621A on RS-232, capturing each transient edge alongside the AD2 as a cross-check.
 
-    Optional: only load-tran and line-tran use it, and if it can't be opened the run goes ahead with
-    the AD2 alone. --no-xscope skips it for one run.
+    load-tran and line-tran use it as an optional cross-check: if it can't be opened the run goes ahead
+    with the AD2 alone (--no-xscope skips it for one run). enable-startup 'currents' reads VOUT with it
+    (its own range and EN_AIN trigger from [startup]); without it that run is invalid.
     """
 
     enabled: bool = Field(True, description="false = don't use the cross-check scope")
@@ -770,7 +771,13 @@ class EnCurrentConfig(_Model):
 
 
 class StartupConfig(_Model):
-    """[startup] (enable-startup): step the enable line and record VOUT and the BGR (VREF) / supply current."""
+    """[startup] (enable-startup): step the enable line and record VOUT and the supply currents.
+
+    channels 'currents': AD2 scope 1 across R13 (input current), scope 2 across R1 (output current),
+    VOUT on the [xscope] 54621A (its other channel on EN_AIN, 1.8 V logic, its trigger). 'iin' / 'iout':
+    the AD2 alone, scope 1 on VOUT and scope 2 across one resistor. No mode puts a scope on VREF:
+    the scope's input loads the BGR and pulls VREF (and VOUT, which follows it) down.
+    """
 
     vin: float = Field(gt=0, description="PSU voltage on VIN (V)")
     load_code: int = Field(0, ge=0, description="Load during the edges (0 = none)")
@@ -783,18 +790,43 @@ class StartupConfig(_Model):
     averages: int = Field(8, ge=1, description="Captures averaged per edge")
     off_time: float = Field(0.05, ge=0, description="Time disabled before each enable edge (s)")
     on_time: float = Field(0.05, ge=0, description="Time enabled before each disable edge (s)")
-    ch2: Literal["vref", "iin", "iout"] = Field(
-        "vref", description="Scope 2: VREF at TP3 (BGR), or across R13 (input current) / R1 (output current)"
+    channels: Literal["currents", "iin", "iout"] = Field(
+        "currents",
+        description=(
+            "'currents' = input (R13) and output (R1) current on the AD2, VOUT on the 54621A; "
+            "'iin' / 'iout' = the AD2 alone: VOUT and one current"
+        ),
     )
-    ch2_range: float = Field(5.0, gt=0, description="Scope 2 peak-to-peak range (V); 5 is the AD2's finest")
+    sense_range: float = Field(
+        5.0, gt=0, description="AD2 peak-to-peak range across the sense resistors (V); 5 is its finest"
+    )
     sense_ohm: float = Field(0.1, gt=0, description="R13 / R1 value (ohm)")
+    xscope_vout_range: float = Field(
+        1.6, gt=0, description="'currents': 54621A full-scale range on VOUT (V), centred on vout_nominal / 2"
+    )
+    xscope_trigger_high: float = Field(
+        1.8,
+        gt=0,
+        description="'currents': logic-high level on EN_AIN (V), where the 54621A triggers (at half of it)",
+    )
     settle_fraction: float = Field(
         0.02, gt=0, lt=1, description="Settled = within this fraction of the final level"
     )
-    vref_nominal: float | None = Field(
-        None, gt=0, description="Expected BGR output (V) for the setup check; None = no check"
-    )
     timeout: float = Field(5.0, gt=0, description="Max wait for one AD2 trigger (s)")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _renamed(cls, data):
+        # ch2 = "vref" put a scope on VREF, which loads the BGR: say what replaced it instead of
+        # only "extra inputs are not permitted"
+        if isinstance(data, dict):
+            for old in ("ch2", "ch2_range", "vref_nominal"):
+                if old in data:
+                    raise ValueError(
+                        f"startup.{old} was removed (2026-11-14): use startup.channels = 'currents' | 'iin' | "
+                        "'iout' and startup.sense_range. VREF is no longer probed (a scope on it loads the BGR)"
+                    )
+        return data
 
 
 # Supply rail the DMM measures in iq 'series' mode: 'total' = between PSU and VIN_DC; the others are

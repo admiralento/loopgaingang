@@ -9,6 +9,7 @@ Bring-up plan Tests 1-4 have been run on JAFWAK. These changed since, so their r
 | Test | Command | Why |
 |---|---|---|
 | 2 | `enable-current` | New (replaces `iq --rail en`); not run yet |
+| - | `enable-startup` | Rebuilt 2026-11-14: input and output current on the AD2, VOUT on the 54621A (trigger on EN_AIN); no VREF probe. The two runs that morning had VREF loaded by the scope |
 | 3 | `vref-line` | Now also reads VREF at 10 GOhm and 10 MOhm (the by-hand "VREF level" step) |
 | 3 | `iq --method series --rail bgr` | The wiring printout had the DMM's I and LO the wrong way round on J1 (I belongs on INB, pin 3): a run that followed it read negative and was marked `_INVALID` |
 | 4 | `iq` (shunt) | The load-check wiring (VS_BUFF, J10, DIO 0 -> B0) wasn't printed; the 2026-11-13 run failed its load check for that reason |
@@ -17,6 +18,20 @@ Bring-up plan Tests 1-4 have been run on JAFWAK. These changed since, so their r
 
 New, for Tests 5 onward (not run yet): `enable-sine --output vout` (Test 5), `line-reg --split-rails`
 (Test 7, Method B), `--ext-load-ohm` (Tests 6-8 with 1.2 kOhm on J5).
+
+## 2026-11-14: `enable-startup` measures both currents (no hardware run)
+
+- **What changed:** `--channels currents` is the new default.
+  - AD2 scope 1 across R13 (input current), scope 2 across R1 (output current)
+  - 54621A ch1 on OUTA (VOUT), ch2 on EN_AIN (TP6); the 54621A triggers on EN_AIN at 0.9 V (1.8 V logic)
+  - `iin` / `iout` keep the AD2-only layout
+  - `--ch2 vref` is gone
+- **Window:** JAFWAK's default window is now 10 ms.
+- **Not checked on hardware:**
+  - the 54621A triggering on EN_AIN
+  - the AD2 differential inputs across the shunts
+  - whether the 10 mA supply limit clips the startup inrush
+- **Resolution:** on 0.1 Ω the AD2 resolves current steps above about 12 mA only. Expect the inrush peak and nothing finer.
 
 ## 2026-11-14: `enable-startup` on JAFWAK: a scope on VREF pulls it down
 

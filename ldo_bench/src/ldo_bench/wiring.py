@@ -35,6 +35,18 @@ def scope(cfg: BenchConfig, which: str, plus: str, minus: str | None = None, not
     )
 
 
+def xscope(cfg: BenchConfig, which: str, plus: str, minus: str | None = None, note: str = "") -> str:
+    """One 54621A channel ('vout' or 'ref', numbered by [xscope]): its probe tip and ground on one line."""
+    xc = cfg.xscope
+    if xc is None:
+        raise ValueError("no [xscope] section")
+    ch = xc.vout_channel if which == "vout" else xc.ref_channel
+    return (
+        f"54621A ch{ch}+ -> {plus}, 54621A ch{ch} ground -> {minus or cfg.board.probe_gnd}"
+        f"{f' ({note})' if note else ''}"
+    )
+
+
 def scope_vout(cfg: BenchConfig, note: str = "") -> str:
     """Scope on VOUT ([board] vout_probe)."""
     return scope(cfg, "vout", cfg.board.vout_probe, note=note)
