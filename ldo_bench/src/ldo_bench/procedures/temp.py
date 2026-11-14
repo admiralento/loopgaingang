@@ -131,6 +131,7 @@ def wiring(bench: Bench, tc: TempConfig) -> list[str]:
 def run(bench: Bench, tc: TempConfig) -> TempResult:
     """Log until tc.duration or Ctrl-C (see the module docstring). Setup problems go in `issues`."""
     a = bench.cfg.ad2
+    bench.loadbank.require([tc.load_code])  # dut.i_max with any external load, before power-up
     bench.confirm_wiring("temperature log", wiring(bench, tc), ref_probe=("tmp", 0), dmm_probe="vref")
     setups = {
         a.vout_channel: ChannelSetup(a.vout.range, a.vout.offset),

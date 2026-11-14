@@ -152,6 +152,7 @@ edges = ["rising", "falling"]
 [board]                      # every wiring line names these: silkscreen label + connector pin (PCB file, 2026-11-13)
 vin_dc = "VIN_DC (J7)"
 supply_gnd = "GND (J11)"
+ext_load = "VOUT (J5) to GND (J12)"
 dc_jumpers = ['JP4 2-3 "DC" (VIN from VIN_DC; nothing on VIN_FG (J3))']
 vin_probe = "J13 pin 1 (INA)"
 vout_probe = "J13 pin 4 (OUTA)"  # before R1 (0.1 Ohm): the chip's own output

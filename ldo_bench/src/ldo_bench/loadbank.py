@@ -79,6 +79,18 @@ class LoadBank:
         """The allowed code with the most current (not necessarily the highest number)."""
         return max(self.allowed_codes(), key=self.conductance)
 
+    def require(self, codes: list[int]) -> None:
+        """InstrumentError, before anything powers up, if any of `codes` would draw more than i_max
+        (the external resistor, loadbank.external_ohm, included). ValueError if one is out of range."""
+        for code in codes:
+            if not self.allowed(code):
+                ext = self.cfg.external_ohm
+                with_ext = f" with the {ext:g} ohm external load" if ext else ""
+                raise InstrumentError(
+                    f"load code {code}{with_ext} would draw ~{self.current(code, self.vout) * 1e3:.1f} mA, above "
+                    f"dut.i_max = {self.i_max * 1e3:.1f} mA: use a lower code or a bigger resistor"
+                )
+
     def set(self, code: int) -> None:
         """Switch the bank to `code`. InstrumentError if it's above i_max, ValueError if out of range."""
         if not self.allowed(code):

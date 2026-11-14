@@ -232,6 +232,15 @@ class LoadBankConfig(_Model):
     resistors: list[float] = Field(description="Load resistor for each bit, LSB first (ohm)")
     switch_resistance: float = Field(0.0, ge=0, description="Per-switch on-resistance (ohm)")
     active_high: bool = Field(True, description="true = DIO high switches the bit's resistor in")
+    external_ohm: float | None = Field(
+        None,
+        gt=0,
+        description=(
+            "A fixed resistor from VOUT to GND (ohm), always connected (e.g. 1.2 kOhm on JAFWAK's J5 for "
+            "~1 mA): its current is added to every code's estimate and to the dut.i_max check. "
+            "None = none (--ext-load-ohm sets it)"
+        ),
+    )
 
     @model_validator(mode="after")
     def _check(self) -> LoadBankConfig:
@@ -251,7 +260,12 @@ class LoadBankConfig(_Model):
         return (1 << len(self.dio_pins)) - 1
 
     def conductance(self, code: int) -> float:
-        """Total conductance (S) switched in for `code` (no range check: LoadBank does that)."""
+        """Total conductance (S) on VOUT for `code`, the external resistor included (no range check:
+        LoadBank does that)."""
+        return self.bank_conductance(code) + (1.0 / self.external_ohm if self.external_ohm else 0.0)
+
+    def bank_conductance(self, code: int) -> float:
+        """Conductance (S) of the bank's resistors alone for `code`."""
         return sum(
             1.0 / (r + self.switch_resistance) for bit, r in enumerate(self.resistors) if code >> bit & 1
         )
@@ -577,6 +591,7 @@ class BoardConfig(_Model):
 
     vin_dc: str = Field("VIN (DC input)", description="Where the PSU's + goes for the DC tests")
     supply_gnd: str = Field("GND", description="Where the PSU's - goes")
+    ext_load: str = Field("VOUT to GND", description="Where an external load resistor (--ext-load-ohm) goes")
     dc_jumpers: list[str] = Field(default_factory=list, description="Jumpers that route VIN from vin_dc")
     vin_probe: str = Field("VIN at the board", description="Scope point for VIN")
     vout_probe: str = Field("VOUT at the output pins", description="Scope point for VOUT")
@@ -1181,8 +1196,10 @@ class BenchConfig(_Model):
         def code_ok(name: str, code: int) -> None:
             if not 0 <= code <= max_code:
                 raise ValueError(f"{name} = {code} is outside the load bank range 0..{max_code}")
+            # the bank alone: the external resistor (--ext-load-ohm) is checked against dut.i_max per
+            # run, for the codes that run uses (LoadBank.require), before anything powers up
             if self.dut.i_max is not None:
-                i = self.dut.vout_nominal * lb.conductance(code)
+                i = self.dut.vout_nominal * lb.bank_conductance(code)
                 if i > self.dut.i_max:
                     raise ValueError(
                         f"{name} = {code} draws ~{i * 1e3:.1f} mA at {self.dut.vout_nominal} V, above "

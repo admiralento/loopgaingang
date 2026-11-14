@@ -242,6 +242,8 @@ class Bench:
             self.sim_model.psu_to = psu_to
             self.sim_model.ch1_probe = ch1_probe
             self.sim_model.en_pin = en_pin
+        if (ohm := self.cfg.loadbank.external_ohm) is not None:
+            lines = [*lines, wiring.ext_load(self.cfg, ohm)]
         if self.vref_external:
             lines = [*lines, *self.vref_wiring()]
             if self.sim_model is not None:  # the simulated operator followed the instructions
@@ -913,6 +915,8 @@ def open_bench(
 
         lb = cfg.loadbank
         model = LdoModel(cfg.dut.vout_nominal, lb.resistors, lb.dio_pins, lb.active_high)
+        if lb.external_ohm:  # the simulated operator fitted the external resistor
+            model.external_g = 1.0 / lb.external_ohm
         from ldo_bench.instruments.sim import SimDmm, SimXScope
 
         sim_ad2 = SimAnalogDiscovery(model, cfg.ad2.vout_channel)

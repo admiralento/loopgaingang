@@ -137,6 +137,7 @@ def run(bench: Bench, lr: LineRegConfig) -> LineRegResult:
     """
     bank = bench.loadbank
     vins = sweep_points(lr)
+    bench.loadbank.require([lr.load_code])  # dut.i_max with any external load, before power-up
     bench.confirm_wiring("line regulation", wiring(bench, lr), ref_probe=("vin", 0))
     bench.set_psu_limit(high=lr.high_current)  # psu.high_current_limit if the section asks
 
@@ -237,6 +238,11 @@ def run(bench: Bench, lr: LineRegConfig) -> LineRegResult:
             f"the DMM autoranged inside the fit ({' / '.join(f'{g:g} V' for g in ranges)} ranges, switching near "
             f"VIN {switch:.2f} V): a range-to-range offset may bend the slope. Fixing dmm.range avoids it, at the "
             "cost of resolution"
+        )
+    if np.isfinite(reg.dropout_vin):
+        notes.append(
+            "is the knee the pass device or the BGR? Compare it with vref-line's BGR minimum VIN (bring-up "
+            "plan Test 3): a knee at or above it means the BGR sets the dropout"
         )
     i_load = bank.current(lr.load_code, bench.cfg.dut.vout_nominal)
     return LineRegResult(

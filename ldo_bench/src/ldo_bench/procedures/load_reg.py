@@ -103,6 +103,7 @@ def run(bench: Bench, lr: LoadRegConfig) -> LoadRegResult:
     """
     bank = bench.loadbank
     codes = lr.codes or bank.allowed_codes()  # [] = every code within dut.i_max
+    bench.loadbank.require(codes)  # dut.i_max with any external load, before power-up
     bench.confirm_wiring("load regulation", wiring(bench), ref_probe=("vin", 0))
     bench.set_psu_limit(high=lr.high_current)  # psu.high_current_limit if the section asks
 
@@ -176,6 +177,19 @@ def run(bench: Bench, lr: LoadRegConfig) -> LoadRegResult:
             f"the DMM autoranged during the sweep ({' / '.join(f'{g:g} V' for g in ranges)} ranges): a "
             "range-to-range offset may bend the fit. Fixing dmm.range avoids it, at the cost of resolution"
         )
+    cfg = bench.cfg
+    if not lr.codes and (ext := cfg.loadbank.external_ohm) and cfg.dut.i_max is not None:
+        # codes the bank alone allows, which the external resistor pushed over dut.i_max
+        bank_ok = [
+            c
+            for c in range(bank.max_code + 1)
+            if cfg.dut.vout_nominal * cfg.loadbank.bank_conductance(c) <= cfg.dut.i_max
+        ]
+        if skipped := [c for c in bank_ok if c not in codes]:
+            notes.append(
+                f"with the {ext:g} ohm external load, code(s) {', '.join(map(str, skipped))} would exceed "
+                "dut.i_max, so the sweep left them out"
+            )
     if lr.psu_readback:
         issues += _load_current_issues(bench, rows)
     else:

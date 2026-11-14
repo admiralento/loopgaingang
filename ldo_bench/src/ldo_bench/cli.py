@@ -80,6 +80,13 @@ ConfigOpt = Annotated[
         help="Bench TOML config (default: configs/jafwak.toml)",
     ),
 ]
+ExtLoadOpt = Annotated[
+    float | None,
+    typer.Option(
+        "--ext-load-ohm",
+        help="A fixed resistor on VOUT (ohm, e.g. 1200 on J5): its current is added to every load estimate",
+    ),
+]
 SimOpt = Annotated[bool, typer.Option("--sim", help="Use simulated instruments (no hardware)")]
 SaveSimOpt = Annotated[
     bool, typer.Option("--save-sim", help="With --sim: save the run folder anyway (marked SIM)")
@@ -166,6 +173,11 @@ def _load(path: Path, verbose: bool = False) -> BenchConfig:
         return load_config(path)
     except ValidationError as e:
         _fail(f"Invalid config {path}:\n{e}")
+
+
+def _ext_load(cfg: BenchConfig, ohm: float | None) -> BenchConfig:
+    """The config with loadbank.external_ohm set (--ext-load-ohm), re-validated (dut.i_max); unchanged if None."""
+    return cfg if ohm is None else _override(cfg, "loadbank", external_ohm=ohm)[0]
 
 
 def _section(cfg: BenchConfig, name: str):
@@ -744,6 +756,7 @@ def psu_sweep(
 def load_reg(
     config: ConfigOpt = DEFAULT_CONFIG,
     vin: Annotated[float | None, typer.Option(help="Override load_reg.vin (V)")] = None,
+    ext_load_ohm: ExtLoadOpt = None,
     out: OutOpt = Path("results"),
     sim: SimOpt = False,
     save_sim: SaveSimOpt = False,
@@ -758,7 +771,7 @@ def load_reg(
     """Load regulation: step the load bank at fixed VIN, record VOUT vs load current."""
     from ldo_bench.procedures import load_reg as proc
 
-    cfg, lr = _override(_load(config, verbose), "load_reg", vin=vin)
+    cfg, lr = _override(_ext_load(_load(config, verbose), ext_load_ohm), "load_reg", vin=vin)
     _run(
         cfg,
         config,
@@ -782,6 +795,7 @@ def line_reg(
     vin_from: Annotated[
         VinFrom | None, typer.Option(help="VIN measurement: ad2 (scope at the board) or psu (its readback)")
     ] = None,
+    ext_load_ohm: ExtLoadOpt = None,
     out: OutOpt = Path("results"),
     sim: SimOpt = False,
     save_sim: SaveSimOpt = False,
@@ -796,7 +810,7 @@ def line_reg(
     """Line regulation: sweep VIN at a fixed load; reports dVOUT/dVIN and the dropout knee."""
     from ldo_bench.procedures import line_reg as proc
 
-    cfg = _load(config, verbose)
+    cfg = _ext_load(_load(config, verbose), ext_load_ohm)
     cfg, lr = _override(
         cfg, "line_reg", load_code=_load_code(cfg, load), vin_source=vin_from and vin_from.value
     )
@@ -926,6 +940,7 @@ def load_tran(
     averages: AvgOpt = None,
     window_ms: WindowOpt = None,
     plot_us: PlotUsOpt = None,
+    ext_load_ohm: ExtLoadOpt = None,
     out: OutOpt = Path("results"),
     sim: SimOpt = False,
     save_sim: SaveSimOpt = False,
@@ -940,7 +955,7 @@ def load_tran(
     """Load transient: step the load bank, capture VOUT, report peak and settling time."""
     from ldo_bench.procedures import load_tran as proc
 
-    cfg = _load(config, verbose)
+    cfg = _ext_load(_load(config, verbose), ext_load_ohm)
     n = _section(cfg, "load_tran").n_samples
     cfg, lt = _override(
         cfg,
@@ -1151,6 +1166,7 @@ def enable_startup(
     load: Annotated[
         str | None, typer.Option(help="Load during the edges: code or current, e.g. 4 or 19mA")
     ] = None,
+    ext_load_ohm: ExtLoadOpt = None,
     out: OutOpt = Path("results"),
     sim: SimOpt = False,
     save_sim: SaveSimOpt = False,
@@ -1162,7 +1178,7 @@ def enable_startup(
     """Enable the LDO through the enable block: VOUT and VREF (or current) startup / shutdown timing."""
     from ldo_bench.procedures import startup as proc
 
-    cfg = _load(config, verbose)
+    cfg = _ext_load(_load(config, verbose), ext_load_ohm)
     cfg, su = _override(
         cfg,
         "startup",
@@ -1192,6 +1208,7 @@ def temp(
     minutes: Annotated[float | None, typer.Option(help="Log length (min), at most 120")] = None,
     interval: Annotated[float | None, typer.Option(help="Time between samples (s)")] = None,
     vin: Annotated[float | None, typer.Option(help="Override temp.vin (V)")] = None,
+    ext_load_ohm: ExtLoadOpt = None,
     out: OutOpt = Path("results"),
     sim: SimOpt = False,
     save_sim: SaveSimOpt = False,
@@ -1209,7 +1226,7 @@ def temp(
     from ldo_bench.procedures import temp as proc
 
     cfg, tc = _override(
-        _load(config, verbose),
+        _ext_load(_load(config, verbose), ext_load_ohm),
         "temp",
         duration=None if minutes is None else minutes * 60,
         interval=interval,

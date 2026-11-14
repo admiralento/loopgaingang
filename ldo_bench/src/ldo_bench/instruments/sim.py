@@ -62,6 +62,7 @@ class LdoModel:
     resistors: list[float]  # (ohm) load bank resistors, one per DIO pin below
     dio_pins: list[int]  # AD2 DIO switching each load resistor
     active_high: bool = True  # True: DIO high switches the load on
+    external_g: float = 0.0  # S, a fixed resistor on VOUT (loadbank.external_ohm)
     r_out: float = 0.05  # ohm, DC load regulation
     line_reg: float = 0.5e-3  # V/V, DC line regulation
     dropout: float = 0.10  # V, VIN - VOUT in dropout at zero load
@@ -218,8 +219,8 @@ class LdoModel:
         return self.psrr_h_dc * (1 + 1j * f / self.psrr_fz) / (1 + 1j * f / self.psrr_fp)
 
     def conductance(self) -> float:
-        """Total load conductance (S) of the load resistors switched on by the DIO pins."""
-        return sum(
+        """Total load conductance (S): the resistors switched on by the DIO pins, plus external_g."""
+        return self.external_g + sum(
             1.0 / r
             for pin, r in zip(self.dio_pins, self.resistors, strict=True)
             if self.dio.get(pin, not self.active_high) == self.active_high  # released pin = load off

@@ -231,6 +231,7 @@ def run(bench: Bench, su: StartupConfig) -> StartupResult:
     """
     a = bench.cfg.ad2
     nom = bench.cfg.dut.vout_nominal
+    bench.loadbank.require([su.load_code])  # dut.i_max with any external load, before power-up
     bench.confirm_wiring(
         "enable startup",
         wiring(bench, su),

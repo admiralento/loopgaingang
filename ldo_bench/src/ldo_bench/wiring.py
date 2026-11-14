@@ -77,6 +77,12 @@ def load_bank(cfg: BenchConfig, *, supply_given: bool = False) -> list[str]:
     ]
 
 
+def ext_load(cfg: BenchConfig, ohm: float) -> str:
+    """The external load resistor's line (--ext-load-ohm), e.g. "1.2 kOhm ... (always connected)"."""
+    value = f"{ohm / 1e3:g} kOhm" if ohm >= 1e3 else f"{ohm:g} Ohm"
+    return f"{value} external load from {cfg.board.ext_load} (always connected)"
+
+
 def enable_dio(cfg: BenchConfig) -> list[str]:
     """The AD2-driven enable path: jumpers, then one line per DIO / supply."""
     b, e = cfg.board, cfg.enable
