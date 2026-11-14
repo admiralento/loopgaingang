@@ -16,7 +16,10 @@ within two sample intervals is reported as "under" that, like the edge times: us
 frequency (e.g. 100 kHz) so the capture runs at the AD2's 100 MS/s.
 
 Scope ref channel on TP6 (EN_AIN, also the trigger), scope vout channel on J8.2 (EN_OUT); both on
-the 5 V range. The thresholds are read from EN_AIN as measured at the pin, so R23 and the
+the 5 V range. With output "vout" (bring-up plan Test 5, the LDO tracking a slow triangle) scope 1
+is on OUTA instead and J8 is on "LDO", so the thresholds are the EN_AIN levels where VOUT turns on
+and off through the whole enable path. They include the LDO's startup and shutdown time (~6 /
+~170 ms), so the wave must be slow (0.1 Hz: 0.36 V/s, ~60 mV of shift on the turn-off level). The thresholds are read from EN_AIN as measured at the pin, so R23 and the
 wavegen's own error don't matter.
 
 run() steps:
@@ -81,6 +84,12 @@ class EnSineResult:
     issues: list[str] = field(default_factory=list)  # setup problems: the run isn't a valid measurement
     notes: list[str] = field(default_factory=list)  # real findings worth a look (chatter, weak VOH)
     delays: list[PropagationDelays] = field(default_factory=list)  # square only: one per capture
+    output: str = "en_out"  # what scope 1 watched: "en_out" (J8 pin 2) or "vout" (OUTA)
+
+    @property
+    def out_name(self) -> str:
+        """The output's name in the report and plot."""
+        return "VOUT" if self.output == "vout" else "EN_OUT"
 
     @property
     def square(self) -> bool:
@@ -173,6 +182,7 @@ class EnSineResult:
             "notes": self.notes,
             "vin": self.vin,
             "shape": self.shape,
+            "output": self.output,
             "frequency": self.frequency,
             "sample_rate": self.sample_rate,
             "sine_low": self.low,
@@ -183,8 +193,9 @@ class EnSineResult:
 
     def report(self) -> str:
         head = (
-            f"Enable block, {self.shape} {self.low:.2f}-{self.high:.2f} V at {self.frequency:g} Hz into EN_AIN, "
-            f"VIN {self.vin:.2f} V, {len(self.captures)} captures:"
+            f"Enable {'path to VOUT' if self.output == 'vout' else 'block'}, {self.shape} {self.low:.2f}-"
+            f"{self.high:.2f} V at {self.frequency:g} Hz into EN_AIN, {self.out_name} on scope 1, VIN "
+            f"{self.vin:.2f} V, {len(self.captures)} captures:"
         )
         if self.issues:
             return f"{head}\n  {INVALID}"
@@ -200,6 +211,13 @@ class EnSineResult:
                 head,
                 f"  propagation delay  output rising {self._delay('lh')} / falling {self._delay('hl')}{inv}",
                 "                     (EN_AIN midpoint -> output midpoint; thresholds aren't measured with a square)",
+            ]
+        elif self.output == "vout":
+            lines = [
+                head,
+                f"  EN_AIN level where VOUT turns on   {mv('vt_rise')}",
+                f"  EN_AIN level where VOUT turns off  {mv('vt_fall')}",
+                f"  difference                         {np.nanmean(h) * 1e3:8.1f} mV",
             ]
         else:
             lines = [
@@ -232,6 +250,18 @@ class EnSineResult:
 def wiring(bench: Bench, es: EnSineConfig) -> list[str]:
     """Wiring lines shown before the run, one connection per line (JAFWAK)."""
     cfg = bench.cfg
+    if es.output == "vout":
+        return [
+            *w.psu_on_vin(cfg),
+            *w.j1_rails(),  # all four: VDD (J1 5-7) must be up, or the ESD diodes conduct
+            'Fit J6 5-6 "FG" (EN_FG -> EN_AIN; nothing else on J6)',
+            'Fit J8 1-2 "LDO" (EN_OUT -> EN_IN)',
+            'Fit J8 9-10 "LDO" (~EN_OUT -> ~EN_IN)',
+            f"AD2 W{es.wavegen_channel} -> EN_FG (J2)",
+            w.scope(cfg, "ref", "EN_AIN (TP6)", note="the trigger"),
+            w.scope_vout(cfg),
+            w.ad2_gnd(cfg),
+        ]
     return [
         *w.psu_on_vin(cfg),
         *w.j1_rails(),  # all four: VDD (J1 5-7) must be up, or the ESD diodes conduct
@@ -250,8 +280,13 @@ def run(bench: Bench, es: EnSineConfig) -> EnSineResult:
     """
     a = bench.cfg.ad2
     lo, hi = es.low, es.sine_high
+    on_vout = es.output == "vout"
     bench.confirm_wiring(
-        f"enable block ({es.shape})", wiring(bench, es), ref_probe=("en_ain", 0), ch1_probe="en_out"
+        f"enable {'path to VOUT' if on_vout else 'block'} ({es.shape})",
+        wiring(bench, es),
+        ref_probe=("en_ain", 0),
+        ch1_probe="vout" if on_vout else "en_out",
+        ldo_on_en_out=on_vout,
     )
     # 5 V range (+/-2.5 V) on both: covers the 0-EN_VDD wave and EN_OUT at the best resolution
     fine = ChannelSetup(bench.FINE_RANGE, 0.0)
@@ -309,8 +344,10 @@ def run(bench: Bench, es: EnSineConfig) -> EnSineResult:
         swing_in = float(np.percentile(x, 98) - np.percentile(x, 2))
         if abs(swing_in - (hi - lo)) > SWING_TOLERANCE * (hi - lo):
             swing_bad.append((k, swing_in))
-        # EN_OUT swings rail to rail of EN_VDD (~VIN) when it works; under 30 % of that it isn't switching
-        if (r.voh - r.vol) < 0.3 * es.vin or r.n_rise == 0:
+        # EN_OUT swings rail to rail of EN_VDD (~VIN) when it works, VOUT 0 to nominal; under 30 % of
+        # that it isn't switching
+        full = bench.cfg.dut.vout_nominal if on_vout else es.vin
+        if (r.voh - r.vol) < 0.3 * full or r.n_rise == 0:
             switch_bad.append((k, r))
 
     def which(bad) -> str:
@@ -324,17 +361,35 @@ def run(bench: Bench, es: EnSineConfig) -> EnSineResult:
         )
     if switch_bad:
         k, r = switch_bad[0]
-        issues.append(
-            f"EN_OUT doesn't switch ({which(switch_bad)}: scope {a.vout_channel} swings {r.voh - r.vol:.2f} V, "
-            f"{r.n_rise} rising edges): is scope {a.vout_channel} on J8.2, and is EN_VDD powered (J1 9-11)?"
+        where = (
+            'on OUTA (J13 pin 4), J8 on 1-2 / 9-10 "LDO", and EN_VDD and VDD powered (J1 9-11, 5-7)'
+            if on_vout
+            else "on J8.2, and is EN_VDD powered (J1 9-11)"
         )
+        issues.append(
+            f"{'VOUT' if on_vout else 'EN_OUT'} doesn't switch ({which(switch_bad)}: scope {a.vout_channel} swings "
+            f"{r.voh - r.vol:.2f} V, {r.n_rise} rising edges): is scope {a.vout_channel} {where}?"
+        )
+    if (
+        on_vout
+        and not switch_bad
+        and (up := bench.vout_issue(results[0].voh, source=f"scope {a.vout_channel}"))
+    ):
+        issues.append(f"with the LDO on, {up} (scope {a.vout_channel} belongs on OUTA, J13 pin 4)")
     notes = []
     if not issues:
         epc = np.nanmean([r.edges_per_cycle for r in results])
         if epc > 1.2:  # a clean comparator gives exactly 1; allow a little for partial cycles
             notes.append(f"EN_OUT toggles {epc:.1f} times per input cycle: it chatters around the threshold")
-        if r0.voh < 0.8 * es.vin:
+        if not on_vout and r0.voh < 0.8 * es.vin:
             notes.append(f"VOH {r0.voh:.2f} V is below 80 % of EN_VDD ({es.vin:.2f} V)")
+        if on_vout:
+            # V/s through the thresholds: the triangle's constant slope, the sine's at its midpoint
+            slope = (2 if es.shape == "triangle" else np.pi) * (hi - lo) * es.frequency
+            notes.append(
+                f"these levels include the LDO's startup and shutdown time: at {slope:.2g} V/s, each 100 ms of "
+                f"shutdown moves the turn-off level by {slope * 0.1 * 1e3:.0f} mV (slow the wave to shrink it)"
+            )
         if es.shape != "square" and np.isfinite(r0.hysteresis) and r0.hysteresis <= 0:
             notes.append("no hysteresis: VT+ is not above VT-")
     t = first.time
@@ -352,6 +407,7 @@ def run(bench: Bench, es: EnSineConfig) -> EnSineResult:
         issues=list(dict.fromkeys(issues)),
         notes=notes,
         delays=delays,
+        output=es.output,
     )
 
 
@@ -460,11 +516,11 @@ def plot(res: EnSineResult, dut: str):
         ax_tr.set_title("Transfer (as measured)", fontsize=10, pad=6)
         plotting.issue_box(ax_out, res.issues)
     ax_in.set_ylabel("EN_AIN (V)")
-    ax_out.set_ylabel("EN_OUT (V)")
+    ax_out.set_ylabel(f"{res.out_name} (V)")
     ax_out.set_xlabel("Time (ms)")
     ax_in.tick_params(labelbottom=False)
     ax_tr.set_xlabel("EN_AIN (V)")
-    ax_tr.set_ylabel("EN_OUT (V)")
+    ax_tr.set_ylabel(f"{res.out_name} (V)")
     title = (
         f"Enable block: {dut}  ·  {res.low:.2f}-{res.high:.2f} V {res.shape} at {res.frequency:g} Hz"
         f"  ·  VIN {res.vin:.2f} V"

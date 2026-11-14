@@ -688,6 +688,13 @@ class EnSineConfig(_Model):
         gt=0,
         description="Max wait for one AD2 trigger (s), on top of one capture window (cycles / frequency)",
     )
+    output: Literal["en_out", "vout"] = Field(
+        "en_out",
+        description=(
+            "What scope 1 watches: EN_OUT (J8 pin 2, the block alone), or VOUT (OUTA, J8 on 'LDO': the "
+            "LDO following EN_AIN through the whole enable path; use a slow triangle, e.g. 0.1 Hz)"
+        ),
+    )
 
     @property
     def sine_high(self) -> float:
@@ -698,6 +705,10 @@ class EnSineConfig(_Model):
     def _check(self) -> EnSineConfig:
         if self.sine_high <= self.low:
             raise ValueError("en_sine.high must be above en_sine.low")
+        if self.output == "vout" and self.shape == "square":
+            raise ValueError(
+                "en_sine: VOUT's timing after an enable edge is enable-startup's job, not a square here"
+            )
         return self
 
 

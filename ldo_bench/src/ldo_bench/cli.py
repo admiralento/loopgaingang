@@ -65,6 +65,7 @@ Ch2 = _choices("Ch2", StartupConfig, "ch2")
 VinFrom = _choices("VinFrom", LineRegConfig, "vin_source")
 To = _choices("To", PsuHoldConfig, "to")
 Measure = _choices("Measure", PsrrConfig, "measure")
+Output = _choices("Output", EnSineConfig, "output")
 
 # The config used when neither -c nor LDO_BENCH_CONFIG names one: the JAFWAK board's, found from the
 # project folder (src/ldo_bench/cli.py -> ldo_bench/configs), so it works from any directory.
@@ -1100,6 +1101,10 @@ def enable_sine(
     ] = None,
     freq: Annotated[float | None, typer.Option(help="Wave frequency (Hz), e.g. 1 for a slow ramp")] = None,
     captures: Annotated[int | None, typer.Option(help="Separate captures (threshold spread)")] = None,
+    output: Annotated[
+        Output | None,
+        typer.Option(help="Scope 1 on en_out (J8 pin 2), or vout (OUTA, J8 on LDO: VOUT tracking EN_AIN)"),
+    ] = None,
     out: OutOpt = Path("results"),
     sim: SimOpt = False,
     save_sim: SaveSimOpt = False,
@@ -1112,7 +1117,12 @@ def enable_sine(
     from ldo_bench.procedures import en_sine as proc
 
     cfg, es = _override(
-        _load(config, verbose), "en_sine", shape=shape and shape.value, frequency=freq, captures=captures
+        _load(config, verbose),
+        "en_sine",
+        shape=shape and shape.value,
+        frequency=freq,
+        captures=captures,
+        output=output and output.value,
     )
     _run(
         cfg,

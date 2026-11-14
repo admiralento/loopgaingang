@@ -118,6 +118,9 @@ class LdoModel:
     sense_ohm: float = 0.1  # ohm, current-sense resistors R13 (input) / R1 (output)
     ch1_probe: str = "vout"  # what the VOUT channel is on: "vout", "en_out" or "vref" (TP3)
     ch1_atten: float = 1.0  # that channel's probe attenuation (10 = a 10x probe)
+    ldo_on_en_out: bool = (
+        False  # J8 1-2 / 9-10 "LDO": the LDO's enable follows EN_OUT (enable-sine --output vout)
+    )
     bgr_psrr_db: float = 60.0  # dB, the BGR's rejection of VIN ripple at VREF (flat)
     awg_wave: dict[int, tuple[str, float, float, float]] = field(
         default_factory=dict
@@ -550,7 +553,12 @@ class SimAnalogDiscovery:
         if w > 1:
             out = np.convolve(out, np.ones(w) / w, mode="same")
         out = out + m.noise(n) * 0.5
-        en_out = out if m.ch1_probe == "en_out" else np.full(n, m.vout_dc()) + m.noise(n)
+        if m.ch1_probe == "en_out":
+            en_out = out
+        elif m.ldo_on_en_out:  # J8 on "LDO": VOUT turns on and off with EN_OUT (startup lag ignored)
+            en_out = np.where(out > vdd / 2, m.vout_nominal, 0.0) + m.noise(n)
+        else:
+            en_out = np.full(n, m.vout_dc()) + m.noise(n)
         # the ref channel shows the wave only if it is on EN_AIN (TP6); elsewhere, that DC level
         ref = ain if m.ref_probe[0] == "en_ain" else np.full(n, m.ref_value())
         return self._put(en_out, ref + m.noise(n) * 0.25, rate, i0, True)
