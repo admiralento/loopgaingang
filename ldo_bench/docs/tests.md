@@ -57,15 +57,19 @@ Lists every instrument it can reach over VISA (GPIB, USB), RS-232 and Prologix a
 
 ### `loadbank-check`: does each DIO pin switch the right resistor?
 - **Wiring:** the load bank straight on the supply, no LDO.
-  - PSU OUT1 + -> load bank VIN (J5), PSU - -> load bank GND (J6)
+  - `--current-from dmm` (default): PSU OUT1 + -> DMM I (3A/mA jack), DMM LO (COM) -> load bank VIN (J5); PSU - -> load bank GND (J6)
+  - `--current-from psu`: PSU OUT1 + -> load bank VIN (J5), PSU - -> load bank GND (J6)
   - AD2 DIO [0, 1, 2, 3, 4] -> load bank J0..J4
   - AD2 GND -> load bank GND (the FET gates are driven relative to it)
-- **Does:** at `loadbank_check.voltage` (1.0 V by default; 1.2 V on JAFWAK, where B4's 82 Ω draws 14.6 mA, over the 10 mA normal limit, so it uses the 60 mA high limit), it reads the supply current with every bit off. Then it turns on each bit alone and compares the extra current with V/R for that bit.
-  - The no-load current is subtracted first, which cancels the supply's current-readback offset.
+- **Does:** at `loadbank_check.voltage` (1.0 V by default; 1.2 V on JAFWAK, where B4's 82 Ω draws 14.6 mA, over the 10 mA normal limit, so it uses the 60 mA high limit), it reads the current with every bit off. Then it turns on each bit alone and compares the extra current with V/R for that bit.
+  - **Current from the DMM** (default): the 34401A on DC amps in series, on its 1 A range. I believe that range's burden is ~0.1 Ω, versus ~5 Ω on the 10 / 100 mA ranges, which would drop ~70 mV at 15 mA; both figures are from memory, not checked. The supply's readback is recorded beside it, and a note says if it is more than 5 % from the DMM. `--current-from psu` uses the supply's readback alone.
+  - The no-load current is subtracted first, which cancels the meter's offset.
+  - **Pass:** within 10 % of V/R, plus 0.05 mA with the DMM or 0.3 mA with the supply's readback (its repeats scattered ~0.05 mA on JAFWAK). That is small enough that a dead 1 mA B0 fails; the old 1.5 mA let it pass.
   - `dut.i_max` doesn't apply here, since no DUT is connected.
 - **Diagnoses:**
   - a bit that draws nothing (open wire, missing ground, bad solder)
   - a DIO pin that seems to be wired to a different J header
+  - every bit off by the same factor (within 5 %): not wiring but the voltage at the bank or the current reading. JAFWAK read 64–65 % on every bit on 2026-11-14, which the old diagnosis reported as swapped wires
 - **Note:** J0–J4 carry only the gate signal, with no ground. Without the AD2 GND wire nothing switches.
 - **Config:** `[loadbank_check]` (`high_current = true` on JAFWAK: see [Supply current limit](#supply-current-limit)).
 

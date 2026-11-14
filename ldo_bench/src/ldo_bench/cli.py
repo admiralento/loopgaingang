@@ -40,6 +40,7 @@ from ldo_bench.config import (
     EnSineConfig,
     IqConfig,
     LineRegConfig,
+    LoadBankCheckConfig,
     PsuHoldConfig,
     load_config,
 )
@@ -61,6 +62,7 @@ Method = _choices("Method", IqConfig, "method")
 Rail = _choices("Rail", IqConfig, "rail")
 VinFrom = _choices("VinFrom", LineRegConfig, "vin_source")
 To = _choices("To", PsuHoldConfig, "to")
+CurrentFrom = _choices("CurrentFrom", LoadBankCheckConfig, "current_from")
 Output = _choices("Output", EnSineConfig, "output")
 
 # The config used when neither -c nor LDO_BENCH_CONFIG names one: the JAFWAK board's, found from the
@@ -533,6 +535,12 @@ def psu_check(
 def loadbank_check(
     config: ConfigOpt = DEFAULT_CONFIG,
     voltage: Annotated[float | None, typer.Option(help="PSU voltage across the bank (V, max 1.5)")] = None,
+    current_from: Annotated[
+        CurrentFrom | None,
+        typer.Option(
+            help="dmm: the DMM on DC amps in series with the bank (default); psu: the supply's readback"
+        ),
+    ] = None,
     out: OutOpt = Path("results"),
     sim: SimOpt = False,
     save_sim: SaveSimOpt = False,
@@ -544,7 +552,14 @@ def loadbank_check(
     """Check the AD2 DIO -> load bank wiring with the bank straight across the PSU (no LDO)."""
     from ldo_bench.procedures import loadbank_check as proc
 
-    cfg, lc = _override(_load(config, verbose), "loadbank_check", voltage=voltage)
+    cfg, lc = _override(
+        _load(config, verbose),
+        "loadbank_check",
+        voltage=voltage,
+        current_from=current_from and current_from.value,
+    )
+    if lc.current_from == "dmm":
+        _need_dmm(cfg, "loadbank-check --current-from dmm")
     _run(
         cfg,
         config,
@@ -557,7 +572,7 @@ def loadbank_check(
         ad=ad_serial,
         yes=yes,
         passed=lambda r: r.passed,
-        use_dmm=False,
+        use_dmm=lc.current_from == "dmm",
     )
 
 

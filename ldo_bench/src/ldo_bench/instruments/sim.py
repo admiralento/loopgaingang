@@ -90,6 +90,8 @@ class LdoModel:
     dmm_probe: str = "vout"  # what the DMM is across (see module docstring)
     bank_on_psu: bool = False  # loadbank-check: the load bank straight across the PSU, no LDO
     psu_i_offset: float = 2.0e-3  # A, current readback offset (cancelled by zero-load subtraction)
+    psu_i_gain: float = 1.0  # the supply's current readback / the true current (loadbank-check)
+    bank_series_drop: float = 0.0  # V lost in front of the bank in loadbank-check (e.g. a diode in the path)
     psu_offset: float = -1.0e-3  # V, sim supply output error: offset + gain, like the bench E3648A
     psu_gain: float = 4.5e-4
     psu_readback_gain: float = 5.5e-4  # readback reads high, ~2.7 mV at 5 V
@@ -285,6 +287,10 @@ class LdoModel:
             return 0.0
         return self.psu_v * (1 + self.psu_gain) + self.psu_offset
 
+    def bank_current(self) -> float:
+        """loadbank-check: the current through the bank straight on the supply (A), after bank_series_drop."""
+        return max(self.psu_actual() - self.bank_series_drop, 0.0) * self.conductance()
+
     def load_current(self) -> float:
         """Current into the load bank (A)."""
         return self.vout_dc() * self.conductance()
@@ -379,9 +385,9 @@ class SimPowerSupply:
     def measure_current(self) -> float:
         if not self.m.psu_on:
             return 0.0
-        if self.m.bank_on_psu:
-            noise = float(self.m.rng.normal(0.0, 0.2e-3))
-            return self.m.psu_actual() * self.m.conductance() + self.m.psu_i_offset + noise
+        if self.m.bank_on_psu:  # readback scatter ~0.05 mA, as JAFWAK's repeats (2026-11-14)
+            noise = float(self.m.rng.normal(0.0, 0.05e-3))
+            return self.m.bank_current() * self.m.psu_i_gain + self.m.psu_i_offset + noise
         buffer_iq = 1.5e-3 if self.m.awg_v else 0.0  # A, the BUF634's own supply current
         return self.m.load_current() + self.m.iq + buffer_iq
 
@@ -704,7 +710,12 @@ class SimDmm:
     def read(self) -> float:
         m = self.m
         if self.mode == "dci":  # only reads a current if it is in series with something
-            i = m.supply_current(m.dmm_rail) if m.dmm_probe == "series" else 0.0
+            if m.dmm_probe != "series":
+                i = 0.0
+            elif m.bank_on_psu:  # loadbank-check: in series with the bank
+                i = m.bank_current() if m.psu_on else 0.0
+            else:
+                i = m.supply_current(m.dmm_rail)
             return i + float(m.rng.normal(0.0, m.dmm_noise_a))
         return self.read_dcv()
 

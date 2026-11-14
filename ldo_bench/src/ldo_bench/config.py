@@ -321,7 +321,9 @@ class PsuCheckConfig(_Model):
 class LoadBankCheckConfig(_Model):
     """[loadbank_check] (loadbank-check): the load bank straight across the PSU (no LDO) to verify the DIO wiring.
 
-    Each bit is switched in on its own and the PSU's current readback is compared with V / R.
+    Each bit is switched in on its own and its current (bank-off baseline subtracted) is compared with
+    V / R. The current comes from the DMM in series (current_from 'dmm', DC amps) or from the supply's
+    own readback ('psu'); with the DMM the supply's readback is recorded beside it.
     """
 
     voltage: float = Field(
@@ -330,10 +332,34 @@ class LoadBankCheckConfig(_Model):
         le=1.5,
         description="PSU voltage on the bank (V). Capped at 1.5 V: the demo board's 15.4 ohm at 1.5 V is already 0.15 W",
     )
-    readings: int = Field(3, ge=1, description="PSU current readings averaged per state")
+    current_from: Literal["dmm", "psu"] = Field(
+        "dmm",
+        description=(
+            "'dmm' = 34401A DC amps in series between the PSU + and the bank (the supply's readback "
+            "recorded too); 'psu' = the supply's current readback only"
+        ),
+    )
+    dmm_range: Literal[0.01, 0.1, 1.0, 3.0] = Field(
+        1.0,
+        description=(
+            "DMM current range (A). 1 A: ~0.1 ohm burden, so the bank keeps its voltage (the 10 / 100 mA "
+            "ranges' ~5 ohm would drop ~70 mV at 15 mA); the range offset cancels in the baseline subtraction"
+        ),
+    )
+    readings: int = Field(3, ge=1, description="Current readings averaged per state")
     settle_time: float = Field(0.2, ge=0, description="Wait after switching a bit (s)")
     tolerance: float = Field(0.10, gt=0, lt=1, description="Allowed relative current error per bit")
-    abs_tolerance: float = Field(1.5e-3, ge=0, description="Plus this absolute error (A): readback noise")
+    abs_tolerance: float = Field(
+        0.3e-3,
+        ge=0,
+        description=(
+            "Plus this absolute error (A) with the supply's readback: its repeats scattered ~0.05 mA on "
+            "JAFWAK (2026-11-14). Small enough that a dead 1 mA bit fails"
+        ),
+    )
+    dmm_abs_tolerance: float = Field(
+        0.05e-3, ge=0, description="Plus this absolute error (A) with the DMM (1 uA counts on the 1 A range)"
+    )
     high_current: bool = Field(
         False, description="Run with psu.high_current_limit instead of psu.current_limit (it draws more)"
     )

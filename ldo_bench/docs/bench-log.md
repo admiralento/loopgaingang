@@ -34,6 +34,26 @@ isn't needed for Tests 6-8; load-tran steps 1 <-> 19.3 mA (codes 1 <-> 21).
   - `loadbank_check.voltage = 1.2 V` (was 0.8 V): B4 draws 14.6 mA, and B0's 1 mA reads better at the higher voltage.
 - **Not verified:** the new values on the board (run `loadbank-check`), and which reference designator holds which value.
 
+## 2026-11-14: `loadbank-check` after the refit, and its fixes (no new hardware run)
+
+**What ran:** four runs from 13:44 on, at 1.2 V, current from the supply's readback.
+
+**What it measured:**
+- Every bit drew 64–65 % of V/R: B0 0.69 / 1.00 mA, B1 1.14 / 1.77, B2 2.36 / 3.64, B3 5.16 / 8.01, B4 9.47 / 14.65 mA.
+- The 13:46 run also had B2 and B3 swapped, fixed after.
+
+**What went wrong in the check:**
+- **False swap reports:** it reported "DIO 3 wired to J2, DIO 4 to J3" for what is a uniform shortfall.
+- **The small bits passed only on the 1.5 mA absolute tolerance,** which was bigger than B0's whole 1 mA, so a dead B0 would have passed.
+- **Unexplained:** the ratio is the same from 82 to 1200 ohm, so it is not a FET's on-resistance. Either the bank sees about 0.77 V, or the supply's current readback is about 35 % low.
+
+**What changed:**
+- The current now comes from the DMM in series (`current_from = "dmm"`, 1 A range), with the supply's readback beside it and a note when they disagree.
+- A uniform shortfall now gets one diagnosis.
+- Absolute tolerance is 0.05 mA with the DMM, 0.3 mA with the supply.
+
+**Next run:** the DMM shows which explanation is right. If the DMM agrees with V/R, the supply's readback is off; if it also reads 65 %, measure the voltage across a resistor.
+
 ## 2026-11-14: the load cell doesn't need VS_BUFF
 
 - **Found at the bench:** JAFWAK's load bank switches without VS_BUFF (J4) powered. The config's note that VS_BUFF powers U4, the gate driver, came from the schematic and was wrong for this board.

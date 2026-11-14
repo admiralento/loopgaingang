@@ -72,6 +72,7 @@ If the parity in the config is wrong, discovery still finds the meter and tells 
 How each test uses it:
 - **DC tests:** the meter measures VOUT, at 10 NPLC, autozero on, >10 GΩ input. It autoranges, and load-reg / line-reg record its range at every point (`dmm_range_v`). A note appears if it switched range inside a fit. JAFWAK's 1.2 V sits at the top of the 1 V range (1 µV resolution, reads up to 1.2 V), so VOUT can cross into the 10 V range (10 µV). Set `dmm.range` to fix the range if that matters more than resolution. The AD2's own VOUT reading is saved next to it as `vout_ad2_v`. Use `--no-dmm` or `dmm.enabled = false` to take VOUT from the AD2.
 - **`iq`, shunt method:** DC volts on the 100 mV range, across R13.
+- **`loadbank-check`:** DC amps in series with the load bank, on the 1 A range (low burden; the bit currents are baseline-subtracted, so the range offset cancels).
 - **`iq`, series method:** DC amps (the I and LO jacks). Ranges 10 mA / 100 mA / 1 A / 3 A, or auto. An overload (+9.9E+37) is reported as such, not as a number.
 
 ## Analog Discovery 2

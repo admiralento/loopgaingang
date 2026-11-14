@@ -74,6 +74,7 @@ settle_reference = "pre"
 [loadbank_check]             # bank straight on the supply, one bit at a time
 voltage = 1.2                # V (= vout_nominal): B4 (82 ohm) draws 14.6 mA, over the 10 mA normal limit
 high_current = true
+current_from = "dmm"         # 34401A DC amps (1 A range) in series with the bank; "psu" = the supply's readback only
 
 [smoke]
 high_current = true          # full load: code 21, 19.3 mA
