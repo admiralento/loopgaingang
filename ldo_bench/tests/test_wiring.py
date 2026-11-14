@@ -88,13 +88,7 @@ def test_jafwak_points_are_board_labels(jafwak):
 
 
 def test_iq_and_startup_probe_outa(jafwak):
-    fallback = jafwak.startup.model_copy(update={"channels": "iin"})
     with open_bench(jafwak, sim=True) as b:
-        for lines in (iq.wiring(b, jafwak.iq), startup.wiring(b, fallback)):
+        for lines in (iq.wiring(b, jafwak.iq), startup.wiring(b, jafwak.startup)):
             vout = next(ln for ln in lines if ln.startswith(f"Scope {jafwak.ad2.vout_channel}+"))
             assert "J13 pin 4 (OUTA)" in vout
-        # both currents: VOUT on the 54621A, at OUTA too
-        lines = startup.wiring(b, jafwak.startup)
-        assert any(
-            ln.startswith(f"54621A ch{jafwak.xscope.vout_channel}+ -> J13 pin 4 (OUTA)") for ln in lines
-        )

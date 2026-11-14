@@ -172,6 +172,7 @@ buffer_jumpers = ['JP4 1-2 "FG" (VIN from U2; nothing on VIN_DC (J7))']
 enable_in = "J13 pin 12 (EN)"
 enable_in_n = "J13 pin 10 (~EN)"
 enable_vio = "J13 pin 14 (VIO)"
+enable_ldo_in = "EN_IN (J8 1-2, LDO side)"  # NOT CONFIRMED: which J8 pin is EN_IN, from the schematic
 enable_jumpers = [
     'J6 7-8 "EN" (EN_AIN from the AD2; nothing else on J6)',
     'J8 1-2 "LDO" (EN_OUT -> EN_IN)',
@@ -207,7 +208,7 @@ low = 0.0
 readings = 5                 # DMM readings per point (10 NPLC: ~1 s)
 settle_time = 0.5
 
-[startup]                    # EN_CTRL_33 step -> enable block -> EN_IN: VOUT and the supply currents
+[startup]                    # EN_CTRL_33 step -> enable block -> EN_IN: VOUT, EN_IN and the input current
 vin = 1.8
 load_code = 0
 edges = ["rising", "falling"]
@@ -216,13 +217,13 @@ pre_trigger = 0.1
 averages = 8
 off_time = 0.05
 on_time = 0.05
-channels = "currents"        # AD2 1 across R13 (in), 2 across R1 (out), VOUT on the 54621A; or "iin" / "iout" (AD2 only)
-sense_ohm = 0.1
-xscope_vout_range = 1.6      # V full scale on the 54621A (0.2 V/div), centred on 0.6 V
-xscope_trigger_high = 1.8    # V: the 54621A's trigger channel is on EN_AIN (TP6), 1.8 V logic; triggers at 0.9 V
+sense_ohm = 0.1              # R13
+xscope_ina_channel = 1       # 54621A ch1 on J13 pin 1 (INA), ch2 on J13 pin 2 (INB); I_in = (ch1 - ch2) / R13
+xscope_inb_channel = 2
+xscope_shunt_range = 0.16    # V full scale on both (20 mV/div), centred on vin
+xscope_trigger_high = 1.8    # V: 54621A Ext Trig on EN_AIN (TP6), 1.8 V logic; triggers at 0.9 V
 settle_fraction = 0.02
 # No VREF: a scope on TP3 loads the BGR and pulled VREF and VOUT to ~0.98 V (2026-11-14)
-
 
 [iq]                         # quiescent / shutdown current vs VIN, no load, from the DMM
 method = "shunt"             # "shunt": DMM DCV across R13 (J13.1-J13.2), total input current, ~1 uA counts

@@ -41,7 +41,6 @@ from ldo_bench.config import (
     IqConfig,
     LineRegConfig,
     PsuHoldConfig,
-    StartupConfig,
     load_config,
 )
 from ldo_bench.instruments.base import InstrumentError
@@ -60,7 +59,6 @@ Enable = StrEnum("Enable", {"static": "static", "dio": "dio"})
 Shape = _choices("Shape", EnSineConfig, "shape")
 Method = _choices("Method", IqConfig, "method")
 Rail = _choices("Rail", IqConfig, "rail")
-Channels = _choices("Channels", StartupConfig, "channels")
 VinFrom = _choices("VinFrom", LineRegConfig, "vin_source")
 To = _choices("To", PsuHoldConfig, "to")
 Output = _choices("Output", EnSineConfig, "output")
@@ -269,12 +267,12 @@ def _modes(
     return {"vref": vref.value, "enable": enable.value}
 
 
-def _need_xscope(cfg: BenchConfig, su) -> None:
-    """Exit 2 before anything opens if enable-startup 'currents' (VOUT on the 54621A) has no [xscope]."""
-    if su.channels == "currents" and (cfg.xscope is None or not cfg.xscope.enabled):
+def _need_xscope(cfg: BenchConfig) -> None:
+    """Exit 2 before anything opens if enable-startup (input current on the 54621A) has no [xscope]."""
+    if cfg.xscope is None or not cfg.xscope.enabled:
         _fail(
-            "enable-startup --channels currents reads VOUT with the 54621A: the config's [xscope] must be "
-            "enabled (or use --channels iin / iout: the AD2 alone, VOUT and one current)"
+            "enable-startup reads the input current with the 54621A (INA - INB across R13): the config's "
+            "[xscope] must be enabled"
         )
 
 
@@ -1184,13 +1182,6 @@ def enable_current(
 @app.command("enable-startup")
 def enable_startup(
     config: ConfigOpt = DEFAULT_CONFIG,
-    channels: Annotated[
-        Channels | None,
-        typer.Option(
-            help="currents: AD2 across R13 (in) and R1 (out), VOUT on the 54621A (trigger on EN_AIN); "
-            "iin / iout: the AD2 alone, VOUT and one current"
-        ),
-    ] = None,
     averages: AvgOpt = None,
     window_ms: Annotated[float | None, typer.Option("--window-ms", help="Capture length (ms)")] = None,
     load: Annotated[
@@ -1205,19 +1196,18 @@ def enable_startup(
     yes: YesOpt = False,
     verbose: VerboseOpt = False,
 ) -> None:
-    """Enable the LDO through the enable block: VOUT and the input / output current at startup and shutdown."""
+    """Enable the LDO through the enable block: VOUT and EN_IN (AD2) and the input current (54621A INA - INB)."""
     from ldo_bench.procedures import startup as proc
 
     cfg = _ext_load(_load(config, verbose), ext_load_ohm)
     cfg, su = _override(
         cfg,
         "startup",
-        channels=channels and channels.value,
         averages=averages,
         window=None if window_ms is None else window_ms * 1e-3,
         load_code=_load_code(cfg, load),
     )
-    _need_xscope(cfg, su)
+    _need_xscope(cfg)
     _run(
         cfg,
         config,
@@ -1230,7 +1220,7 @@ def enable_startup(
         ad=ad_serial,
         yes=yes,
         use_dmm=False,
-        use_xscope=su.channels == "currents",
+        use_xscope=True,
     )
 
 

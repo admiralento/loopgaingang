@@ -29,6 +29,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
+from typing import Literal
 
 import numpy as np
 
@@ -106,12 +107,14 @@ class Agilent54621A:
         edge: Edge,
         averages: int,
         points: int = 2000,
+        trigger: Literal["ref", "external"] = "ref",
     ) -> None:
-        """Set up and start :DIGitize; it completes after `averages` triggers on the ref channel.
+        """Set up and start :DIGitize; it completes after `averages` triggers.
 
         window (s) is the full time span; pre_trigger the fraction of it before the trigger.
         Ranges (V full scale) and offsets (V, centre of screen) are per channel. The trigger is
-        an `edge` through trigger_level (V) on the ref channel. points: 100..2000 per channel.
+        an `edge` through trigger_level (V) on the ref channel, or with trigger="external" on the
+        Ext Trig input (both channels then carry data, e.g. INA / INB). points: 100..2000 per channel.
         Returns at once; the caller then runs the stimulus and calls collect().
         """
         self._channels = (vout_channel, ref_channel)
@@ -131,7 +134,7 @@ class Agilent54621A:
             # the left edge pre_trigger * window before the trigger
             f":TIMebase:POSition {-(pre_trigger - LEFT_REFERENCE) * window:.6g}",
             ":TRIGger:MODE EDGE",
-            f":TRIGger:EDGE:SOURce CHANnel{ref_channel}",
+            f":TRIGger:EDGE:SOURce {'EXTernal' if trigger == 'external' else f'CHANnel{ref_channel}'}",
             f":TRIGger:EDGE:SLOPe {'POSitive' if edge == 'rising' else 'NEGative'}",
             f":TRIGger:EDGE:LEVel {trigger_level:.6g}",
             ":TRIGger:SWEep NORMal",  # only real triggers count toward the average
@@ -146,12 +149,12 @@ class Agilent54621A:
         # Starts the acquisition; commands sent meanwhile are buffered until it completes.
         self.t.write(f":DIGitize CHANnel{vout_channel},CHANnel{ref_channel}")
         log.info(
-            "%s armed: %d averages, %.3g s window, %s edge on ch%d",
+            "%s armed: %d averages, %.3g s window, %s edge on %s",
             self.model,
             averages,
             window,
             edge,
-            ref_channel,
+            "Ext Trig" if trigger == "external" else f"ch{ref_channel}",
         )
 
     def collect(self, step_again, max_extra: int, timeout: float) -> dict[int, ScopeTrace]:

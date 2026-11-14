@@ -17,8 +17,8 @@ matching field instead:
   ref_probe  what the AD2 reference channel (ch2) probes: ("vin", 0), ("dio", pin),
              ("vref", 0) BGR output, ("iin", 0) across R13, ("iout", 0) across R1,
              ("tmp", 0) the TMP235 output (J13 pin 5), ("en_ain", 0) EN_AIN (TP6, the enable tests)
-  ch1_probe  what the VOUT channel probes: "vout", "en_out" (enable-sine test) or "iin" (across R13:
-             enable-startup 'currents', where SimXScope gets VOUT and EN_AIN from last_vout / last_trigger)
+  ch1_probe  what the VOUT channel probes: "vout" or "en_out" (enable-sine test). In enable-startup the
+             ref channel is on ("en_in", 0) and SimXScope reads INA / INB from the AD2's last_shunt
   dmm_probe  what the DMM is on: "vout", "vref" (TP3, the BGR output), "psu" (supply terminals),
              "shunt" (across R13), "series" (in series with a rail, current mode) or "open"
   en_pin     the AD2 DIO driving the enable path, None if EN is tied on
@@ -116,7 +116,8 @@ class LdoModel:
     c_out: float = 10e-6  # output capacitance: inrush = C dV/dt
     iq_on: float = 150e-6  # quiescent current when enabled (A)
     sense_ohm: float = 0.1  # ohm, current-sense resistors R13 (input) / R1 (output)
-    ch1_probe: str = "vout"  # what the VOUT channel is on: "vout", "en_out" or "iin" (across R13)
+    ch1_probe: str = "vout"  # what the VOUT channel is on: "vout" or "en_out"
+    xscope_offset_inb: float = 3e-3  # V, the 54621A's INB channel reads this much high (channel mismatch)
     ldo_on_en_out: bool = False  # J8 on "LDO": the LDO follows EN_OUT (enable-sine --output vout)
     aux_to: str = "vref"  # the PSU's second output: "vref" (VREF_IN / U2's V-) or "rails" (Method B)
     rails_v: float = 0.0  # V, that output's setpoint when aux_to == "rails"
@@ -333,7 +334,10 @@ class LdoModel:
             dvdt = np.zeros_like(t)
             iq = np.full_like(t, self.iq_on if on_after else self.iq)
         iout = vout * g + self.c_out * dvdt
-        return {"vout": vout, "vref": vref, "iout": iout, "iin": iout + iq}
+        # EN_IN: the enable block's output, in the VIN domain, en_delay after the edge
+        lvl_before, lvl_after = (self.vin if on else 0.0 for on in (on_before, on_after))
+        en_in = np.where(t >= self.en_delay, lvl_after, lvl_before)
+        return {"vout": vout, "vref": vref, "iout": iout, "iin": iout + iq, "en_in": en_in}
 
     def vout_dc_if(self, enabled: bool) -> float:
         """vout_dc() as if the LDO were (or weren't) enabled, whatever the EN pin says now."""
@@ -509,7 +513,7 @@ class SimAnalogDiscovery:
         ref = np.where(after, ref1, ref0) + m.noise(n_samples) * 0.25
         ch1, ch2 = (vout, ref) if self.vout_channel == 1 else (ref, vout)
         self.last_capture = Capture(sample_rate, ch1, ch2, i_trig, edge_found=not force)
-        self.last_vout = self.last_trigger = None
+        self.last_shunt = None
         return self.last_capture
 
     def _put(self, vout_side: np.ndarray, ref_side: np.ndarray, rate: float, i0: int, found: bool) -> Capture:
@@ -520,7 +524,7 @@ class SimAnalogDiscovery:
         """
         ch1, ch2 = (vout_side, ref_side) if self.vout_channel == 1 else (ref_side, vout_side)
         self.last_capture = Capture(rate, ch1, ch2, i0, edge_found=found)
-        self.last_vout = self.last_trigger = None
+        self.last_shunt = None
         return self.last_capture
 
     def _sine_capture(self, rate, n, level, edge, pre, stimulus) -> Capture:
@@ -617,12 +621,9 @@ class SimAnalogDiscovery:
             else np.full(n, m.ref_value())
         )
         vout = sig["vout"] + m.noise(n)
-        # the VOUT channel may be across R13 instead (enable-startup 'currents': VOUT on the 54621A)
-        ch1 = sig["iin"] * m.sense_ohm + m.noise(n) * 0.05 if m.ch1_probe == "iin" else vout
-        cap = self._put(ch1, ref + m.noise(n) * (0.05 if kind in ("iin", "iout") else 0.25), rate, i0, True)
-        # what a second scope on VOUT / EN_AIN would see (EN_AIN: 1.8 V logic after the level shifter)
-        en_ain = np.where(t >= 0, 1.8 if on_after else 0.0, 1.8 if on_before else 0.0)
-        self.last_vout, self.last_trigger = (t, vout), (t, en_ain)
+        cap = self._put(vout, ref + m.noise(n) * (0.05 if kind in ("iin", "iout") else 0.25), rate, i0, True)
+        # what the 54621A sees on R13 (enable-startup): INA = VIN, INB = VIN - I_in * R13
+        self.last_shunt = (t, np.full(n, m.vin), m.vin - sig["iin"] * m.sense_ohm)
         return cap
 
     # --- DigitalOut ---------------------------------------------------------
@@ -752,11 +753,21 @@ class SimXScope:
         t_src = cap.time
         vout_src = cap.channel(self.ad2.vout_channel)
         ref_src = cap.ch2 if self.ad2.vout_channel == 1 else cap.ch1
-        if getattr(self.ad2, "last_vout", None) is not None:  # enable edge: VOUT and EN_AIN directly
-            (t_src, vout_src), (_, ref_src) = self.ad2.last_vout, self.ad2.last_trigger
+        shunt = getattr(self.ad2, "last_shunt", None)
+        if a.get("trigger") == "external" and shunt is not None:  # enable-startup: INA / INB on R13
+            t_src, vout_src, ref_src = shunt
+            ref_src = ref_src + self.ad2.m.xscope_offset_inb
         lsb = a["vout_range"] / 256 / 16  # 8-bit, averaged: finer effective resolution
         v = np.round(np.interp(t, t_src, vout_src) / lsb) * lsb
         r = np.interp(t, t_src, ref_src)
+        if a.get("trigger") == "external":  # both channels carry data: quantise and clip both to the screen
+            lsb_r = a["ref_range"] / 256 / 16
+            r = np.round(r / lsb_r) * lsb_r
+            for arr, off, rng in (
+                (v, a["vout_offset"], a["vout_range"]),
+                (r, a["ref_offset"], a["ref_range"]),
+            ):
+                np.clip(arr, off - rng / 2, off + rng / 2, out=arr)
         self._arm = None
         return {
             a["vout_channel"]: ScopeTrace(t, v, a["averages"]),

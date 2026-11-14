@@ -415,39 +415,45 @@ Without `[buffer]` (the demo board) line-tran and psrr use the single-rail path 
   - Enable path: J6 7-8 (EN_CTRL_18 -> EN_AIN), J8 1-2 (EN_OUT -> EN_IN), J8 9-10 (~EN_OUT -> ~EN_IN)
   - AD2 DIO 5 -> J13.12 (EN_CTRL_33), DIO 6 -> J13.10 (~EN_CTRL_33)
   - AD2 V+ -> J13.14 (V_33), AD2 GND -> board GND
-  - `--channels currents` (default):
-    - AD2 scope 1+ -> J13 pin 1 (INA), 1- -> J13 pin 2 (INB): across R13, input current
-    - AD2 scope 2+ -> J13 pin 4 (OUTA), 2- -> J13 pin 3 (OUTB): across R1, output current
-    - 54621A ch1 -> J13 pin 4 (OUTA): VOUT
-    - 54621A ch2 -> EN_AIN (TP6): 1.8 V logic, the 54621A's trigger
-  - `--channels iin` / `iout` (the AD2 alone): scope 1 on OUTA (VOUT), scope 2 across R13 or R1
+  - AD2 scope 1+ -> J13 pin 4 (OUTA): VOUT
+  - AD2 scope 2+ -> EN_IN (the LDO's enable after the enable block; `board.enable_ldo_in`, **pin not confirmed**)
+  - 54621A ch1+ -> J13 pin 1 (INA), ch2+ -> J13 pin 2 (INB); both ground clips on board GND
+  - 54621A Ext Trig -> EN_AIN (TP6): 1.8 V logic, the 54621A's trigger
+  - **54621A grounds:** all of its grounds are common with the AD2's (continuity, 2026-11-14), so a ground clip on INB would short R13 to ground. Ground clips go on GND only.
   - **No scope on VREF (TP3).** A scope input loads the BGR and pulled VREF, and VOUT with it, to about 0.98 V (2026-11-14). `--ch2 vref` was removed.
-- **Enable path:** DIO 5 → EN_CTRL_33 → FXLP34 level shifter → EN_CTRL_18 → enable block → EN_OUT → EN_IN. DIO 6 drives ~EN_CTRL_33 inverted. The AD2's V+ supplies the level shifters' 3.3 V side.
-- **Does:** steps the enable line. The AD2 triggers on its own DIO edge (the Digital In trigger detector), so both scope channels are free. Each edge (enable, disable) is averaged.
-- **With `currents`:**
-  - the 54621A's averaged acquisition is armed first and sees the same edges, as in load-tran;
-  - it triggers on EN_AIN at half of `xscope_trigger_high` (1.8 V logic, so 0.9 V). Its VOUT therefore has t = 0 at EN_AIN, a level-shifter delay after the AD2's DIO edge; the report says so.
-  - VOUT is shown on `xscope_vout_range` (1.6 V full scale, centred on half of VOUT nominal).
-- **When the 54621A is missing or fails:**
-  - there is no VOUT and the VOUT checks can't run, so the run is `_INVALID`; the currents are still saved;
-  - with no `[xscope]` configured, `currents` is refused before anything powers up.
-- **Computes:** 10 % / 90 % times from the edge, which include the level shifter and the enable block. Also rise or fall time, settling within 2 %, and overshoot. For currents: the levels before and after, and the peak (the inrush peak is reported even when the level change is under the resolution).
-- **Current resolution:** across the 0.1 Ω sense resistors on the AD2's 5 V range, one count is about 3 mA. A current step under 4 counts (about 12 mA) is reported as "under what the AD2 resolves", with no timings. That includes the quiescent current, so use `iq` for DC current. Inrush and load steps of 20 mA or more are measurable.
+- **Enable path:** DIO 5 → EN_CTRL_33 → FXLP34 level shifter → EN_CTRL_18 → EN_AIN → enable block → EN_OUT → EN_IN. DIO 6 drives ~EN_CTRL_33 inverted. The AD2's V+ supplies the level shifters' 3.3 V side.
+- **Does:**
+  - steps the enable line; the AD2 triggers on its own DIO edge (the Digital In trigger detector);
+  - averages each edge (enable, disable);
+  - arms the 54621A's averaged acquisition first, so it sees the same edges, triggered on EN_AIN through Ext Trig at half of `xscope_trigger_high` (0.9 V).
+- **Input current:**
+  - **The difference:** I_in = (INA − INB − zero) / R13. The 54621A's channels are ground-referenced, hence the difference.
+  - **Both channels on the same zoomed range,** `xscope_shunt_range` (0.16 V full scale = 20 mV/div, centred on `startup.vin`).
+  - **The zero:** the channels' offset and gain differ by much more than the millivolts across R13, so the zero is INA − INB while the LDO is disabled (before the enable edge, after the disable edge). The shutdown current there is far under the resolution. The report and `summary.json` give the zero.
+  - **Time axes:** I_in's t = 0 is EN_AIN crossing 0.9 V. VOUT's and EN_IN's t = 0 is the AD2's DIO edge, slightly earlier.
+- **Computes:**
+  - VOUT: 10 % / 90 % times from the edge (they include the level shifter and the enable block), rise or fall time, settling within 2 %, overshoot;
+  - I_in: the levels before and after, and the peak. The inrush peak is reported even when the level change is under the resolution.
+- **Current resolution:**
+  - one 8-bit count of the 54621A at 0.16 V full scale is 0.6 mV, so 6 mA across 0.1 Ω;
+  - a step under 4 counts (25 mA) is reported as a bound, with no timings. That includes the quiescent current and the load steps (use `iq` for DC current);
+  - averaging helps only as far as noise dithers the signal;
+  - a smaller `xscope_shunt_range` resolves more but clips sooner when VIN sags.
 - **Setup checks:**
   - VOUT already up before enabling (the enable path isn't controlling the LDO)
   - VOUT not reaching nominal
   - VOUT not settled by the end of the capture (lengthen `--window-ms`; JAFWAK's default window is 10 ms, since 1 ms was too short)
   - VOUT still above 20 % of nominal at the end of a disable edge
-  - no VOUT from the 54621A (`currents`)
-- **Saves:** `waveform_<edge>.csv` (AD2 time axis: the currents, plus VOUT with `iin` / `iout`) and, with `currents`, `waveform_<edge>_vout.csv` (the 54621A's time axis).
-- **Supply limit:** enable-startup runs on `psu.current_limit` (10 mA on JAFWAK). The inrush charging the output capacitors can be far above that, so the supply may limit the startup (see the bench log).
+  - INA or INB clipped at the edge of the 54621A's screen (VIN out of the zoomed window)
+  - no data from the 54621A. With no `[xscope]` configured, the command is refused before anything powers up.
+- **Saves:** `waveform_<edge>.csv` (AD2: t, VOUT, EN_IN) and `waveform_<edge>_iin.csv` (54621A: t, INA, INB, I_in).
+- **Supply limit:** enable-startup runs on `psu.current_limit` (10 mA on JAFWAK). The inrush charging the output capacitors can be far above that, so the supply may limit the startup; VIN sagging then shows up as INA / INB clipping.
 - **Options:**
-  - `--channels currents | iin | iout`
   - `--avg`
   - `--window-ms`
   - `--load`
 - **Config:** `[startup]`, `[enable]`.
-- **First hardware run:** the AD2's digital trigger needs checking.
+- **First hardware run:** check the AD2's digital trigger, the 54621A's Ext Trig on EN_AIN, and the EN_IN probe point.
 
 ---
 

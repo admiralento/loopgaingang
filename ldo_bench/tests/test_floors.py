@@ -39,17 +39,17 @@ def run_startup(cfg, setup=None, **upd):
 
 
 def test_input_current_under_the_ad2_resolution_is_a_bound(jafwak):
-    res = run_startup(jafwak, load_code=0)  # ~150 uA of Iq: 0.05 counts on 0.1 ohm
+    res = run_startup(jafwak, load_code=0)  # ~150 uA of Iq: far under 4 counts on 0.1 ohm
     for e in res.edges:
-        iin = e.currents[0]
-        assert iin.name == "iin" and not iin.resolved
-        assert np.isnan(iin.m.t10) and np.isnan(iin.m.t90)
+        assert not e.iin.resolved
+        assert np.isnan(e.iin.m.t10) and np.isnan(e.iin.m.t90)
     assert "resolve" in res.report()
 
 
-def test_output_current_step_above_the_resolution_is_measured(jafwak):
-    res = run_startup(jafwak, load_code=4)  # 19.2 mA: ~6 counts
-    assert all(e.currents[1].name == "iout" and e.currents[1].resolved for e in res.edges)
+def test_inrush_above_the_resolution_is_measured(jafwak):
+    res = run_startup(jafwak, load_code=4, edges=["rising"])
+    i = res.edges[0].iin
+    assert abs(i.m.peak) >= i.floor and f"peak {i.m.peak * 1e3:.1f} mA" in res.report()
 
 
 def test_unsettled_edge_is_flagged(jafwak):

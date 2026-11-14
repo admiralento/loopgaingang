@@ -366,3 +366,15 @@ def test_xcheck_uses_the_54621a_trace(jafwak):
         res = load_tran.run(b, jafwak.load_tran.model_copy(update={"averages": 4}), an)
     for e in res.edges:
         assert e.xcheck.metrics.deviation == pytest.approx(2 * e.metrics.deviation, rel=0.15)
+
+
+def test_arm_can_trigger_on_the_external_input():
+    """enable-startup: both channels are on the shunt (INA / INB), so the trigger is on Ext Trig."""
+    t = FakeScope()
+    s = Agilent54621A(t)
+    arm(s, trigger="external", trigger_level=0.9)
+    sent = [c for c in t.sent if not c.startswith(":SYSTem:ERRor")]
+    assert ":TRIGger:EDGE:SOURce EXTernal" in sent
+    assert ":TRIGger:EDGE:SOURce CHANnel2" not in sent
+    assert ":TRIGger:EDGE:LEVel 0.9" in sent
+    assert sent[-1] == ":DIGitize CHANnel1,CHANnel2"  # both channels still digitized
