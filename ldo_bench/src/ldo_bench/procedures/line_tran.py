@@ -182,12 +182,14 @@ class LineTranResult:
         return "\n".join(lines)
 
 
-def buffer_wiring(bench: Bench, load_code: int, note: str = "") -> list[str]:
-    """Wiring for line-tran and psrr (split or single-rail buffer), one connection per line."""
+def buffer_wiring(bench: Bench, load_code: int, note: str = "", scope_line: str | None = None) -> list[str]:
+    """Wiring for line-tran and psrr (split or single-rail buffer), one connection per line.
+
+    scope_line replaces the scope-on-VOUT line (psrr --measure vref puts it on TP3)."""
     cfg = bench.cfg
     lines = [
         *w.buffer_supply(cfg),
-        w.scope_vout(cfg, note),
+        scope_line or w.scope_vout(cfg, note),
         w.scope_vin(cfg, "VIN at the LDO input; the trigger"),
     ]
     if load_code:

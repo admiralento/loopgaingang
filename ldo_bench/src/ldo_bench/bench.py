@@ -217,7 +217,8 @@ class Bench:
         dmm_rail: str = "total",
         bank_on_psu: bool = False,
         psu_to: Literal["vin", "rail"] = "vin",
-        ch1_probe: Literal["vout", "en_out"] = "vout",
+        ch1_probe: Literal["vout", "en_out", "vref"] = "vout",
+        ch1_atten: float = 1.0,
         en_pin: int | None = None,
     ) -> None:
         """Show the wiring a test needs and wait for the user to confirm it.
@@ -241,6 +242,7 @@ class Bench:
             self.sim_model.bank_on_psu = bank_on_psu
             self.sim_model.psu_to = psu_to
             self.sim_model.ch1_probe = ch1_probe
+            self.sim_model.ch1_atten = ch1_atten
             self.sim_model.en_pin = en_pin
         if (ohm := self.cfg.loadbank.external_ohm) is not None:
             lines = [*lines, wiring.ext_load(self.cfg, ohm)]
