@@ -180,3 +180,22 @@ def test_plot_shows_vout_at_outa_for_every_point(jafwak):
         assert np.allclose(line.get_xdata(), [p.vin for p in pts])
         assert np.allclose(line.get_ydata(), [p.vout for p in pts])
     plotting.close(fig)
+
+
+def test_load_not_switching_in_points_at_the_load_wiring(jafwak):
+    """The DMM sees the LDO's current through R13, but the load never switches in (J10 out, VS_BUFF
+    off or DIO 0 not on B0): the issue names the load wiring, not the DMM leads."""
+    res, _ = run_iq(jafwak, setup=lambda b: miswire(b, dio_pins=[10, 11, 12, 13, 14]))
+    issue = next(i for i in res.issues if "load code 1 should add" in i)
+    assert 'J10 "LOAD"' in issue and "J13 pin 7" in issue and "VS_BUFF" in issue
+    assert "V terminals" not in issue
+
+
+def test_shunt_wiring_includes_the_load_check(jafwak):
+    with open_bench(jafwak, sim=True) as b:
+        lines = iq.wiring(b, jafwak.iq)
+        assert 'Fit J10 "LOAD" (VOUT -> load cell)' in lines
+        assert "AD2 DIO 0 -> J13 pin 7 (B0)" in lines
+        assert any("VS_BUFF" in ln for ln in lines)
+        no_check = iq.wiring(b, jafwak.iq.model_copy(update={"check_code": 0}))
+    assert not any("J10" in ln for ln in no_check)

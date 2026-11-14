@@ -170,6 +170,7 @@ First bring-up plan, steps I.1–I.5. **Run it before `line-tran` or `psrr`, wit
   - DMM V (HI) -> J13.1 (VIN), COM -> J13.2 (INB): across R13. The DMM floats, so no ground lead; nothing else on the V terminals
   - J1: every rail you want powered (BGR_VDD 1-3, VDD 5-7, EN_VDD 9-11, OTA_VDD 13-15)
   - Scope 1+ -> J13 pin 4 (OUTA), Scope 1- -> J13 pin 6 (GND) (VOUT check; draws ~1 uA)
+  - Load check (shunt, enabled): separate 5.0 V supply -> VS_BUFF (J4), on first, then fit J10 "LOAD"; AD2 DIO 0-4 -> J13 pins 7, 9, 11, 13, 15 (B0-B4; the check uses B0)
   - Enable path: J6 7-8 (EN_CTRL_18 -> EN_AIN), J8 1-2 (EN_OUT -> EN_IN), J8 9-10 (~EN_OUT -> ~EN_IN)
   - AD2 DIO 5 -> J13.12 (EN_CTRL_33), DIO 6 -> J13.10 (~EN_CTRL_33); AD2 V+ -> J13.14 (V_33)
   - AD2 GND -> board GND
@@ -183,7 +184,7 @@ First bring-up plan, steps I.1–I.5. **Run it before `line-tran` or `psrr`, wit
 - **Reports:** current per point. Points under the floor are shown as "< floor", not as a number.
 - **Plot:** current against VIN (left) and VOUT at OUTA against VIN (right), one row per state. Enabled, VOUT at nominal shows the LDO regulated, so the rail under test was powered (in the series method, through the meter: an open meter leaves that rail unpowered). Disabled, VOUT near 0 V shows the enable turned it off. What it can't show is a meter shorted out by a J1 jumper left fitted: the rail is still powered and the meter reads ~0.
 - **Setup checks:**
-  - the load check misses by more than 15 %
+  - the load check misses by more than 15 %. If the DMM reads the LDO's own current before the load goes in but the load adds nothing, the issue names the load wiring (J10, VS_BUFF, DIO 0 on B0); otherwise the DMM leads
   - an enabled current under the floor (meter not across R13 / not in series, or the jumper still shorting it)
   - VOUT off nominal when enabled, or still up when disabled (enable path not working)
   - meter overload

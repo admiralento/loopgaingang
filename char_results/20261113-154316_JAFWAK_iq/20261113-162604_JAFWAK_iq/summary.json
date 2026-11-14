@@ -1,0 +1,75 @@
+{
+  "valid": true,
+  "issues": [],
+  "notes": [
+    "shutdown current is below what this method resolves (92.5 nA)"
+  ],
+  "method": "series",
+  "rail": "ota",
+  "measures": "OTA_VDD rail current (DMM in place of J1 13-15)",
+  "zero_a": -4.7739999999999996e-08,
+  "floor_a": 9.248679365185063e-08,
+  "load_check": null,
+  "states": {
+    "enabled": {
+      "vin": [
+        1.400425,
+        1.501092,
+        1.600723,
+        1.700897,
+        1.800898,
+        1.901096
+      ],
+      "current_a": [
+        1.560668e-05,
+        1.7596959999999998e-05,
+        1.7944019999999998e-05,
+        1.8147239999999997e-05,
+        1.8328139999999998e-05,
+        1.846382e-05
+      ],
+      "below_floor": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      "min_a": 1.560668e-05,
+      "max_a": 1.846382e-05
+    },
+    "disabled": {
+      "vin": [
+        1.400499,
+        1.501092,
+        1.600994,
+        1.700921,
+        1.800824,
+        1.901096
+      ],
+      "current_a": [
+        8.599999999999991e-09,
+        1.4719999999999995e-08,
+        2.5879999999999994e-08,
+        -9.160000000000004e-09,
+        9.139999999999994e-09,
+        9.139999999999994e-09
+      ],
+      "below_floor": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "min_a": -9.160000000000004e-09,
+      "max_a": 2.5879999999999994e-08
+    }
+  },
+  "vref": {
+    "source": "bgr",
+    "bgr_measured_v": 1.17
+  }
+}

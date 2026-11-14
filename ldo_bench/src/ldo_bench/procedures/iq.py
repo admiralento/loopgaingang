@@ -221,6 +221,8 @@ def wiring(bench: Bench, iq: IqConfig) -> list[str]:
             *w.j1_rails(skip=iq.rail),
         ]
     lines.append(w.scope_vout(cfg, "VOUT check"))
+    if iq.method == "shunt" and iq.check_code and "enabled" in iq.states:
+        lines += w.load_bank(cfg)  # the load check switches in check_code once
     if "disabled" in iq.states:
         lines += w.enable_dio(cfg)
     return [*lines, w.ad2_gnd(cfg)]
@@ -309,7 +311,13 @@ def run(bench: Bench, iq: IqConfig) -> IqResult:
         bench.loadbank.off()
         expected = bench.loadbank.current(iq.check_code, vout.mean)
         # the difference cancels the zero and the LDO's own current
-        check = {"code": iq.check_code, "expected": expected, "measured": i1 - i0, "vout": vout.mean}
+        check = {
+            "code": iq.check_code,
+            "expected": expected,
+            "measured": i1 - i0,
+            "before": i0 - zero,  # the LDO's own current, zero subtracted
+            "vout": vout.mean,
+        }
         log.info("load check: expected +%s, measured %s", fmt_a(expected), fmt_a(i1 - i0))
 
     vins = sweep_points(iq.vin_start, iq.vin_stop, iq.vin_step)  # ends exactly on vin_stop
@@ -359,11 +367,26 @@ def run(bench: Bench, iq: IqConfig) -> IqResult:
                 "current through R13: check its range and that it's on the V terminals"
             )
         elif abs(c["measured"] - c["expected"]) > iq.check_tolerance * c["expected"]:
-            setup_issues.append(
+            head = (
                 f"switching in load code {c['code']} should add {fmt_a(c['expected'])} through R13, the DMM saw "
-                f"{fmt_a(c['measured'])}: are the DMM V / COM leads on J13.1 / J13.2, and is it on the "
-                "V terminals (not I)?"
+                f"{fmt_a(c['measured'])}"
             )
+            if abs(c["measured"]) < 0.1 * c["expected"] and c["before"] > 3 * floor:
+                # the DMM reads the LDO's own current, so it is across R13: the load never switched in
+                bits = [
+                    f"AD2 DIO {d} on {bit}"
+                    for k, (d, bit) in enumerate(zip(cfg.loadbank.dio_pins, w.bank_bits(cfg), strict=True))
+                    if c["code"] >> k & 1
+                ]
+                setup_issues.append(
+                    f"{head}, though it reads {fmt_a(c['before'])} before it, so it is across R13 and the load "
+                    f'didn\'t switch in: is J10 "LOAD" fitted, VS_BUFF (J4) at 5 V, and {" and ".join(bits)}?'
+                )
+            else:
+                setup_issues.append(
+                    f"{head}: are the DMM V / COM leads on J13.1 / J13.2, and is it on the V terminals (not I)? "
+                    "If so, is the load switching in (J10 fitted, VS_BUFF at 5 V)?"
+                )
     for p in points:
         if not np.isfinite(p.current):
             p.issues.append(f"the DMM overloaded at VIN {p.vin:.2f} V ({p.state}): raise iq.dmm_range")
