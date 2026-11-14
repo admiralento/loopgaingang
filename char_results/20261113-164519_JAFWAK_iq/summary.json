@@ -1,0 +1,82 @@
+{
+  "valid": true,
+  "issues": [],
+  "notes": [
+    "includes ~1.20 uA into the AD2 scope on VOUT (1 Mohm); unplug it for the last microamp",
+    "shutdown current is below what this method resolves (2.17 uA); the series method (DCI, 10 nA counts) resolves it"
+  ],
+  "method": "shunt",
+  "rail": "total",
+  "measures": "input current across R13 (0.1 ohm)",
+  "zero_a": 1.476e-06,
+  "floor_a": 2.167445501044951e-06,
+  "load_check": {
+    "code": 1,
+    "expected": 0.0047981750697202894,
+    "measured": 0.0048267399999999995,
+    "before": 3.3866000000000004e-05,
+    "vout": 1.1995437674300724
+  },
+  "states": {
+    "enabled": {
+      "vin": [
+        1.400623,
+        1.501289,
+        1.60092,
+        1.70139,
+        1.801366,
+        1.901342
+      ],
+      "current_a": [
+        2.7156e-05,
+        3.0912000000000005e-05,
+        3.2104e-05,
+        3.151e-05,
+        3.283e-05,
+        3.2208e-05
+      ],
+      "below_floor": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      "min_a": 2.7156e-05,
+      "max_a": 3.283e-05
+    },
+    "disabled": {
+      "vin": [
+        1.40077,
+        1.501338,
+        1.60129,
+        1.701562,
+        1.801169,
+        1.901318
+      ],
+      "current_a": [
+        8.300000000000001e-07,
+        1.8400000000000006e-07,
+        -7.800000000000014e-08,
+        2.117582368135751e-22,
+        1.066e-06,
+        1.5300000000000002e-06
+      ],
+      "below_floor": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "min_a": -7.800000000000014e-08,
+      "max_a": 1.5300000000000002e-06
+    }
+  },
+  "vref": {
+    "source": "bgr",
+    "bgr_measured_v": 1.17
+  }
+}
