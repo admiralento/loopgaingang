@@ -2,6 +2,33 @@
 
 What was built, what was measured, and what went wrong along the way. Newest session first.
 
+## Reruns needed (as of 2026-11-14)
+
+Bring-up plan Tests 1-4 have been run on JAFWAK. These changed since, so their runs need repeating:
+
+| Test | Command | Why |
+|---|---|---|
+| 2 | `enable-current` | New (replaces `iq --rail en`); not run yet |
+| 3 | `vref-line` | Now also reads VREF at 10 GOhm and 10 MOhm (the by-hand "VREF level" step) |
+| 3 | `iq --method series --rail bgr` | The wiring printout had the DMM's I and LO the wrong way round on J1 (I belongs on INB, pin 3): a run that followed it read negative and was marked `_INVALID` |
+| 4 | `iq` (shunt) | The load-check wiring (VS_BUFF, J10, DIO 0 -> B0) wasn't printed; the 2026-11-13 run failed its load check for that reason |
+| 4 | `iq --method series` on `ota` / `vdd` | Same J1 polarity fix as Test 3 (`--rail total` was right) |
+| 1 | `enable-sine` | Only if J1 5-7 (VDD) wasn't fitted: VDD must be up in every test |
+
+New, for Tests 5 onward (not run yet): `enable-sine --output vout` (Test 5), `line-reg --split-rails`
+(Test 7, Method B), `psrr --measure vref` (Test 11), `--ext-load-ohm` (Tests 6-8 with 1.2 kOhm on J5).
+
+## 2026-11-14: by-hand steps scripted (no hardware run)
+
+- **vref-line:** VREF at vin_high with the DMM at 10 GOhm and at 10 MOhm; the difference gives the BGR's output resistance (a drop over 0.5 mV is a note). New `HP34401A.set_input_z`.
+- **psrr --measure vref:** the BGR's rejection at TP3 through a 10x probe (`vref_probe_attenuation`); readings scaled back, a probe left on 1x shows as VREF reading 10x high.
+- **enable-sine --output vout:** VOUT (OUTA) following a slow triangle through the whole enable path (J8 on LDO); the EN_AIN levels where VOUT turns on / off, with a note on how much the shutdown time shifts the turn-off level.
+- **line-reg --split-rails:** dropout Method B, BGR_VDD / OTA_VDD on PSU OUT2 (J1 pins 1 and 13, jumpers 1-3 / 13-15 out). VIN up first and above `vin_floor` while the rails are up; OUT2 drawing over 1 mA (a jumper left in) stops the run; shutdown drops the rails before VIN.
+- **--ext-load-ohm:** a fixed resistor on VOUT in every load estimate and in the `dut.i_max` check (per run, before power-up). With 1.2 kOhm, load code 4 is 20.2 mA and refused, so "1 to 20 mA" becomes 1 to 15.4 mA (code 3) unless dut.i_max is raised.
+- **line-reg:** the report points to vref-line's BGR minimum VIN when a knee is found.
+- **J1 series wiring fix:** per the KiCad nets (rail on pins 1-2 / 5-6 / 9-10 / 13-14, INB on 3 / 7 / 11 / 15), current flows INB -> rail, so the DMM's I jack goes on INB. The iq series and enable-current printouts had it on the rail.
+- **Dropped from the plan:** the by-hand enable static levels (the enable-sine plots show them), the EN_VDD spike measurement (covered by enable-current's charge per cycle), and the spectrum-analyzer PSRR (the AD2 covers it to ~70 dB; noted for later). Output noise (Test 14) stays by hand until the spectrum-analyzer driver exists.
+
 ## 2026-11-13: default config and enable edge plots (no hardware run)
 
 - **Default config:** every command uses `configs/jafwak.toml` unless `-c` or `LDO_BENCH_CONFIG` names another, and prints the config it loaded first. Demo-board runs need `-c configs/demo_board.toml`.

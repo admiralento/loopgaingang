@@ -27,7 +27,7 @@ How a run decides it measured the board, and what `_INVALID` means, is covered i
   - `line-reg`
   - `load-tran`
 - **JAFWAK:** no valid run yet. Its load-transient runs had the scope off VOUT (see [bench-log.md](bench-log.md)).
-- **Simulator only so far:** `line-tran`, `enable-startup`, `iq` and `psrr` (on the split-supply U2 too); `buffer-check`; `vref-line`, `temp`, `enable-sine --shape square`, `enable-current` and `--enable dio` (added 2026-11-13). `enable-sine --shape triangle` ran on JAFWAK on 2026-11-12.
+- **Simulator only so far:** `line-tran`, `enable-startup`, `iq` and `psrr` (on the split-supply U2 too); `buffer-check`; `vref-line`, `temp`, `enable-sine --shape square`, `enable-current` and `--enable dio` (added 2026-11-13); `psrr --measure vref`, `enable-sine --output vout`, `line-reg --split-rails`, `--ext-load-ohm` and vref-line's DMM loading check (added 2026-11-14). `enable-sine --shape triangle` ran on JAFWAK on 2026-11-12.
 
 Suggested order for a first session on a board:
 1. `discover`
@@ -143,6 +143,7 @@ First bring-up plan, steps I.1–I.5. **Run it before `line-tran` or `psrr`, wit
 - **Options:**
   - `--vin 2.0`
   - `--no-dmm`
+  - `--ext-load-ohm 1200` (see [External load](#external-load---ext-load-ohm))
 - **Config:** `[load_reg]`.
 
 ### `line-reg`: line regulation and dropout
@@ -163,11 +164,19 @@ First bring-up plan, steps I.1–I.5. **Run it before `line-tran` or `psrr`, wit
   - with the DMM and `vin_source = "ad2"`: AD2 scope 1 within 2 % + 50 mV of the DMM (with `"psu"` the AD2 isn't read)
   - a VOUT reading below the dropout threshold *above* the knee (a bad reading: the knee is taken from the bottom of the sweep, so it doesn't move)
   - fewer than 2 points to fit, or `fit_vin_min` below the dropout point
+- **Is it the BGR?** When a knee is found the report points to `vref-line`'s BGR minimum VIN: a knee at or above it means the BGR, not the pass device, sets the dropout. `--split-rails` takes the BGR out of it.
+- **Dropout Method B (`--split-rails`, JAFWAK, `[split_rails]`):** BGR_VDD and OTA_VDD come off INB and onto the PSU's other output at 1.8 V, so as VIN sweeps only the pass device drops out (VDD and EN_VDD stay on VIN). Wiring on top of the usual:
+  - Remove the J1 1-3 jumper (BGR_VDD) and the J1 13-15 jumper (OTA_VDD)
+  - PSU OUT2 + -> J1 pin 1 (BGR_VDD); PSU OUT2 + -> J1 pin 13 (OTA_VDD); PSU OUT2 - -> GND (J11)
+  - J1 5-7 (VDD) and 9-11 (EN_VDD) stay fitted
+  - Order and limits: VIN comes up first; the rails follow; VIN never goes below `vin_floor` (1.0 V) while they are up; they come down before VIN at the end and in every shutdown, so BGR / OTA are never powered without VDD. More than `max_current` (1 mA) from OUT2 once it is up means a J1 1-3 / 13-15 jumper is still fitted (OUT2 fighting VIN through INB): the rails come down and the run stops. Refused with `--vref ext` (same output). J1's pin nets (1-2 BGR_VDD, 3 INB, 13-14 OTA_VDD, 15 INB) are from the KiCad file: check them on the board.
 - **Options:**
   - `--load 30mA` (or a code)
   - `--vin-from psu`
   - `--no-dmm`
-- **Config:** `[line_reg]`.
+  - `--split-rails` (Method B)
+  - `--ext-load-ohm 1200` (e.g. 1 mA with `--load 0`)
+- **Config:** `[line_reg]`, `[split_rails]`.
 
 ### `vref-line`: VREF against VIN (JAFWAK)
 - **Wiring:**
@@ -180,6 +189,7 @@ First bring-up plan, steps I.1–I.5. **Run it before `line-tran` or `psrr`, wit
   - **Line sensitivity:** dVREF/dVIN (mV/V), fitted from 3 steps above the knee to the top.
   - **BGR minimum VIN:** where VREF first falls `drop_fraction` (1 %) below its value at `vin_high`. Simulated ~1.56 V. Below it the BGR, not the pass device, can set the LDO's dropout (compare with `line-reg`).
   - **VOUT − VREF** at the top: the regulator follows VREF at unity gain. VOUT is on the AD2, so its DC error (~10 mV, unverified) is in this number.
+  - **DMM loading** (bring-up plan Test 3, "VREF level"): before the sweep, at `vin_high`, VREF is read with the DMM's input at >10 GOhm and again at 10 MOhm (`INP:IMP:AUTO`). The difference gives the BGR's output resistance; more than 0.5 mV is a note (the sweep's 10 GOhm readings are the ones to trust). The input goes back to 10 GOhm for the sweep.
 - **Setup checks:**
   - VREF at `vin_high` within `vref_tolerance` (20 %) of `vref_nominal` (1.204 V): DMM on TP3, JP2 closed, LDO on
   - VOUT on the AD2 near nominal at `vin_high` (LDO enabled, scope 1 on OUTA)
@@ -201,7 +211,7 @@ First bring-up plan, steps I.1–I.5. **Run it before `line-tran` or `psrr`, wit
   - AD2 GND -> board GND
 - **Two methods** (`iq.method`, `--method`):
   - **`shunt`:** DMM DC volts across R13 (0.1 Ω) on the 100 mV range. This is everything drawn from VIN: the LDO, BGR, enable block, the level shifters' low side, and ~1.2 µA into the AD2 scope on VOUT. One count is 1 µA, which is fine for Iq but too coarse for shutdown current.
-  - **`series`:** DMM DC amps (I and LO jacks) in place of one J1 jumper (`--rail bgr|vdd|ota`; EN_VDD's ~0.3 nA is under the 10 nA count, so `--rail en` is refused: use `enable-current`), or between the PSU and VIN_DC (`--rail total`). It uses a fixed range, 10 mA unless `dmm_range` says otherwise, so the zero and every point are read on the same range. One count is 10 nA, so this resolves shutdown current. The meter's burden (~5 Ω on the 10 mA range) drops a little of that rail's voltage.
+  - **`series`:** DMM DC amps (I and LO jacks) in place of one J1 jumper. The I jack goes on the INB pin (J1 3, 7, 15) and LO on the rail pin (1, 5, 13): current flows from INB into the rail, so the other way round reads negative (an issue). Until 2026-11-14 the wiring printout had them the other way round. Rails: `--rail bgr|vdd|ota` (in place of that J1 jumper; EN_VDD's ~0.3 nA is under the 10 nA count, so `--rail en` is refused: use `enable-current`), or between the PSU and VIN_DC (`--rail total`). It uses a fixed range, 10 mA unless `dmm_range` says otherwise, so the zero and every point are read on the same range. One count is 10 nA, so this resolves shutdown current. The meter's burden (~5 Ω on the 10 mA range) drops a little of that rail's voltage.
 - **Does:**
   1. Switches the supply output off (it may have been left on), then reads the DMM: the zero (offset, thermal EMF). It's subtracted from every point. The spread of those readings (at least 3) sets the floor, never below one DMM count at the chosen NPLC (1 µV on 100 mV at 10 NPLC; coarser at shorter integration times).
   2. Shunt method: switches in a known load (`check_code`, 4.8 mA) once, to prove the DMM sees the current through R13.
@@ -333,7 +343,10 @@ Without `[buffer]` (the demo board) line-tran and psrr use the single-rail path 
   - VOUT off nominal
   - a note if VOUT follows VIN at low frequency (dropout, or scope 1 on VIN)
 - **Plot:** PSRR vs frequency, and the VIN / VOUT amplitudes with the VOUT floor.
+- **The BGR's PSRR (`--measure vref`, bring-up plan Test 3):** scope 1 goes on VREF (TP3) through a 10x probe (`vref_probe_attenuation`), not OUTA, since the AD2's 1 MOhm would load the BGR; readings are scaled back up. JP2 stays fitted (refused with `--vref ext`). The DC check looks for VREF near `vref_nominal` (a probe left on 1x reads ten times high). The floor is ten times higher than on VOUT: 60 dB of rejection on 50 mV is 5 µV after the probe, under the AD2's floor, so expect "≥" points unless the BGR rejects less.
+- **Spectrum analyzer:** dropped for now (2026-11-14). The AD2 resolves PSRR to about 70 dB at 50 mV, against a 40 dB spec at 10 kHz and 55 dB from PEX. Floor-limited points say "≥"; a spectrum-analyzer `PsrrMeter` would replace them once its driver exists.
 - **Options:**
+  - `--measure vref`
   - `--fstart`, `--fstop`, `--ppd`
   - `--amp-mv 20`
   - `--vin`
@@ -365,10 +378,12 @@ Without `[buffer]` (the demo board) line-tran and psrr use the single-rail path 
 - **Setup checks**, on every capture (a probe can slip mid-run):
   - the input swing isn't the wave's (probe not on TP6, J6 wrong)
   - EN_OUT doesn't switch (probe not on J8.2, EN_VDD unpowered)
+- **VOUT tracking EN_AIN (`--output vout`, bring-up plan Test 5):** scope 1 on OUTA (J13 pin 4) instead of EN_OUT, J8 1-2 / 9-10 "LDO" fitted, so the LDO follows EN_AIN through the whole enable path. The report gives the EN_AIN levels where VOUT turns on and off. They include the LDO's startup and shutdown time (~6 / ~170 ms), so use a slow triangle: `--shape triangle --freq 0.1` (0.36 V/s, ~60 mV of shift on the turn-off level; the report says how much at the slope used). VOUT not switching, or its high level off nominal, is a setup issue. A square is refused here: VOUT's timing after an enable edge is `enable-startup`'s job.
 - **Options:**
   - `--shape triangle` or `--shape square`
   - `--freq 1e3`
   - `--captures 8`
+  - `--output vout`
 - **Config:** `[en_sine]`.
 
 ### `enable-current`: the enable block's current against switching frequency
@@ -445,6 +460,15 @@ Without `[buffer]` (the demo board) line-tran and psrr use the single-rail path 
 - **Notes:** stopped with Ctrl-C; no tempco (fewer than two plateaus far enough apart); the supply current rising by more than 20 % (condensation on the board).
 - **Options:** `--minutes 30`, `--interval 2`, `--vin`, `--no-dmm` (no VREF), `--enable dio`.
 - **Config:** `[temp]`.
+
+## External load: `--ext-load-ohm`
+
+A fixed resistor on VOUT (e.g. 1.2 kOhm on VOUT (J5) to GND (J12), ~1 mA) is part of the load the
+LDO sees. `--ext-load-ohm 1200` on `load-reg`, `line-reg`, `load-tran`, `enable-startup` and `temp`
+(or `loadbank.external_ohm`) adds VOUT / R to every load estimate, and the wiring lists it.
+`dut.i_max` is checked with it included for the codes the run uses, before anything powers up: with
+1.2 kOhm, code 4 (19.2 mA) becomes 20.2 mA and is refused (use `--load 3`, a bigger resistor, or
+none). `load-reg`'s default sweep ("every code within dut.i_max") leaves such codes out and says so.
 
 ## Enable from the AD2: `--enable dio` (JAFWAK)
 

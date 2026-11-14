@@ -75,11 +75,14 @@ uv run ldo-bench load-reg       -c configs/demo_board.toml   # --vin 2.0
 uv run ldo-bench line-reg       -c configs/demo_board.toml   # --load 30mA --vin-from psu
 uv run ldo-bench load-tran      -c configs/demo_board.toml   # --from 4mA --to 67mA --avg 32 --plot-us 100
 uv run ldo-bench line-tran                               # --low 1.75 --high 1.85 --load 19mA
+uv run ldo-bench psrr --measure vref                     # the BGR's PSRR: scope 1 on TP3 through a 10x probe
 uv run ldo-bench psrr                                    # --fstart 100 --fstop 1e6 --amp-mv 20
 uv run ldo-bench iq                                      # --method series --rail bgr
 uv run ldo-bench vref-line                               # --high 1.9 --low 1.4 --step 0.02
 uv run ldo-bench enable-sine                             # --freq 1e3, or --shape triangle --freq 1 (slow ramp)
 uv run ldo-bench enable-sine --shape square --freq 1e5     # propagation delay, rise / fall at 100 MS/s
+uv run ldo-bench enable-sine --output vout --shape triangle --freq 0.1   # VOUT tracking EN_AIN (J8 on LDO)
+uv run ldo-bench line-reg --split-rails                  # dropout Method B: BGR_VDD / OTA_VDD on PSU OUT2
 uv run ldo-bench enable-current                          # --fstart 10 --fstop 1e6 (EN_VDD current vs frequency)
 uv run ldo-bench temp                                    # --minutes 30 --interval 2 (Ctrl-C ends it, data kept)
 uv run ldo-bench enable-startup                          # --ch2 iin
@@ -96,6 +99,8 @@ Commands use `configs/jafwak.toml` unless `-c` (or `LDO_BENCH_CONFIG`) names ano
 - `--psu` / `--ad-serial`: pick an instrument when several are connected
 
 The DC, transient, psrr and iq tests also take `--vref ext`. It drives VREF_IN from the supply's second output in place of the BGR; see [tests.md](docs/tests.md#external-reference-bgr-vs---vref-ext-jafwak).
+
+`load-reg`, `line-reg`, `load-tran`, `enable-startup` and `temp` take `--ext-load-ohm 1200`: a fixed resistor on VOUT whose current is added to every load estimate (and to the `dut.i_max` check). See [tests.md](docs/tests.md#external-load---ext-load-ohm).
 
 `smoke`, `load-reg`, `line-reg`, `load-tran`, `vref-line` and `temp` also take `--enable dio`. The run then drives the LDO's enable from the AD2 (J6 7-8, J13 pins 12 / 10 / 14) instead of it being tied on with jumpers (J6 1-2): EN is low while VIN rises, high once VIN is up, and low again before anything turns off. See [tests.md](docs/tests.md#enable-from-the-ad2---enable-dio-jafwak).
 
@@ -162,6 +167,7 @@ Each run writes a folder under `results/<test>/`, e.g. `results/load-tran/202611
 | `--vref ext` (PSU OUT2 on VREF_IN) and `compare` | simulator only |
 | `vref-line`, `temp`, `enable-sine --shape square`, `--enable dio` (added 2026-11-13) | simulator only |
 | `enable-current` (added 2026-11-13; replaces `iq --rail en`) | simulator only |
+| `psrr --measure vref`, `enable-sine --output vout`, `line-reg --split-rails`, `--ext-load-ohm`, vref-line's 10 GOhm / 10 MOhm check (added 2026-11-14) | simulator only |
 | `psu-hold`, `psu-sweep`, the 10 mA / 60 mA split current limit (added 2026-11-13) | simulator only |
 | 54624A over RS-232: load-tran cross-check (averaged capture, readback, time window), demo board | yes (2026-11-10), peaks within 0.8 mV of the AD2 |
 | load-tran supply current check (VIN reaching the board), 54621A/54624A clipping check | yes (2026-11-10): passing, and failing with the supply leads unplugged |
