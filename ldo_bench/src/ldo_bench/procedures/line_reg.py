@@ -38,6 +38,7 @@ from ldo_bench.analysis import LineRegulation, dropout_strays, line_regulation
 from ldo_bench.analysis import sweep_points as analysis_sweep
 from ldo_bench.bench import Bench
 from ldo_bench.config import LineRegConfig
+from ldo_bench.instruments.base import InstrumentError
 from ldo_bench.procedures import INVALID
 
 log = logging.getLogger(__name__)
@@ -59,6 +60,7 @@ class LineRegResult:
     vout_nominal: float = 1.0  # V
     issues: list[str] = field(default_factory=list)  # setup problems: non-empty = not valid
     notes: list[str] = field(default_factory=list)  # worth knowing, not a setup problem
+    split_rails_v: float | None = None  # V on BGR_VDD / OTA_VDD in Method B (--split-rails), else None
 
     @property
     def vin_label(self) -> str:
@@ -70,6 +72,7 @@ class LineRegResult:
             "issues": self.issues,
             "notes": self.notes,
             "vin_source": self.vin_source,
+            "split_rails_v": self.split_rails_v,
             "load_code": self.load_code,
             "i_load_a": self.i_load,
             "points": len(self.rows),
@@ -112,10 +115,22 @@ def sweep_points(lr: LineRegConfig) -> np.ndarray:
     return analysis_sweep(lr.vin_start, lr.vin_stop, lr.vin_step)
 
 
-def wiring(bench: Bench, lr: LineRegConfig) -> list[str]:
-    """Wiring lines shown before the run, one connection per line; the scopes depend on vin_source and the DMM."""
+def wiring(bench: Bench, lr: LineRegConfig, split_rails: bool = False) -> list[str]:
+    """Wiring lines shown before the run, one connection per line; the scopes depend on vin_source and the DMM.
+
+    split_rails (Method B): BGR_VDD and OTA_VDD off INB and onto the PSU's other output."""
     cfg = bench.cfg
     lines = w.psu_on_vin(cfg)
+    if split_rails:
+        ch = cfg.split_rails.psu_channel if cfg.split_rails else 2
+        lines += [
+            "Remove the J1 1-3 jumper (BGR_VDD)",
+            "Remove the J1 13-15 jumper (OTA_VDD)",
+            f"PSU OUT{ch} + -> J1 pin 1 (BGR_VDD)",
+            f"PSU OUT{ch} + -> J1 pin 13 (OTA_VDD)",
+            f"PSU OUT{ch} - -> {cfg.board.supply_gnd}",
+            *(ln for ln in w.j1_rails() if "1-3" not in ln and "13-15" not in ln),  # VDD, EN_VDD on INB
+        ]
     if not (lr.vin_source == "psu" and bench.dmm is not None):  # with the PSU readback and a DMM, no scopes
         lines.append(w.scope_vout(cfg))
     if lr.vin_source == "ad2":
@@ -129,16 +144,27 @@ def wiring(bench: Bench, lr: LineRegConfig) -> list[str]:
     return [*lines, w.ad2_gnd(cfg)]
 
 
-def run(bench: Bench, lr: LineRegConfig) -> LineRegResult:
+def run(bench: Bench, lr: LineRegConfig, split_rails: bool = False) -> LineRegResult:
     """Sweep VIN and fit line regulation (see the module docstring for the steps and checks).
 
     lr: the [line_reg] section. Every setpoint goes through bench.vin_from_psu, which refuses
     anything above dut.vin_max. Setup problems are recorded in `issues`, never raised.
+    split_rails: dropout Method B ([split_rails]): BGR_VDD / OTA_VDD held on the PSU's other output
+    from the first point to the last, so the knee is the pass device's.
     """
+    if split_rails and bench.cfg.split_rails is None:
+        raise InstrumentError("--split-rails needs a [split_rails] section in the config")
+    if split_rails and bench.vref_external:  # before anything powers up (both need the other output)
+        raise InstrumentError("refusing --split-rails with --vref ext: both need the PSU's other output")
     bank = bench.loadbank
     vins = sweep_points(lr)
     bench.loadbank.require([lr.load_code])  # dut.i_max with any external load, before power-up
-    bench.confirm_wiring("line regulation", wiring(bench, lr), ref_probe=("vin", 0))
+    bench.confirm_wiring(
+        "line regulation" + (" (Method B: split rails)" if split_rails else ""),
+        wiring(bench, lr, split_rails),
+        ref_probe=("vin", 0),
+        aux_to="rails" if split_rails else "vref",
+    )
     bench.set_psu_limit(high=lr.high_current)  # psu.high_current_limit if the section asks
 
     bank.set(lr.load_code)
@@ -154,6 +180,8 @@ def run(bench: Bench, lr: LineRegConfig) -> LineRegResult:
     bench.vin_from_psu(float(max(vins)) if bench.vref_external else float(vins[0]))
     bench.ldo_enable(True)
     bench.reference_on()
+    if split_rails:  # VIN (VDD) is up: now BGR_VDD / OTA_VDD
+        bench.split_rails_on()
     for k, v in enumerate(vins):
         bench.vin_from_psu(float(v))
         p = bench.measure_point(lr.dc_window, vin_source=lr.vin_source)
@@ -182,6 +210,7 @@ def run(bench: Bench, lr: LineRegConfig) -> LineRegResult:
             row["i_psu_a"] = bench.psu.measure_current()
         rows.append(row)
         log.info("[%2d/%d] VIN %.3f V  VOUT %.5f V", k + 1, len(vins), p.vin, p.vout)
+    bench.split_rails_off()  # before EN and VIN come down
     bench.ldo_enable(False)
     bank.off()
 
@@ -239,7 +268,13 @@ def run(bench: Bench, lr: LineRegConfig) -> LineRegResult:
             f"VIN {switch:.2f} V): a range-to-range offset may bend the slope. Fixing dmm.range avoids it, at the "
             "cost of resolution"
         )
-    if np.isfinite(reg.dropout_vin):
+    sr = bench.cfg.split_rails if split_rails else None
+    if sr is not None:
+        notes.append(
+            f"Method B: BGR_VDD and OTA_VDD held at {sr.voltage:g} V on PSU OUT{sr.psu_channel} through the sweep, "
+            "so the knee is the pass device's own (VDD and EN_VDD follow VIN)"
+        )
+    elif np.isfinite(reg.dropout_vin):
         notes.append(
             "is the knee the pass device or the BGR? Compare it with vref-line's BGR minimum VIN (bring-up "
             "plan Test 3): a knee at or above it means the BGR sets the dropout"
@@ -255,6 +290,7 @@ def run(bench: Bench, lr: LineRegConfig) -> LineRegResult:
         bench.cfg.dut.vout_nominal,
         issues,
         notes,
+        sr.voltage if sr is not None else None,
     )
 
 

@@ -1025,6 +1025,43 @@ class LineTranConfig(TransientCaptureConfig, BufferProofConfig):
         return self
 
 
+class SplitRailsConfig(_Model):
+    """[split_rails]: dropout "Method B" (line-reg --split-rails, bring-up plan Test 7).
+
+    BGR_VDD and OTA_VDD come off INB (their J1 jumpers removed, 1-3 and 13-15) and onto the PSU's
+    other output at a fixed `voltage`, while VDD and EN_VDD stay on VIN through J1 5-7 / 9-11. As
+    VIN sweeps down, only the pass device drops out, so line-reg's knee is the pass device's own.
+    VIN is up before the rails and stays at or above vin_floor while they are, so the BGR / OTA
+    domains are never powered without VDD (only the VDD ring has ESD clamps).
+    """
+
+    psu_channel: int = Field(2, ge=1, le=2, description="PSU output on BGR_VDD / OTA_VDD (not psu.channel)")
+    voltage: float = Field(1.8, gt=0, description="BGR_VDD / OTA_VDD during the sweep (V)")
+    v_max: float = Field(gt=0, description="The rails are never programmed above this (V)")
+    current_limit: float = Field(
+        0.005, gt=0, description="Current limit on that output (A); BGR + OTA draw ~0.03 mA"
+    )
+    ovp: float | None = Field(None, gt=0, description="OVP on that output (V), above v_max")
+    max_current: float = Field(
+        1e-3,
+        gt=0,
+        description=(
+            "More than this (A) from the output once it is up means a J1 1-3 / 13-15 jumper is still "
+            "fitted (the output fighting VIN through INB): the rails come down and the run stops"
+        ),
+    )
+    vin_floor: float = Field(1.0, gt=0, description="VIN is never set below this (V) while the rails are up")
+    settle_time: float = Field(0.3, ge=0, description="Wait after the rails reach `voltage` (s)")
+
+    @model_validator(mode="after")
+    def _check(self) -> SplitRailsConfig:
+        if self.voltage > self.v_max:
+            raise ValueError("split_rails.voltage is above split_rails.v_max")
+        if self.ovp is not None and self.ovp <= self.v_max:
+            raise ValueError("split_rails.ovp must be above split_rails.v_max")
+        return self
+
+
 class VrefConfig(_Model):
     """[vref]: an external reference on VREF_IN in place of the on-chip BGR (`--vref ext`).
 
@@ -1107,6 +1144,7 @@ class BenchConfig(_Model):
     psrr: PsrrConfig | None = None
     vref: VrefConfig | None = None
     buffer: BufferConfig | None = None
+    split_rails: SplitRailsConfig | None = None
 
     def enable_pin_clash(self) -> set[int]:
         """Enable DIO pins that are also load bank pins (they would fight); empty if none."""
@@ -1284,6 +1322,14 @@ class BenchConfig(_Model):
             code_ok("startup.load_code", self.startup.load_code)
         if self.iq:
             vin_ok("iq sweep", self.iq.vin_stop)  # vin_stop >= vin_start (IqConfig)
+        if self.split_rails:
+            sr = self.split_rails
+            if sr.v_max > vin_ceiling:
+                raise ValueError(
+                    f"split_rails.v_max ({sr.v_max} V) exceeds dut.vin_max / psu.v_max ({vin_ceiling} V)"
+                )
+            if sr.psu_channel == self.psu.channel:
+                raise ValueError("split_rails.psu_channel must be the PSU's other output, not psu.channel")
             code_ok("iq.check_code", self.iq.check_code)
         if self.psrr:
             ps = self.psrr

@@ -161,6 +161,8 @@ class Bench:
         # external reference (see the class docstring)
         self.vref_external = vref_external
         self.vref_out: SupplyOutput | None = None  # the PSU output on VREF_IN, once set up
+        self.rails_out: SupplyOutput | None = None  # the PSU output on BGR_VDD / OTA_VDD (split_rails_on)
+        self._rails_on = False
         self._vref_on = False  # driving vref.external_v (not held at 0 V)
         self.vref_proof: dict | None = None  # what reference_on() measured, for the run's records
         # what VIN is now (V) and what drives it, so the reference never sits above it
@@ -220,6 +222,7 @@ class Bench:
         ch1_probe: Literal["vout", "en_out", "vref"] = "vout",
         ch1_atten: float = 1.0,
         ldo_on_en_out: bool = False,
+        aux_to: Literal["vref", "rails"] = "vref",
         en_pin: int | None = None,
     ) -> None:
         """Show the wiring a test needs and wait for the user to confirm it.
@@ -245,6 +248,7 @@ class Bench:
             self.sim_model.ch1_probe = ch1_probe
             self.sim_model.ch1_atten = ch1_atten
             self.sim_model.ldo_on_en_out = ldo_on_en_out
+            self.sim_model.aux_to = aux_to
             self.sim_model.en_pin = en_pin
         if (ohm := self.cfg.loadbank.external_ohm) is not None:
             lines = [*lines, wiring.ext_load(self.cfg, ohm)]
@@ -368,13 +372,22 @@ class Bench:
         """
         self._ensure_psu()
         self.reference_off()
+        self.split_rails_off()
         self.psu.output(False)
         self._psu_on = False
         self._vin_level, self._vin_from = None, None
 
     def vin_from_psu(self, volts: float) -> None:
-        """PSU drives the LDO's VIN directly: ramp to `volts` (V), at most min(dut.vin_max, psu.v_max)."""
+        """PSU drives the LDO's VIN directly: ramp to `volts` (V), at most min(dut.vin_max, psu.v_max).
+
+        While BGR_VDD / OTA_VDD are up on the other output (split_rails_on), VIN stays at or above
+        split_rails.vin_floor."""
         self._vref_allows_vin(volts)
+        if self._rails_on and volts < self.cfg.split_rails.vin_floor - 1e-9:
+            raise InstrumentError(
+                f"refusing VIN = {volts} V with BGR_VDD / OTA_VDD up on OUT{self.rails_out.channel}: VIN stays at "
+                f"or above split_rails.vin_floor ({self.cfg.split_rails.vin_floor} V) until they are off"
+            )
         self._psu_ramp(volts, min(self.cfg.dut.vin_max, self.cfg.psu.v_max))
         self._vin_level, self._vin_from = volts, "psu"
 
@@ -724,6 +737,77 @@ class Bench:
             self.vref_out.set_voltage(0.0)
         self._vref_on = False
 
+    # --- Dropout Method B: BGR_VDD / OTA_VDD on the PSU's other output ---------------------
+    def split_rails_on(self) -> None:
+        """Ramp the PSU's other output onto BGR_VDD / OTA_VDD (J1 pins 1 and 13) at split_rails.voltage.
+
+        Needs VIN up first, at or above split_rails.vin_floor (VDD powered before the other domains),
+        and the other output free (not --vref ext, not U2's V-). Once up, the output's current must
+        be under split_rails.max_current: more means a J1 1-3 / 13-15 jumper is still fitted, so the
+        output is fighting VIN through INB; the rails then go back to 0 V and the run stops.
+        """
+        sr = self.cfg.split_rails
+        if sr is None:
+            raise InstrumentError("--split-rails needs a [split_rails] section in the config")
+        if self.vref_external and self.cfg.vref is not None and self.cfg.vref.psu_channel == sr.psu_channel:
+            raise InstrumentError(
+                f"refusing --split-rails with --vref ext: both need PSU OUT{sr.psu_channel}"
+            )
+        if self._buffer_up:
+            raise InstrumentError(
+                f"refusing the split rails while U2's split supply is up (PSU OUT{sr.psu_channel})"
+            )
+        if (
+            self._vin_level is None
+            or not self._psu_on
+            or self._vin_from != "psu"
+            or self._vin_level < sr.vin_floor
+        ):
+            raise InstrumentError(
+                f"the split rails need VIN up first, from the PSU, at or above {sr.vin_floor} V (VDD powered "
+                "before BGR_VDD / OTA_VDD)"
+            )
+        if not hasattr(self.psu, "aux"):
+            raise InstrumentError(f"the supply ({self.psu.idn}) has no second output for the split rails")
+        if self.rails_out is None:
+            self.rails_out = self.psu.aux(sr.psu_channel)
+            self.rails_out.setup(current_limit=sr.current_limit, ovp=sr.ovp)
+        self._rails_on = True  # from the first step: shutdown and VIN's floor apply while it ramps
+        self._rails_ramp(sr.voltage)
+        self.sleep(sr.settle_time)
+        i = self.rails_out.measure_current()
+        log.info("Split rails: OUT%d at %.3f V, %.3f mA", self.rails_out.channel, sr.voltage, i * 1e3)
+        if i > sr.max_current:
+            self.split_rails_off()
+            raise InstrumentError(
+                f"PSU OUT{self.rails_out.channel} sources {i * 1e3:.2f} mA into BGR_VDD / OTA_VDD (they draw "
+                f"~0.03 mA; limit {sr.max_current * 1e3:g} mA): a J1 1-3 or 13-15 jumper is probably still "
+                "fitted, so the output is fighting VIN through INB. The rails are back at 0 V"
+            )
+
+    def split_rails_off(self) -> None:
+        """Ramp the split rails to 0 V (the output stays connected, held at 0 V). Safe in any mode."""
+        if self.rails_out is None:
+            return
+        if self._psu_on:
+            self._rails_ramp(0.0)
+        else:
+            self.rails_out.set_voltage(0.0)
+        self._rails_on = False
+
+    def _rails_ramp(self, target: float) -> None:
+        """Ramp the split-rails output to `target` (V) in psu.ramp_step steps, at most split_rails.v_max."""
+        sr = self.cfg.split_rails
+        if not 0 <= target <= sr.v_max + 1e-9:
+            raise InstrumentError(f"refusing BGR_VDD / OTA_VDD = {target} V (limit {sr.v_max} V)")
+        out = self.rails_out
+        v = out.get_voltage_setpoint()
+        while abs(target - v) > 1e-9:
+            v = _toward(v, target, self.cfg.psu.ramp_step)
+            out.set_voltage(v)
+        if issue := _setpoint_issue(out, target, f"split-rails output (OUT{out.channel})"):
+            raise InstrumentError(issue)
+
     def _vout_now(self) -> float:
         """VOUT (V) on the AD2's VOUT channel, averaged over 0.1 s."""
         vout, _ = self.measure_dc(0.1)
@@ -841,6 +925,8 @@ class Bench:
         """
         steps: list[tuple[str, Callable[[], None]]] = [
             ("external reference 0 V", lambda: self.vref_out.set_voltage(0.0) if self.vref_out else None),
+            # BGR_VDD / OTA_VDD down before VIN (VDD) goes: never powered without VDD
+            ("split rails 0 V", lambda: self.rails_out.set_voltage(0.0) if self.rails_out else None),
             ("LDO enable low", lambda: self.set_enable(False) if self._enable_driven else None),
             # split-supply buffer: U2's input stays driven at 0 V until both of its rails are off
             (
@@ -870,7 +956,7 @@ class Bench:
         self._psu_on = self._awg_on = self._psu_ready = self._vref_on = self._enable_driven = self._v33_on = (
             False
         )
-        self._buffer_up = False
+        self._buffer_up = self._rails_on = False
         self.vminus_out = None
         self._vin_level, self._vin_from = None, None
 

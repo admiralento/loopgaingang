@@ -118,9 +118,10 @@ class LdoModel:
     sense_ohm: float = 0.1  # ohm, current-sense resistors R13 (input) / R1 (output)
     ch1_probe: str = "vout"  # what the VOUT channel is on: "vout", "en_out" or "vref" (TP3)
     ch1_atten: float = 1.0  # that channel's probe attenuation (10 = a 10x probe)
-    ldo_on_en_out: bool = (
-        False  # J8 1-2 / 9-10 "LDO": the LDO's enable follows EN_OUT (enable-sine --output vout)
-    )
+    ldo_on_en_out: bool = False  # J8 on "LDO": the LDO follows EN_OUT (enable-sine --output vout)
+    aux_to: str = "vref"  # the PSU's second output: "vref" (VREF_IN / U2's V-) or "rails" (Method B)
+    rails_v: float = 0.0  # V, that output's setpoint when aux_to == "rails"
+    j1_rail_jumpers_out: bool = True  # Method B: J1 1-3 / 13-15 removed (else OUT2 fights VIN via INB)
     bgr_psrr_db: float = 60.0  # dB, the BGR's rejection of VIN ripple at VREF (flat)
     awg_wave: dict[int, tuple[str, float, float, float]] = field(
         default_factory=dict
@@ -400,18 +401,27 @@ class SimSupplyOutput:
         self.set_voltage(0.0)
 
     def set_voltage(self, volts: float) -> None:
+        if self.m.aux_to == "rails":
+            self.m.rails_v = volts
+            return
         self.m.vref_out_v = volts
         if self.m.vref_wired and self.m.jp2_fitted and volts > 0:
             self.m.bgr_backdriven = True
 
     def get_voltage_setpoint(self) -> float:
-        return self.m.vref_out_v
+        return self.m.rails_v if self.m.aux_to == "rails" else self.m.vref_out_v
 
     def measure_voltage(self) -> float:
-        return self.m.vref_out_v * (1 + self.m.psu_readback_gain) if self.m.psu_on else 0.0
+        return self.get_voltage_setpoint() * (1 + self.m.psu_readback_gain) if self.m.psu_on else 0.0
 
     def measure_current(self) -> float:
-        return 0.0
+        """Method B: what BGR_VDD / OTA_VDD draw, or the current limit if a J1 jumper ties them to INB."""
+        m = self.m
+        if m.aux_to != "rails" or not m.psu_on or m.rails_v <= 0:
+            return 0.0
+        if not m.j1_rail_jumpers_out:
+            return 5e-3  # in current limit, fighting VIN
+        return m.iq_on * (RAIL_SHARE["bgr"] + RAIL_SHARE["ota"])
 
 
 class SimAnalogDiscovery:

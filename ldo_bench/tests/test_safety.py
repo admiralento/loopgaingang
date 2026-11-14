@@ -153,6 +153,7 @@ def test_vin_from_psu_obeys_psu_v_max_when_it_is_below_vin_max(jafwak):
         "startup",
         "iq",
         "buffer",
+        "split_rails",
         "psu_hold",
         "psu_sweep",
     ):

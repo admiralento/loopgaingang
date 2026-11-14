@@ -798,6 +798,13 @@ def line_reg(
     vin_from: Annotated[
         VinFrom | None, typer.Option(help="VIN measurement: ad2 (scope at the board) or psu (its readback)")
     ] = None,
+    split_rails: Annotated[
+        bool,
+        typer.Option(
+            "--split-rails",
+            help="Dropout Method B: BGR_VDD / OTA_VDD on the PSU's other output ([split_rails]), J1 1-3 / 13-15 out",
+        ),
+    ] = False,
     ext_load_ohm: ExtLoadOpt = None,
     out: OutOpt = Path("results"),
     sim: SimOpt = False,
@@ -821,7 +828,7 @@ def line_reg(
         cfg,
         config,
         proc,
-        lambda b: proc.run(b, lr),
+        lambda b: proc.run(b, lr, split_rails=split_rails),
         out=out,
         sim=sim,
         save_sim=save_sim,
