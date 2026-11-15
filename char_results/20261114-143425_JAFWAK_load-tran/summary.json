@@ -1,0 +1,74 @@
+{
+  "xcheck": {
+    "rising": {
+      "xcheck_model": "54621A",
+      "xcheck_valid": false,
+      "xcheck_issues": "cross-check scope not available: no 54620-series scope found on VISA (GPIB / USB), RS-232 ports or Prologix adapters.\nOn the 54621A (Utility > I/O): on GPIB, note its GPIB address. On RS-232, set the baud rate to match xscope.baud (57600 is fastest) and the handshake to DTR (xscope.flow = \"dsrdtr\") or XON/XOFF (\"xonxoff\"); the port is 8 data bits, no parity, 1 stop bit, on a null-modem cable.\nRun without it with --no-xscope, or set xscope.enabled = false.\nRun `ldo-bench discover -v` for details.",
+      "xcheck_averages": 0,
+      "xcheck_deviation_v": NaN,
+      "xcheck_settling_time_s": NaN,
+      "xcheck_noise_v": NaN
+    },
+    "falling": {
+      "xcheck_model": "54621A",
+      "xcheck_valid": false,
+      "xcheck_issues": "cross-check scope not available: no 54620-series scope found on VISA (GPIB / USB), RS-232 ports or Prologix adapters.\nOn the 54621A (Utility > I/O): on GPIB, note its GPIB address. On RS-232, set the baud rate to match xscope.baud (57600 is fastest) and the handshake to DTR (xscope.flow = \"dsrdtr\") or XON/XOFF (\"xonxoff\"); the port is 8 data bits, no parity, 1 stop bit, on a null-modem cable.\nRun without it with --no-xscope, or set xscope.enabled = false.\nRun `ldo-bench discover -v` for details.",
+      "xcheck_averages": 0,
+      "xcheck_deviation_v": NaN,
+      "xcheck_settling_time_s": NaN,
+      "xcheck_noise_v": NaN
+    }
+  },
+  "valid": true,
+  "issues": [],
+  "vin": 1.8,
+  "trigger_pin": 4,
+  "averages": 64,
+  "supply_current": {
+    "i_low_a": 0.004909399,
+    "i_high_a": 0.01938476,
+    "expected_rise_a": 0.014634146341463414
+  },
+  "edges": {
+    "rising": {
+      "nominal": 1.1956550754951605,
+      "peak": 1.1913886260482618,
+      "band": 0.00042664494468986903,
+      "settle_level": 1.1956550754951605,
+      "settling_time": NaN,
+      "noise": 0.0006056971416407731,
+      "final": 1.1929632399594505,
+      "sample_rate": 10000000.0,
+      "step_index": 1640,
+      "reference": "pre",
+      "deviation": -0.00426644944689869,
+      "upper": 1.1960817204398504,
+      "lower": 1.1952284305504706,
+      "trustworthy": false,
+      "i_from": 0.004636363636363636,
+      "i_to": 0.01927050997782705
+    },
+    "falling": {
+      "nominal": 1.1928901674008314,
+      "peak": 1.229096522111604,
+      "band": 0.0036206354710772493,
+      "settle_level": 1.1928901674008314,
+      "settling_time": 0.0004271,
+      "noise": 2.9625324936458886e-05,
+      "final": 1.1956498623313683,
+      "sample_rate": 10000000.0,
+      "step_index": 1640,
+      "reference": "pre",
+      "deviation": 0.03620635471077249,
+      "upper": 1.1965108028719087,
+      "lower": 1.1892695319297542,
+      "trustworthy": true,
+      "i_from": 0.01927050997782705,
+      "i_to": 0.004636363636363636
+    }
+  },
+  "vref": {
+    "source": "bgr",
+    "bgr_measured_v": 1.17
+  }
+}
