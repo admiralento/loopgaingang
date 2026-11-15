@@ -1409,7 +1409,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "125"
+		(property "Value" "680"
 			(at 115.57 69.8499 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -1839,7 +1839,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "31.6"
+		(property "Value" "150"
 			(at 158.75 69.8499 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2143,7 +2143,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "125"
+		(property "Value" "330"
 			(at 129.54 69.8499 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2751,7 +2751,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "250"
+		(property "Value" "1.2k"
 			(at 93.98 69.8499 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3867,7 +3867,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "15.4"
+		(property "Value" "82"
 			(at 179.07 69.8499 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3976,143 +3976,6 @@
 			(project "LDO_Stable_JAFWAK"
 				(path "/e797984e-8841-4b55-a934-93c9429b6b10/dc9a158e-4ee1-42ad-aacb-b9976914ef03"
 					(reference "R15")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Device:R")
-		(at 138.43 68.58 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "ecb31ae7-1296-45f4-b7b7-1d56cdab889b")
-		(property "Reference" "R17"
-			(at 140.97 67.3099 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Value" "125"
-			(at 140.97 69.8499 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
-			(at 136.652 68.58 90)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" "https://www.te.com/commerce/DocumentDelivery/DDEController?Action=srchrtrv&DocNm=1773270-2&DocType=Data%20Sheet&DocLang=English&DocFormat=pdf&PartCntxt=9-2176390-1"
-			(at 138.43 68.58 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "RES 124 OHMS 0.1% 1/5W 0805"
-			(at 138.43 68.58 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Manufacturer" "TE Connectivity Passive Product"
-			(at 138.43 68.58 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Manufacturer Part Number" "RQ73C2A124RBTD"
-			(at 138.43 68.58 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Distributer Link 1" "https://www.digikey.com/en/products/detail/te-connectivity-passive-product/RQ73C2A124RBTD/9479798"
-			(at 138.43 68.58 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Distributer Link 2" ""
-			(at 138.43 68.58 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "KiLib_Generator" "SMD_2terminal_chip_molded"
-			(at 138.43 68.58 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "2"
-			(uuid "9b830896-abee-4f50-a2e4-afcb9d3e1bcd")
-		)
-		(pin "1"
-			(uuid "a2f9d9de-7fb0-474b-b16e-45d39b85b285")
-		)
-		(instances
-			(project "LDO_Stable_JAFWAK"
-				(path "/e797984e-8841-4b55-a934-93c9429b6b10/dc9a158e-4ee1-42ad-aacb-b9976914ef03"
-					(reference "R17")
 					(unit 1)
 				)
 			)
