@@ -205,9 +205,9 @@ First bring-up plan, steps I.1–I.5. **Run it before `line-tran` or `psrr`, wit
 
 ### `iq`: quiescent and shutdown current
 - **Wiring (JAFWAK, shunt method):**
-  - PSU -> VIN_DC (JP4 to DC); nothing on the load bank (it stays off)
+  - PSU -> VIN_DC (JP4 to DC); JP2 fitted
   - DMM V (HI) -> J13.1 (VIN), COM -> J13.2 (INB): across R13. The DMM floats, so no ground lead; nothing else on the V terminals
-  - J1: every rail you want powered (BGR_VDD 1-3, VDD 5-7, EN_VDD 9-11, OTA_VDD 13-15)
+  - J1 ON column, all four (BGR_VDD 1-3, VDD 5-7, EN_VDD 9-11, OTA_VDD 13-15)
   - Scope 1+ -> J13 pin 4 (OUTA), Scope 1- -> J13 pin 6 (GND) (VOUT check; draws ~1 uA)
   - Load check (shunt, enabled): fit J10 "LOAD"; AD2 DIO 0-4 -> J13 pins 7, 9, 11, 13, 15 (B0-B4). The load cell doesn't need VS_BUFF
   - Enable path: J6 7-8 (EN_CTRL_18 -> EN_AIN), J8 1-2 (EN_OUT -> EN_IN), J8 9-10 (~EN_OUT -> ~EN_IN)
@@ -363,7 +363,7 @@ Without `[buffer]` (the demo board) line-tran and psrr use the single-rail path 
 
 ### `enable-sine`: enable comparator thresholds
 - **Wiring:**
-  - PSU -> VIN_DC (JP4 to DC); J1 9-11: EN_VDD from INB (other J1 rails as you like)
+  - PSU -> VIN_DC (JP4 to DC); J1 ON column, all four (1-3, 5-7, 9-11, 13-15): VDD (J1 5-7) must be up in every test
   - AD2 W1 -> EN_FG SMA (J2); J6 5-6: EN_FG -> EN_AIN
   - Scope 2+ -> TP6 (EN_AIN) (trigger), Scope 1+ -> J8.2 (EN_OUT); both - -> GND
   - AD2 GND -> board GND
@@ -393,7 +393,7 @@ Without `[buffer]` (the demo board) line-tran and psrr use the single-rail path 
 - **Why:** EN_VDD's static current (~0.3 nA, PEX) is under the DMM's 10 nA count, and the ~1.6 mA spike at each threshold crossing is far too short for it. But each input cycle moves about the same charge Q through the block, so its average current is I_static + Q f, a DC current the DMM reads. The slope gives Q.
 - **Wiring:**
   - PSU -> VIN_DC (JP4 to DC)
-  - Remove the J1 9-11 jumper (EN_VDD); DMM I (3A/mA jack) -> J1 pin 9, DMM LO (COM) -> J1 pin 11
+  - Remove the J1 9-11 jumper (EN_VDD); DMM I (3A/mA jack) -> J1 pin 11 (INB), DMM LO (COM) -> J1 pin 9 (EN_VDD): current flows from INB into the rail
   - J1 1-3, 5-7, 13-15 fitted. **VDD (J1 5-7) must be powered in every test:** only the VDD ring has ESD clamps, and a driven pin with VDD off forward-biases them
   - J8 5-6 (EN_IN = GND; misprinted "HI") and J8 13-14 "HI" (~EN_IN = VIN): the LDO is held off and EN_OUT drives nothing
   - J6 5-6 "FG"; AD2 W1 -> EN_FG (J2); Scope 2+ -> EN_AIN (TP6), Scope 2- -> GND
@@ -415,7 +415,7 @@ Without `[buffer]` (the demo board) line-tran and psrr use the single-rail path 
 
 ### `enable-startup`: turn-on and turn-off through the enable path
 - **Wiring:**
-  - PSU -> VIN_DC (JP4 to DC); J1: each rail you want powered (BGR_VDD 1-3, VDD 5-7, EN_VDD 9-11, OTA_VDD 13-15)
+  - PSU -> VIN_DC (JP4 to DC); J1 ON column, all four (BGR_VDD 1-3, VDD 5-7, EN_VDD 9-11, OTA_VDD 13-15); JP2 fitted
   - Enable path: J6 7-8 (EN_CTRL_18 -> EN_AIN), J8 1-2 (EN_OUT -> EN_IN), J8 9-10 (~EN_OUT -> ~EN_IN)
   - AD2 DIO 5 -> J13.12 (EN_CTRL_33), DIO 6 -> J13.10 (~EN_CTRL_33)
   - AD2 V+ -> J13.14 (V_33), AD2 GND -> board GND

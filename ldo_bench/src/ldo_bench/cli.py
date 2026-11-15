@@ -46,7 +46,9 @@ from ldo_bench.config import (
 )
 from ldo_bench.instruments.base import InstrumentError
 
-app = typer.Typer(no_args_is_help=True, add_completion=False)
+app = typer.Typer(
+    no_args_is_help=True, add_completion=False, rich_markup_mode=None
+)  # help names config sections as [name]: show them, not markup
 
 
 def _choices(name: str, model, field: str) -> type[StrEnum]:
