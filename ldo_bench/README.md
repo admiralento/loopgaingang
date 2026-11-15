@@ -106,7 +106,7 @@ The DC, transient, psrr and iq tests also take `--vref ext`. It drives VREF_IN f
 ## Configs
 
 There is one TOML file per board in `configs/`:
-- **`jafwak.toml`:** our LDO. VOUT 1.2 V, VIN nominal 1.8 V and **max 1.9 V**, load **max 20 mA** (codes 0–21: 1 mA steps from a load cell refitted 2026-11-14, top code 19.3 mA). Supply limit **10 mA**, 60 mA for the load tests (`high_current = true`).
+- **`jafwak.toml`:** our LDO. VOUT 1.2 V, VIN nominal 1.8 V and **max 1.9 V**, load **max 21 mA** (codes 0–22: 1 mA steps from a load cell refitted 2026-11-14, top code 20.04 mA). Supply limit **10 mA**, 60 mA for the load tests (`high_current = true`).
 - **`demo_board.toml`:** TPS7A7001 evaluation board, VOUT 1.0 V, plus the Switched_R_Load_Bank.
 
 A config holds everything board-specific: the limits (`[dut]`, `[psu]`), the wiring (`[ad2]`, `[loadbank]`, `[enable]`), the instruments (`[dmm]`, `[xscope]`) and one section per test. It's validated before any instrument is touched:

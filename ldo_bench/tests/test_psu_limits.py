@@ -54,12 +54,12 @@ def test_high_current_needs_a_high_limit(jafwak):
 @pytest.mark.parametrize(
     "section, fields",
     [
-        ("load_reg", {"high_current": False}),  # every code up to 19.3 mA on a 10 mA limit
-        ("line_reg", {"high_current": False}),  # load_code 21 = 19.3 mA
-        ("load_tran", {"high_current": False}),  # code_high 21
+        ("load_reg", {"high_current": False}),  # every code up to 20.04 mA on a 10 mA limit
+        ("line_reg", {"high_current": False}),  # load_code 22 = 20.04 mA
+        ("load_tran", {"high_current": False}),  # code_high 22
         ("smoke", {"high_current": False}),  # full load
         ("loadbank_check", {"high_current": False}),  # B4: 1.2 V / 82 ohm = 14.6 mA > 10 mA
-        ("iq", {"check_code": 21}),  # iq has no high limit: 19.3 mA > 10 mA
+        ("iq", {"check_code": 22}),  # iq has no high limit: 20.04 mA > 10 mA
     ],
 )
 def test_a_load_above_the_limit_is_refused(jafwak, section, fields):

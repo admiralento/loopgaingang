@@ -98,9 +98,8 @@ def test_missing_negative_rail_stops(jafwak):
 
 def test_vin_probe_off_vin_fails_the_proof(jafwak):
     with pytest.raises(InstrumentError, match="isn't proven to come from U2"):
-        run_line_tran(
-            jafwak, miswire=lambda m: setattr(m, "ref_probe", ("dio", 1))
-        )  # B1: off at line_tran.load_code 21
+        # B0: off at line_tran.load_code 22
+        run_line_tran(jafwak, miswire=lambda m: setattr(m, "ref_probe", ("dio", 0)))
 
 
 def test_psu_never_far_up_when_it_is_on_vin(jafwak):

@@ -19,7 +19,13 @@ Bring-up plan Tests 1-4 have been run on JAFWAK. These changed since, so their r
 
 New, for Tests 5 onward (not run yet): `enable-sine --output vout` (Test 5), `line-reg --split-rails`
 (Test 7, Method B). The 1 mA the plan got from 1.2 kOhm on J5 is now load code 1, so `--ext-load-ohm`
-isn't needed for Tests 6-8; load-tran steps 1 <-> 19.3 mA (codes 1 <-> 21).
+isn't needed for Tests 6-8; load-tran steps 1 <-> 20.04 mA (codes 1 <-> 22).
+
+## 2026-11-14: `dut.i_max` 21 mA, no `iq --rail en` (no hardware run)
+
+- **`dut.i_max` raised from 20 to 21 mA (approved 2026-11-14)** so the refitted load cell reaches 20 mA: code 22 (B1 + B2 + B4) is 20.04 mA at 1.2 V; code 23 (21.04 mA) and up are refused. `line_reg`, `line_tran` and `psrr` now default to `load_code = 22`, and `load_tran` steps codes 1 <-> 22 (trigger still DIO 4); `load-reg` sweeps codes 0-22.
+- **`iq --rail en` removed:** EN_VDD's ~0.3 nA is under the DMM's 10 nA count. `enable-current` measures it.
+- **AGENTS.md:** `en_ain_dc`, `split_rails_on` and `split_rails_off` added to the Bench methods that may put a voltage on the DUT.
 
 ## 2026-11-14: load cell refitted for a 1-20 mA sweep (no hardware run)
 

@@ -46,7 +46,7 @@ def test_single_edge_and_auto_trigger_pin(jafwak):
     res, b = run(jafwak, edges=["falling"], trigger_pin=None)
     lt = jafwak.load_tran
     assert [e.edge for e in res.edges] == ["falling"]
-    # MSB that changes between the two codes (JAFWAK 1 -> 21: bits 2 and 4 change, so bit 4)
+    # MSB that changes between the two codes (JAFWAK 1 -> 22: bits 0, 1, 2 and 4 change, so bit 4)
     assert res.trigger_pin == b.loadbank.trigger_pin(lt.code_low, lt.code_high)[0] == 4
 
 

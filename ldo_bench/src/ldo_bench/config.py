@@ -877,8 +877,9 @@ class StartupConfig(_Model):
 
 
 # Supply rail the DMM measures in iq 'series' mode: 'total' = between PSU and VIN_DC; the others are
-# JAFWAK J1 jumpers (bgr 1-3, vdd 5-7, en 9-11, ota 13-15).
-IqRail = Literal["total", "bgr", "vdd", "en", "ota"]
+# JAFWAK J1 jumpers (bgr 1-3, vdd 5-7, ota 13-15). EN_VDD (9-11) isn't one: its ~0.3 nA static current
+# is under the DMM's 10 nA count, so enable-current measures it instead.
+IqRail = Literal["total", "bgr", "vdd", "ota"]
 
 
 class IqConfig(_Model):
@@ -925,11 +926,6 @@ class IqConfig(_Model):
     def _check(self) -> IqConfig:
         if self.vin_stop < self.vin_start:
             raise ValueError("iq.vin_stop must be at or above vin_start")
-        if self.rail == "en":
-            raise ValueError(
-                "iq can't measure EN_VDD: its static current (~0.3 nA) is under the DMM's 10 nA count. "
-                "Use enable-current (EN_VDD current against the frequency of a square on EN_AIN)."
-            )
         if self.method == "shunt" and self.rail != "total":
             raise ValueError("iq.method 'shunt' measures the total input current: use rail = 'total'")
         if not self.states:

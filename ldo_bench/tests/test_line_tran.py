@@ -60,7 +60,7 @@ def test_load_limit_applies(jafwak):
     from ldo_bench.config import BenchConfig
 
     d = jafwak.model_dump()
-    d["line_tran"]["load_code"] = 22  # 20.04 mA > 20 mA
+    d["line_tran"]["load_code"] = 23  # 21.04 mA > 21 mA
     with pytest.raises(ValueError, match="i_max"):
         BenchConfig.model_validate(d)
 

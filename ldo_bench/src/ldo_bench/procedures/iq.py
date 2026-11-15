@@ -84,7 +84,7 @@ class IqResult:
     """The whole iq run. `issues` = setup issues plus every point's issues (each listed once)."""
 
     method: str  # "shunt" or "series"
-    rail: str  # series method: "total" or a J1 rail key ("bgr", "vdd", "en", "ota")
+    rail: str  # series method: "total" or a J1 rail key ("bgr", "vdd", "ota")
     sense_ohm: float  # ohm, R13 (shunt method)
     zero: float  # A, the DMM reading with the PSU off (subtracted)
     floor: float  # A, smallest current the setup resolves

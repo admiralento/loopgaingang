@@ -217,7 +217,7 @@ On JAFWAK every wiring printout with the chip powered also lists the J1 ON jumpe
   - AD2 GND -> board GND
 - **Two methods** (`iq.method`, `--method`):
   - **`shunt`:** DMM DC volts across R13 (0.1 Ω) on the 100 mV range. This is everything drawn from VIN: the LDO, BGR, enable block, the level shifters' low side, and ~1.2 µA into the AD2 scope on VOUT. One count is 1 µA, which is fine for Iq but too coarse for shutdown current.
-  - **`series`:** DMM DC amps (I and LO jacks) in place of one J1 jumper. The I jack goes on the INB pin (J1 3, 7, 15) and LO on the rail pin (1, 5, 13): current flows from INB into the rail, so the other way round reads negative (an issue). Until 2026-11-14 the wiring printout had them the other way round. Rails: `--rail bgr|vdd|ota` (in place of that J1 jumper; EN_VDD's ~0.3 nA is under the 10 nA count, so `--rail en` is refused: use `enable-current`), or between the PSU and VIN_DC (`--rail total`). It uses a fixed range, 10 mA unless `dmm_range` says otherwise, so the zero and every point are read on the same range. One count is 10 nA, so this resolves shutdown current. The meter's burden (~5 Ω on the 10 mA range) drops a little of that rail's voltage.
+  - **`series`:** DMM DC amps (I and LO jacks) in place of one J1 jumper. The I jack goes on the INB pin (J1 3, 7, 15) and LO on the rail pin (1, 5, 13): current flows from INB into the rail, so the other way round reads negative (an issue). Until 2026-11-14 the wiring printout had them the other way round. Rails: `--rail bgr|vdd|ota` (in place of that J1 jumper; there is no EN_VDD rail: its ~0.3 nA is under the 10 nA count, so `enable-current` measures it), or between the PSU and VIN_DC (`--rail total`). It uses a fixed range, 10 mA unless `dmm_range` says otherwise, so the zero and every point are read on the same range. One count is 10 nA, so this resolves shutdown current. The meter's burden (~5 Ω on the 10 mA range) drops a little of that rail's voltage.
 - **Does:**
   1. Switches the supply output off (it may have been left on), then reads the DMM: the zero (offset, thermal EMF). It's subtracted from every point. The spread of those readings (at least 3) sets the floor, never below one DMM count at the chosen NPLC (1 µV on 100 mV at 10 NPLC; coarser at shorter integration times).
   2. Shunt method: switches in a known load (`check_code` 5 on JAFWAK, 4.6 mA) once, to prove the DMM sees the current through R13.
@@ -490,7 +490,7 @@ A fixed resistor on VOUT (on VOUT (J5) to GND (J12)) is part of the load the LDO
 (or `loadbank.external_ohm`) adds VOUT / R to every load estimate, and the wiring lists it.
 JAFWAK's refitted load cell (2026-11-14) gives 1 mA at code 1, so the plan's 1.2 kOhm on J5 is no
 longer needed. `dut.i_max` is checked with it included for the codes the run uses, before anything
-powers up: with 1.2 kOhm, code 21 (19.3 mA) becomes 20.3 mA and is refused (use `--load 20`, a bigger
+powers up: with 1.2 kOhm, code 22 (20.04 mA) becomes 21.04 mA and is refused (use `--load 21`, a bigger
 resistor, or none). `load-reg`'s default sweep ("every code within dut.i_max") leaves such codes out and says so.
 
 ## Enable from the AD2: `--enable dio` (JAFWAK)

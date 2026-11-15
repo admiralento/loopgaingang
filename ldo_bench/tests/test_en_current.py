@@ -95,9 +95,14 @@ def test_en_ain_dc_is_limited(jafwak):
         b.en_ain_dc(1, 2.5)
 
 
-def test_iq_en_rail_points_to_enable_current():
-    with pytest.raises(ValidationError, match="enable-current"):
+def test_iq_has_no_en_rail():
+    """EN_VDD's ~0.3 nA is under the DMM's count: enable-current measures it, iq doesn't offer it."""
+    with pytest.raises(ValidationError, match="rail"):
         IqConfig(method="series", rail="en", vin_start=1.8, vin_stop=1.8)
+    r = invoke("iq", "--sim", "--yes", "--method", "series", "--rail", "en")
+    assert r.exit_code == 2 and "en" not in r.output.split("--rail")[-1].split("[")[0].split("|")
+    help_text = invoke("iq", "--help").output
+    assert "bgr|vdd|ota" in help_text.replace(" ", "") and "|en|" not in help_text.replace(" ", "")
 
 
 def test_cli(tmp_path):
