@@ -1,0 +1,75 @@
+{
+  "valid": true,
+  "issues": [],
+  "notes": [
+    "includes ~1.20 uA into the AD2 scope on VOUT (1 Mohm); unplug it for the last microamp"
+  ],
+  "method": "series",
+  "rail": "total",
+  "measures": "input current (DMM in series with VIN)",
+  "zero_a": -3.2519999999999996e-08,
+  "floor_a": 8.462643204105914e-08,
+  "load_check": null,
+  "states": {
+    "enabled": {
+      "vin": [
+        1.400795,
+        1.501314,
+        1.601167,
+        1.70134,
+        1.801144,
+        1.901145
+      ],
+      "current_a": [
+        2.8613400000000003e-05,
+        3.211936e-05,
+        3.2813460000000004e-05,
+        3.326213999999999e-05,
+        3.365134e-05,
+        3.3955179999999995e-05
+      ],
+      "below_floor": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      "min_a": 2.8613400000000003e-05,
+      "max_a": 3.3955179999999995e-05
+    },
+    "disabled": {
+      "vin": [
+        1.400228,
+        1.500698,
+        1.600723,
+        1.700897,
+        1.800824,
+        1.901046
+      ],
+      "current_a": [
+        1.4034200000000001e-06,
+        1.5832600000000001e-06,
+        1.6752600000000002e-06,
+        1.79772e-06,
+        1.90594e-06,
+        2.02584e-06
+      ],
+      "below_floor": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      "min_a": 1.4034200000000001e-06,
+      "max_a": 2.02584e-06
+    }
+  },
+  "vref": {
+    "source": "bgr",
+    "bgr_measured_v": 1.17
+  }
+}

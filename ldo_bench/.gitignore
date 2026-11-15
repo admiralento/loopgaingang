@@ -1,0 +1,8 @@
+# no trailing slash: also matches .venv if it is a symlink
+.venv
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+# measurement output (one folder per run)
+results/

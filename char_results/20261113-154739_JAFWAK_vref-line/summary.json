@@ -1,0 +1,20 @@
+{
+  "valid": true,
+  "issues": [],
+  "notes": [],
+  "vin_source": "ad2",
+  "load_code": 0,
+  "points": 26,
+  "vref_at_vin_high_v": 1.2012549,
+  "line_sensitivity_mv_per_v": 46.07600048735246,
+  "line_sensitivity_r2": 0.9978070522002032,
+  "fit_vin_min_v": 1.720411206540786,
+  "fit_vin_max_v": 1.8997034847645276,
+  "bgr_min_vin_v": 1.656648411872265,
+  "drop_fraction": 0.01,
+  "vout_minus_vref_v": -0.0004914323574363166,
+  "vref": {
+    "source": "bgr",
+    "bgr_measured_v": 1.17
+  }
+}

@@ -1,0 +1,9 @@
+edge,code_from,code_to,i_from_a,i_to_a,nominal_v,peak_v,deviation_v,band_v,settle_level_v,settling_time_s,noise_v,final_v,trustworthy,sample_rate_hz,valid,issues,xcheck_model,xcheck_valid,xcheck_issues,xcheck_averages,xcheck_deviation_v,xcheck_settling_time_s,xcheck_noise_v
+rising,10,21,0.009764705882352941,0.01927050997782705,1.194780589197692,1.1924279072522124,-0.002352681945479551,0.00023526819454795512,1.194780589197692,nan,3.667194283891958e-05,1.1929911159971283,True,10000000.0,True,,54621A,False,"cross-check scope not available: no 54620-series scope found on VISA (GPIB / USB), RS-232 ports or Prologix adapters.
+On the 54621A (Utility > I/O): on GPIB, note its GPIB address. On RS-232, set the baud rate to match xscope.baud (57600 is fastest) and the handshake to DTR (xscope.flow = ""dsrdtr"") or XON/XOFF (""xonxoff""); the port is 8 data bits, no parity, 1 stop bit, on a null-modem cable.
+Run without it with --no-xscope, or set xscope.enabled = false.
+Run `ldo-bench discover -v` for details.",0,nan,nan,nan
+falling,21,10,0.01927050997782705,0.009764705882352941,1.1929592363177595,1.1858500470466011,-0.007109189271158334,0.0007109189271158334,1.1929592363177595,nan,3.246350731341057e-05,1.194791235563027,True,10000000.0,True,,54621A,False,"cross-check scope not available: no 54620-series scope found on VISA (GPIB / USB), RS-232 ports or Prologix adapters.
+On the 54621A (Utility > I/O): on GPIB, note its GPIB address. On RS-232, set the baud rate to match xscope.baud (57600 is fastest) and the handshake to DTR (xscope.flow = ""dsrdtr"") or XON/XOFF (""xonxoff""); the port is 8 data bits, no parity, 1 stop bit, on a null-modem cable.
+Run without it with --no-xscope, or set xscope.enabled = false.
+Run `ldo-bench discover -v` for details.",0,nan,nan,nan

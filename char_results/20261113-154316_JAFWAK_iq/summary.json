@@ -1,0 +1,75 @@
+{
+  "valid": true,
+  "issues": [],
+  "notes": [
+    "shutdown current is below what this method resolves (38.6 nA)"
+  ],
+  "method": "series",
+  "rail": "bgr",
+  "measures": "BGR_VDD rail current (DMM in place of J1 1-3)",
+  "zero_a": -2.184e-08,
+  "floor_a": 3.863867233743934e-08,
+  "load_check": null,
+  "states": {
+    "enabled": {
+      "vin": [
+        1.400401,
+        1.500993,
+        1.600625,
+        1.700847,
+        1.80075,
+        1.901367
+      ],
+      "current_a": [
+        1.0270519999999999e-05,
+        1.174554e-05,
+        1.195792e-05,
+        1.21251e-05,
+        1.222572e-05,
+        1.232072e-05
+      ],
+      "below_floor": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      "min_a": 1.0270519999999999e-05,
+      "max_a": 1.232072e-05
+    },
+    "disabled": {
+      "vin": [
+        1.40045,
+        1.501314,
+        1.601216,
+        1.701168,
+        1.801169,
+        1.901367
+      ],
+      "current_a": [
+        -1.5260000000000002e-08,
+        -2.4920000000000004e-08,
+        8.119999999999998e-09,
+        -5.599999999999997e-09,
+        -7.640000000000004e-09,
+        -3.5600000000000034e-09
+      ],
+      "below_floor": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "min_a": -2.4920000000000004e-08,
+      "max_a": 8.119999999999998e-09
+    }
+  },
+  "vref": {
+    "source": "bgr",
+    "bgr_measured_v": 1.17
+  }
+}

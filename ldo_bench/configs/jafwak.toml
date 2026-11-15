@@ -1,0 +1,276 @@
+# Custom LDO: LDO_Stable_JAFWAK board (SU272AFJK), on-board load cell.
+#
+# Wiring:
+#   AD2 DIO 0..4  -> J13 B0..B4 (load cell gates)
+#   Scope 1+      -> VOUT,  1- -> GND
+#   Scope 2+      -> VIN (DC tests) / B4 (load tran) / VIN (line tran),  2- -> GND
+#   W1            -> VIN_FG SMA (J3) -> BUF634 -> VIN   (line tran only; JP4 to buffer)
+#   PSU (E3648A)  -> VIN_DC (JP4 to DC), or VS_BUFF during line tran
+
+[dut]
+name = "JAFWAK"
+vout_nominal = 1.2
+vin_max = 1.9                # absolute max VIN; nominal operating VIN is 1.8 V
+i_max = 0.021                # max load current (raised from 20 mA, approved 2026-11-14): codes 0..22 (20.04 mA at 1.2 V); code 23 (21.04 mA) and up are refused
+
+[psu]                        # Agilent E3648A (or E3638A) over GPIB
+resource = ""                # "" = search GPIB/USB/RS-232. Or GPIB0::5::INSTR, USB0::...::INSTR, prologix:COM5:5, serial:COM3
+gpib_address = 5             # only used to scan Prologix adapters
+# RS-232 (used only if the supply is on a serial port; must match its I/O config)
+baud = 9600
+parity = "none"              # "none" = 8 data bits, "even" / "odd" = 7 data bits
+stopbits = 2
+flow = "dsr-pacing"          # HP DTR/DSR handshake
+channel = 1                  # E3648A output (OUT1 / OUT2); the other one is held at 0 V
+current_limit = 0.010        # A, applied before the output turns on: every test unless its section says high_current
+high_current_limit = 0.06    # A, only for sections with high_current = true (20 mA load + quiescent; approved 2026-11-13)
+v_max = 5.5                  # PSU ceiling; above dut.vin_max only so line_tran can power VS_BUFF
+ovp = 6.0
+settle_time = 0.3
+idle_voltage = 1.8           # after every run: output off, setpoint 1.8 V at current_limit (10 mA), ready for a manual Output On
+
+[ad2]                        # Analog Discovery 2
+serial = ""                  # "" = first AD2 found
+vout_channel = 1
+ref_channel = 2
+wavegen_channel = 1
+vout = { range = 5.0, offset = 0.0 }
+ref  = { range = 50.0, offset = 0.0 }
+
+[dmm]                        # Agilent 34401A measuring VOUT in the DC tests (load/line reg)
+enabled = true               # false, or --no-dmm, to use the AD2 for VOUT instead
+resource = ""                # "" = search GPIB/USB/RS-232. Or GPIB0::22::INSTR, prologix:COM5:22, serial:COM3
+baud = 9600                  # RS-232 only: must match the meter's setting
+parity = "even"              # bench meter is set to EVEN: 7 BITS ("none" = NONE: 8 BITS)
+nplc = 10                    # integration time (power-line cycles): 10 = ~0.2 s/reading, low noise
+samples = 1                  # readings averaged per point
+
+[xscope]                     # Agilent 54621A on RS-232: cross-check of every transient edge (optional)
+enabled = true               # false, or --no-xscope, to use the AD2 only
+resource = ""                # "" = search GPIB/USB/RS-232. Or GPIB0::7::INSTR, prologix:COM5:7, serial:COM4
+baud = 9600                  # RS-232 only: Utility > I/O on the scope (9600 / 19200 / 38400 / 57600; 57600 reads back ~6x faster)
+flow = "dsrdtr"              # scope handshake DTR = "dsrdtr", XON/XOFF = "xonxoff"
+vout_channel = 1             # scope ch1 on VOUT, ch2 on the same trigger signal as AD2 scope 2
+ref_channel = 2
+vout_range = 0.16            # V full scale (20 mV/div) centred on vout_nominal
+points = 2000
+
+[loadbank]
+# Binary-weighted load cell (load_cell.kicad_sch), B0 = LSB. Refitted 2026-11-14 for a 1-20 mA sweep
+# (load_cell.kicad_sch still shows the old 250 / 125 / 62.5 / 31.6 / 15.4 ohm).
+# Current per bit at 1.2 V: 1.00, 1.76, 3.64, 8.00, 14.63 mA  (all on: ~29 mA; code 22 = 20.04 mA is the top allowed)
+dio_pins = [0, 1, 2, 3, 4]
+resistors = [1200.0, 680.0, 330.0, 150.0, 82.0]   # B0..B4 (R20, R19, R17/R18, R16, R15 on the schematic)
+switch_resistance = 0.0      # FDV305N Rds(on) (ohm), if you want it in the current estimate
+active_high = true
+
+[analysis]                   # same defaults as AD_workspaces/load_tran_script.js
+settle_fraction = 0.1
+smooth_time = 1e-6
+peak_window = 20e-6
+blank_time = 0.5e-6
+settle_reference = "pre"
+
+[loadbank_check]             # bank straight on the supply, one bit at a time
+voltage = 1.2                # V (= vout_nominal): B4 (82 ohm) draws 14.6 mA, over the 10 mA normal limit
+high_current = true
+current_from = "dmm"         # 34401A DC amps (1 A range) in series with the bank; "psu" = the supply's readback only
+
+[smoke]
+high_current = true          # full load: code 22, 20.04 mA
+
+[psu_hold]                   # psu-hold: the supply on VIN until Ctrl-C (--v / --ilim / --minutes on the command line)
+voltage = 1.8
+interval = 1.0               # s between readbacks
+max_minutes = 60             # hard timeout (at most 60)
+
+[psu_sweep]                  # psu-sweep: step the supply on VIN, read back V and I
+start = 0.0
+stop = 1.8
+step = 0.05
+dwell = 0.5                  # s at each setpoint before reading
+
+[load_reg]
+vin = 1.8
+codes = []                   # [] = every code within dut.i_max (0..22: 0 to 20.04 mA)
+settle_time = 0.05
+dc_window = 0.1
+high_current = true          # up to 20.04 mA: psu.high_current_limit
+
+[line_reg]
+vin_start = 1.25
+vin_stop = 1.9               # = dut.vin_max
+vin_step = 0.05
+load_code = 22               # 20.04 mA (B1 + B2 + B4)
+high_current = true          # psu.high_current_limit
+
+[vref_line]                  # VREF (TP3) on the DMM while VIN steps down, LDO on: BGR line sensitivity and minimum VIN
+vin_high = 1.9               # = dut.vin_max
+vin_low = 1.4
+vin_step = 0.02              # 20 mV steps, as in the first bring-up plan (Test 2.7)
+load_code = 0
+vref_nominal = 1.204         # simulated BGR output; the board measured 1.17 V (2026-11-07)
+drop_fraction = 0.01         # BGR minimum VIN: VREF 1 % below its value at vin_high
+
+[temp]                       # TMP235 (TEMP, TP7) on AD2 scope 2 via J13 pin 5, VREF (TP3) on the DMM, VOUT on scope 1
+vin = 1.8
+load_code = 1                # 1.0 mA (B0, 1.2 kOhm) as in the first plan; no resistor on J5 needed
+interval = 2.0               # s between samples
+duration = 1800              # s (max 2 h); Ctrl-C ends the log early and keeps the data
+stable_window = 30           # s: a plateau is T within stable_delta for this long (first plan 3.10)
+stable_delta = 0.5           # C
+
+[load_tran]
+vin = 1.8
+code_low = 1                 # 1.0 mA
+code_high = 22               # 20.04 mA; trigger on the MSB that changes: DIO 4 (B4)
+high_current = true          # psu.high_current_limit
+sample_rate = 10e6
+n_samples = 8192
+pre_trigger = 0.2
+averages = 64                # as on the demo board: 16 left the scopes a ring period apart on settling (2026-11-10)
+edges = ["rising", "falling"]
+
+[buffer]                     # U2 reworked (2026-11-13): V- on -5 V, so the buffer tests run on a split supply
+v_minus = 5.0                # PSU OUT2 wired reversed: OUT2 + -> GND, OUT2 - -> U2 pin 4 (-5 V)
+channel = 2
+current_limit = 0.02         # A on the -5 V rail (BUF634 low-Iq mode: ~1.5-2.3 mA)
+rail_current_limit = 0.1     # A on VS_BUFF (OUT1) while the buffer runs (approved 2026-11-13)
+ramp_step = 0.1              # V: the two rails ramp together in these steps, VIN read after each
+vin_window = [-0.1, 0.3]     # V on VIN while the rails ramp with W1 at 0 V; outside it everything comes down
+v_plus = 5.0                 # V on VS_BUFF for buffer-check
+
+[line_tran]                  # W1 -> VIN_FG SMA -> BUF634 -> VIN (JP4 to the buffer), PSU on VS_BUFF
+psu_voltage = 5.0            # on VS_BUFF (not VIN!); >= vin_high + buffer_headroom
+vin_low = 1.75               # +/-50 mV around the 1.8 V nominal; keeps 50 mV below vin_max
+vin_high = 1.85
+load_code = 22               # 20.04 mA (B1 + B2 + B4)
+buffer_headroom = 2.0
+sample_rate = 10e6
+n_samples = 8192
+pre_trigger = 0.2
+averages = 16
+edges = ["rising", "falling"]
+
+[board]                      # every wiring line names these: silkscreen label + connector pin (PCB file, 2026-11-13)
+vin_dc = "VIN_DC (J7)"
+supply_gnd = "GND (J11)"
+ext_load = "VOUT (J5) to GND (J12)"
+dc_jumpers = ['JP4 2-3 "DC" (VIN from VIN_DC; nothing on VIN_FG (J3))']
+vin_probe = "J13 pin 1 (INA)"
+vout_probe = "J13 pin 4 (OUTA)"  # before R1 (0.1 Ohm): the chip's own output
+probe_gnd = "J13 pin 6 (GND)"
+dmm_vout = "OUTA (TP4)"
+dmm_gnd = "GND (TP12)"
+bank_bits = ["J13 pin 7 (B0)", "J13 pin 9 (B1)", "J13 pin 11 (B2)", "J13 pin 13 (B3)", "J13 pin 15 (B4)"]
+bank_supply = []             # the load cell switches without VS_BUFF (bench, 2026-11-14); temp still powers the TMP235 from it
+bank_jumpers = ['J10 "LOAD" (VOUT -> load cell)']
+ad2_gnd = "J13 pin 8 (GND)"
+vs_buff = "VS_BUFF (J4)"
+buffer_input = "VIN_FG (J3)"
+buffer_jumpers = ['JP4 1-2 "FG" (VIN from U2; nothing on VIN_DC (J7))']
+enable_in = "J13 pin 12 (EN)"
+enable_in_n = "J13 pin 10 (~EN)"
+enable_vio = "J13 pin 14 (VIO)"
+enable_ldo_in = "EN_IN (J8 1-2, LDO side)"  # NOT CONFIRMED: which J8 pin is EN_IN, from the schematic
+enable_jumpers = [
+    'J6 7-8 "EN" (EN_AIN from the AD2; nothing else on J6)',
+    'J8 1-2 "LDO" (EN_OUT -> EN_IN)',
+    'J8 9-10 "LDO" (~EN_OUT -> ~EN_IN)',
+]
+standard_jumpers = [          # every test with the chip powered; a test that changes one (DMM, Method B, --vref ext) says so instead
+    "J1 1-3 (BGR_VDD from INB)",
+    "J1 5-7 (VDD from INB)",      # VDD must be up in every test: only the VDD ring has ESD clamps
+    "J1 9-11 (EN_VDD from INB)",
+    "J1 13-15 (OTA_VDD from INB)",
+    "JP2 (the BGR drives VREF_IN)",
+]
+static_enable_jumpers = [
+    'J6 1-2 "HI" (EN_AIN = VIN; nothing else on J6)',
+    'J8 1-2 "LDO" (EN_OUT -> EN_IN)',
+    'J8 9-10 "LDO" (~EN_OUT -> ~EN_IN)',
+]
+
+[enable]                     # how the AD2 drives the enable path (J13)
+dio_pin = 5                  # AD2 DIO 5 -> J13.12 EN_CTRL_33 -> U6 -> EN_CTRL_18
+dio_pin_n = 6                # AD2 DIO 6 -> J13.10 ~EN_CTRL_33 -> U5 -> ~EN_CTRL_18 (driven inverted)
+v33 = 3.3                    # AD2 V+ -> J13.14 V_33 (level shifters' 3.3 V side)
+settle_time = 0.2            # --enable dio: wait after EN goes high (s); simulated startup is up to 64 ms
+
+[en_sine]                    # enable block on its own: W1 sine / triangle -> EN_FG SMA (J2) -> J6 5-6 -> EN_AIN
+vin = 1.8                    # VIN -> EN_VDD through J1 9-11
+shape = "sine"               # or "triangle": a linear ramp up and down (--shape triangle --freq 1 for a slow ramp)
+frequency = 1e3
+low = 0.0
+# high = 1.8                 # default: vin (EN_VDD)
+cycles = 4
+captures = 8
+
+[en_current]                 # enable block's EN_VDD current vs frequency: DMM in place of J1 9-11, square on EN_AIN
+vin = 1.8                    # VIN -> EN_VDD through the DMM
+fstart = 10                  # Hz; 1, 2, 5 per decade
+fstop = 1e6                  # Hz, at most 1 MHz
+low = 0.0
+# high = 1.8                 # default: vin (EN_VDD)
+readings = 5                 # DMM readings per point (10 NPLC: ~1 s)
+settle_time = 0.5
+
+[startup]                    # EN_CTRL_33 step -> enable block -> EN_IN: VOUT, EN_IN and the input current
+vin = 1.8
+load_code = 5                # 4.6 mA (B0 + B2): enough to see the turn-on current; under the 10 mA limit
+edges = ["rising", "falling"]
+window = 10e-3               # s; 8192 samples -> 0.82 MS/s. 1 ms was too short for VOUT to settle (2026-11-14)
+pre_trigger = 0.1
+averages = 8
+off_time = 0.05
+on_time = 0.05
+sense_ohm = 0.1              # R13
+xscope_ina_channel = 1       # 54621A ch1 on J13 pin 1 (INA), ch2 on J13 pin 2 (INB); I_in = (ch1 - ch2) / R13
+xscope_inb_channel = 2
+xscope_shunt_range = 0.16    # V full scale on both (20 mV/div), centred on vin
+xscope_trigger_high = 1.8    # V: 54621A Ext Trig on EN_AIN (TP6), 1.8 V logic; triggers at 0.9 V
+settle_fraction = 0.02
+# No VREF: a scope on TP3 loads the BGR and pulled VREF and VOUT to ~0.98 V (2026-11-14)
+
+[iq]                         # quiescent / shutdown current vs VIN, no load, from the DMM
+method = "shunt"             # "shunt": DMM DCV across R13 (J13.1-J13.2), total input current, ~1 uA counts
+                             # "series": DMM DCI in place of a J1 jumper (rail below), 10 nA counts
+rail = "total"               # series only: "total" (PSU -> DMM -> VIN_DC), "bgr" 1-3, "vdd" 5-7, "ota" 13-15 (EN_VDD: use enable-current)
+sense_ohm = 0.1              # R13
+vin_start = 1.4
+vin_stop = 1.9               # = dut.vin_max
+vin_step = 0.1
+states = ["enabled", "disabled"]   # disabled: through the [enable] path
+readings = 5                 # DMM readings per point (10 NPLC: ~1 s)
+settle_time = 0.5
+check_code = 5               # shunt: switch in 4.6 mA once to prove the DMM sees R13's current (0 = skip)
+
+[psrr]                       # sine on VIN through the BUF634 (line-tran path: JP4 to the buffer, PSU on VS_BUFF)
+psu_voltage = 5.0            # on VS_BUFF (not VIN!)
+vin = 1.8                    # DC level; peak = vin + amplitude must stay <= dut.vin_max
+amplitude = 0.05             # V peak (100 mV p-p)
+f_start = 100
+f_stop = 1e6
+points_per_decade = 3
+load_code = 22               # 20.04 mA (B1 + B2 + B4)
+averages = 4                 # captures per frequency, averaged coherently
+cycles = 20                  # min sine cycles per capture (8192 samples, up to 100 MS/s)
+
+[split_rails]                # line-reg --split-rails: dropout "Method B", BGR_VDD / OTA_VDD on PSU OUT2
+psu_channel = 2              # OUT2 + -> J1 pin 1 (BGR_VDD) and J1 pin 13 (OTA_VDD), OUT2 - -> GND; jumpers 1-3 / 13-15 out
+voltage = 1.8                # V on BGR_VDD / OTA_VDD through the sweep
+v_max = 1.9                  # = dut.vin_max
+current_limit = 0.005        # A; BGR + OTA draw ~0.03 mA
+ovp = 2.2                    # OUT2 OVP; if the supply refuses it the run stops (raise it, or remove the line)
+max_current = 0.001          # A: more means a J1 1-3 / 13-15 jumper is still in (OUT2 fighting VIN)
+vin_floor = 1.0              # VIN stays at or above this while the rails are up
+
+[vref]                       # --vref ext: PSU OUT2 on VREF_IN in place of the BGR (JP2 removed)
+external_v = 1.204           # V on VREF_IN: the BGR's simulated output
+bgr_measured = 1.17          # V, the BGR as measured on the board (for the record)
+psu_channel = 2              # E3648A OUT2 + -> VREF_IN (JP2's VREF_IN pin), OUT2 - -> GND
+v_max = 1.3                  # VREF_IN is never programmed above this
+current_limit = 0.005        # A; VREF_IN is a high-impedance input
+ovp = 1.5                    # OUT2 OVP; if the supply refuses it the run stops (raise it, or remove the line)
+above_vin = 0.3              # VREF never more than this above VIN
+proof_step = 0.02            # after turn-on VREF drops 20 mV: VOUT must follow, else JP2 is still in

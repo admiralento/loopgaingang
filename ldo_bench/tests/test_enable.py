@@ -1,0 +1,199 @@
+"""Enable block tests: threshold / step analysis and the two procedures on the simulator."""
+
+import numpy as np
+import pytest
+from helpers import miswire, spy
+
+from ldo_bench.analysis import schmitt_analysis, step_metrics
+from ldo_bench.bench import open_bench
+from ldo_bench.config import BenchConfig
+from ldo_bench.procedures import en_sine, startup
+
+
+def schmitt(vt_hi=1.0, vt_lo=0.8, f=1e3, fs=2e6, cycles=4, vdd=1.8, chatter=False):
+    t = np.arange(int(cycles / f * fs)) / fs
+    ain = 0.9 + 0.9 * np.sin(2 * np.pi * f * t)
+    out, state = np.zeros_like(t), False
+    for k, a in enumerate(ain):
+        if not state and a >= vt_hi:
+            state = True
+        elif state and a <= vt_lo:
+            state = False
+        out[k] = vdd if state else 0.0
+    if chatter:  # a glitch right after each rising edge
+        rise = np.nonzero(np.diff(out) > 0)[0]
+        for r in rise:
+            out[r + 3 : r + 6] = 0.0
+    return ain, out, fs, f
+
+
+def test_schmitt_thresholds_and_hysteresis():
+    ain, out, fs, f = schmitt(1.0, 0.8)
+    r = schmitt_analysis(ain, out, fs, f)
+    # thresholds within one sample of slew (~3 mV at 2 MS/s on this sine)
+    assert r.vt_rise == pytest.approx(1.0, abs=0.005) and r.vt_fall == pytest.approx(0.8, abs=0.005)
+    assert r.hysteresis == pytest.approx(0.2, abs=0.01)
+    assert r.voh == pytest.approx(1.8) and r.vol == pytest.approx(0.0)
+    assert r.edges_per_cycle == pytest.approx(1.0, abs=0.3)
+
+
+def test_schmitt_detects_chatter():
+    ain, out, fs, f = schmitt(chatter=True)
+    assert schmitt_analysis(ain, out, fs, f).edges_per_cycle > 1.5
+
+
+def test_step_metrics_turn_on():
+    t = np.linspace(-1e-4, 9e-4, 10001)
+    x = np.where(t >= 20e-6, 1.2 * (1 - np.exp(-(np.clip(t, 0, None) - 20e-6) / 30e-6)), 0.0)
+    x = np.clip(x, 0, None)
+    m = step_metrics(t, x, 0.02)
+    assert m.before == pytest.approx(0) and m.after == pytest.approx(1.2, abs=1e-3)
+    assert m.t10 == pytest.approx(20e-6 + 30e-6 * np.log(1 / 0.9), abs=1e-6)
+    assert m.t90 == pytest.approx(20e-6 + 30e-6 * np.log(10), abs=1e-6)
+    assert m.t_settle == pytest.approx(20e-6 + 30e-6 * np.log(50), abs=2e-6)
+    assert m.overshoot == pytest.approx(0, abs=1e-3)
+
+
+def test_step_metrics_never_settles():
+    t = np.linspace(-1e-4, 9e-4, 2001)
+    x = np.where(t >= 0, t * 1000, 0.0)  # still ramping at the end
+    assert np.isnan(step_metrics(t, x).t_settle)
+
+
+def test_en_sine_on_sim(jafwak):
+    with open_bench(jafwak, sim=True) as b:
+        res = en_sine.run(b, jafwak.en_sine)
+        m = b.sim_model
+    assert not res.issues and len(res.captures) == jafwak.en_sine.captures
+    vin = jafwak.en_sine.vin
+    r = res.captures[0]
+    assert r.vt_rise == pytest.approx(m.en_vt_rise * vin, abs=0.01)
+    assert r.vt_fall == pytest.approx(m.en_vt_fall * vin, abs=0.01)
+    assert r.edges_per_cycle == pytest.approx(1.0, abs=0.3)
+    assert not m.awg_wave  # wavegen off afterwards
+    en_sine.plot(res, "x")
+
+
+def test_en_sine_output_not_switching_is_flagged(jafwak):
+    with open_bench(jafwak, sim=True) as b:
+        miswire(b, ch1_probe="vout")  # scope 1 not on EN_OUT
+        res = en_sine.run(b, jafwak.en_sine)
+    assert any("EN_OUT doesn't switch" in i for i in res.issues)
+    assert "NOT A VALID MEASUREMENT" in res.report() and res.summary()["valid"] is False
+    en_sine.plot(res, "x")
+
+
+def test_startup_on_sim(jafwak):
+    su = jafwak.startup.model_copy(update={"averages": 2, "load_code": 2})
+    with open_bench(jafwak, sim=True, use_xscope=True) as b:
+        vplus = spy(b.scope, "set_vplus")
+        res = startup.run(b, su)
+        m = b.sim_model
+    assert not res.issues, res.issues
+    assert vplus[0][1] == (jafwak.enable.v33,)  # V_33 was on for the level shifters
+    on = res.edges[0]
+    assert on.vout_m.after == pytest.approx(jafwak.dut.vout_nominal, abs=0.02)
+    assert on.vout_m.t10 > m.vref_delay  # VOUT starts after the reference
+    assert on.iin.m.peak > on.iin.m.after  # inrush: C dV/dt on top of the load current
+    assert not m.dio.get(jafwak.enable.dio_pin) and b.scope.vplus is None  # off afterwards
+    startup.plot(res, "x")
+
+
+def test_startup_flags_enable_not_controlling_ldo(jafwak):
+    su = jafwak.startup.model_copy(update={"averages": 2})
+    with open_bench(jafwak, sim=True, use_xscope=True) as b:
+        miswire(b, wiring_kw={"en_pin": None})  # the LDO ignores the enable path (e.g. EN_IN tied to VIN)
+        res = startup.run(b, su)
+    assert any("already" in i and "before the enable edge" in i for i in res.issues)
+
+
+def test_enable_pins_must_not_clash_with_load_bank(jafwak):
+    d = jafwak.model_dump()
+    d["enable"]["dio_pin"] = 2  # a load bank pin
+    with pytest.raises(ValueError, match="load bank pins"):
+        BenchConfig.model_validate(d)
+
+
+def test_sine_peak_limited_by_vin_max(jafwak):
+    d = jafwak.model_dump()
+    d["en_sine"]["high"] = 2.5  # > dut.vin_max 1.9
+    with pytest.raises(ValueError, match="vin_max"):
+        BenchConfig.model_validate(d)
+
+
+def test_en_sine_triangle_on_sim(jafwak):
+    """A 1 Hz triangle: the same thresholds, the shape recorded, a trigger wait longer than the window."""
+    es = jafwak.en_sine.model_copy(update={"shape": "triangle", "frequency": 1.0, "captures": 2})
+    timeouts = []
+    with open_bench(jafwak, sim=True) as b:
+        capture = b.scope.capture
+
+        def spy(**kw):
+            timeouts.append(kw["timeout"])
+            assert kw["free_running"]  # the wave runs on its own: an early trigger is a real one
+            return capture(**kw)
+
+        b.scope.capture = spy
+        res = en_sine.run(b, es)
+        m = b.sim_model
+    assert not res.issues, res.issues
+    vin, r = es.vin, res.captures[0]
+    assert r.vt_rise == pytest.approx(m.en_vt_rise * vin, abs=0.01)
+    assert r.vt_fall == pytest.approx(m.en_vt_fall * vin, abs=0.01)
+    # a triangle, not a sine: EN_AIN moves at a constant slope, 2 (high - low) f, between its vertices
+    slope = np.abs(np.diff(res.ain)) * (len(res.ain) / (res.t[-1] - res.t[0]))
+    expected = 2 * (es.sine_high - es.low) * es.frequency
+    assert np.median(slope) == pytest.approx(expected, rel=0.05)
+    window = es.cycles / es.frequency
+    assert all(t > window for t in timeouts)  # 4 s capture: the wait must cover it
+    assert res.summary()["shape"] == "triangle"
+    assert "triangle" in res.report()
+    assert not m.awg_wave  # wavegen off afterwards
+    en_sine.plot(res, "x")
+
+
+def test_en_sine_shape_triangle_accepted_square_rejected(jafwak):
+    d = jafwak.model_dump()
+    d["en_sine"]["shape"] = "triangle"
+    assert BenchConfig.model_validate(d).en_sine.shape == "triangle"
+    d["en_sine"]["shape"] = "sawtooth"
+    with pytest.raises(ValueError, match="shape"):
+        BenchConfig.model_validate(d)
+
+
+def test_cli_enable_sine_shape_option(tmp_path):
+    from pathlib import Path
+
+    from typer.testing import CliRunner
+
+    from ldo_bench.cli import app
+
+    cfg = str(Path(__file__).parents[1] / "configs" / "jafwak.toml")
+    base = ["enable-sine", "-c", cfg, "--sim", "--yes", "-o", str(tmp_path), "--captures", "1"]
+    r = CliRunner().invoke(app, [*base, "--shape", "triangle", "--freq", "1"])
+    assert r.exit_code == 0, r.output
+    assert "triangle 0.00-1.80 V at 1 Hz" in r.output
+    assert CliRunner().invoke(app, [*base, "--shape", "sawtooth"]).exit_code == 2
+
+
+def test_en_sine_edge_times_under_one_sample_are_a_bound(jafwak):
+    """At 1 Hz the AD2 samples every 488 us: a fast EN_OUT edge is reported as under two samples, not as a time."""
+    es = jafwak.en_sine.model_copy(update={"shape": "triangle", "frequency": 1.0, "captures": 1})
+    with open_bench(jafwak, sim=True) as b:
+        res = en_sine.run(b, es)
+    line = next(ln for ln in res.report().splitlines() if "rise / fall" in ln)
+    assert "under 977 us / under 977 us" in line, line
+
+
+def test_en_sine_edge_of_1p6_samples_is_still_a_bound(jafwak):
+    """On the bench (2026-11-12) a fast EN_OUT edge measured 1.3-1.6 sample intervals at both 1 kHz
+    and 1 Hz: that's the sampling, so it's reported as a bound, not as a time."""
+    import dataclasses
+
+    es = jafwak.en_sine.model_copy(update={"shape": "triangle", "frequency": 1.0, "captures": 1})
+    with open_bench(jafwak, sim=True) as b:
+        res = en_sine.run(b, es)
+    dt = 1 / res.sample_rate
+    res.captures = [dataclasses.replace(c, t_rise=1.6 * dt, t_fall=1.6 * dt) for c in res.captures]
+    line = next(ln for ln in res.report().splitlines() if "rise / fall" in ln)
+    assert "under 977 us / under 977 us" in line, line
