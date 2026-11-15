@@ -112,6 +112,7 @@ def run(bench: Bench, pc: PsuCheckConfig) -> PsuCheckResult:
         ],
         ref_probe=("vin", 0),
         dmm_probe="psu",
+        chip_powered=False,  # the supply on the DMM alone
     )
     model = model_of(bench.psu.idn)
     spec = ACCURACY.get(model or "", {})

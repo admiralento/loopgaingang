@@ -194,6 +194,7 @@ def run(bench: Bench, lc: LoadBankCheckConfig) -> LoadBankCheckResult:
         ref_probe=("vin", 0),
         bank_on_psu=True,
         dmm_probe="series" if use_dmm else "vout",
+        chip_powered=False,  # the bank straight on the supply, no LDO
     )
     if use_dmm:
         nplc = bench.cfg.dmm.nplc if bench.cfg.dmm else 10

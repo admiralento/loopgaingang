@@ -125,6 +125,8 @@ First bring-up plan, steps I.1–I.5. **Run it before `line-tran` or `psrr`, wit
 
 ## DC tests
 
+On JAFWAK every wiring printout with the chip powered also lists the J1 ON jumpers (1-3, 5-7, 9-11, 13-15) and JP2 (`[board] standard_jumpers`), except a jumper the test changes itself: the DMM in its place (`iq --method series`, `enable-current`), Method B (`line-reg --split-rails`), or JP2 removed (`--vref ext`). The wiring lists below leave them out.
+
 ### `load-reg`: load regulation
 - **Wiring (demo board):**
   - PSU -> VIN (DC input, not through the buffer)

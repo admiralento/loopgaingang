@@ -660,6 +660,14 @@ class BoardConfig(_Model):
     static_enable_jumpers: list[str] = Field(
         default_factory=list, description="Jumpers that tie the LDO on (the DC tests without --enable dio)"
     )
+    standard_jumpers: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Jumpers every test with the chip powered needs (JAFWAK: the four J1 rails and JP2). "
+            "Bench.confirm_wiring lists each one after the input routing unless the test's own wiring "
+            "already names that jumper (a DMM in its place, Method B), or it is JP2 with --vref ext"
+        ),
+    )
 
 
 class EnableConfig(_Model):

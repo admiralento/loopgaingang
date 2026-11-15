@@ -133,7 +133,9 @@ def _edge(t: np.ndarray, v: np.ndarray, rising: bool) -> float:
 def run(bench: Bench, bu: BufferConfig) -> BufferCheckResult:
     """Check U2 on its own (see the module docstring for the steps and checks)."""
     a = bench.cfg.ad2
-    bench.confirm_wiring("U2 buffer check", wiring(bench, bu), ref_probe=("vin", 0), psu_to="rail")
+    bench.confirm_wiring(
+        "U2 buffer check", wiring(bench, bu), ref_probe=("vin", 0), psu_to="rail", chip_powered=False
+    )
     issues, notes = [], []
     bench.vin_from_wavegen(0.0)
     bench.buffer_rails_on(bu.v_plus)  # raises (rails down) if JP4 pin 1 leaves buffer.vin_window

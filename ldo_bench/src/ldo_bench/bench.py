@@ -12,6 +12,7 @@ returns a Bench; the CLI wraps it in `with`.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -225,11 +226,14 @@ class Bench:
         ldo_on_en_out: bool = False,
         aux_to: Literal["vref", "rails"] = "vref",
         en_pin: int | None = None,
+        chip_powered: bool = True,
     ) -> None:
         """Show the wiring a test needs and wait for the user to confirm it.
 
-        `title` and `lines` are what the user sees. The keyword arguments (ref_probe onwards)
-        only tell the simulator how the bench is wired; on real hardware they do nothing.
+        `title` and `lines` are what the user sees. With `chip_powered` (every test but the ones
+        with the chip disconnected or off the board), `board.standard_jumpers` are added too; see
+        `_with_standard_jumpers`. The other keyword arguments (ref_probe onwards) only tell the
+        simulator how the bench is wired; on real hardware they do nothing.
         Not asked with --sim, --yes or no confirm function (the wiring is logged instead).
         Raises KeyboardInterrupt if the user answers no, so the run aborts like Ctrl-C.
         """
@@ -257,6 +261,8 @@ class Bench:
             if self.sim_model is not None:  # the simulated operator followed the instructions
                 self.sim_model.vref_wired = True
                 self.sim_model.jp2_fitted = False
+        if chip_powered:
+            lines = self._with_standard_jumpers(lines)
         self.last_wiring = list(lines)
         text = "\n".join([f"Wiring for {title}:", *(f"  - {s}" for s in lines)])
         if self.is_sim or self.assume_yes or self._confirm is None:
@@ -265,6 +271,24 @@ class Bench:
             raise KeyboardInterrupt("wiring not confirmed")
         if self.vref_external and not self.is_sim:
             self._confirm_jp2()
+
+    def _with_standard_jumpers(self, lines: list[str]) -> list[str]:
+        """`lines` with each of `board.standard_jumpers` the test doesn't already cover, as "Fit ...".
+
+        A jumper is covered when a line already names it ("J1 5-7", "JP2"): the test fits it
+        itself, removes it for the DMM, or (JP2 with --vref ext) has it removed. The new lines go
+        right after the first line about JP4 (the VIN routing), else first.
+        """
+        missing = []
+        for jumper in self.cfg.board.standard_jumpers:
+            m = re.match(r"(J\w*\s+\d+-\d+|J\w+)", jumper)
+            name = m.group(1) if m else jumper
+            if not any(re.search(rf"\b{re.escape(name)}\b", ln) for ln in lines):
+                missing.append(f"Fit {jumper}")
+        if not missing:
+            return lines
+        at = next((k + 1 for k, ln in enumerate(lines) if "JP4" in ln), 0)
+        return [*lines[:at], *missing, *lines[at:]]
 
     def vref_wiring(self) -> list[str]:
         """Wiring lines for the external reference."""

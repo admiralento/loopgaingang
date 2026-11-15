@@ -178,6 +178,13 @@ enable_jumpers = [
     'J8 1-2 "LDO" (EN_OUT -> EN_IN)',
     'J8 9-10 "LDO" (~EN_OUT -> ~EN_IN)',
 ]
+standard_jumpers = [          # every test with the chip powered; a test that changes one (DMM, Method B, --vref ext) says so instead
+    "J1 1-3 (BGR_VDD from INB)",
+    "J1 5-7 (VDD from INB)",      # VDD must be up in every test: only the VDD ring has ESD clamps
+    "J1 9-11 (EN_VDD from INB)",
+    "J1 13-15 (OTA_VDD from INB)",
+    "JP2 (the BGR drives VREF_IN)",
+]
 static_enable_jumpers = [
     'J6 1-2 "HI" (EN_AIN = VIN; nothing else on J6)',
     'J8 1-2 "LDO" (EN_OUT -> EN_IN)',
