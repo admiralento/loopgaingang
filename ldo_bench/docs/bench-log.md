@@ -21,6 +21,17 @@ New, for Tests 5 onward (not run yet): `enable-sine --output vout` (Test 5), `li
 (Test 7, Method B). The 1 mA the plan got from 1.2 kOhm on J5 is now load code 1, so `--ext-load-ohm`
 isn't needed for Tests 6-8; load-tran steps 1 <-> 20.04 mA (codes 1 <-> 22).
 
+## 2026-11-17: first `line-tran` on JAFWAK (split-supply U2): VIN overshoot, buffer offset
+
+**Runs:** `results/line-tran/20261117-182246_JAFWAK_line-tran_INVALID` and `20261117-184657_..._INVALID` (code 22, 20 mA), then `line-tran --load 0 --no-xscope` (stopped, nothing saved).
+
+- **Loaded (20 mA), U2 reads ~100 mV low.** W1 1.850 V gave VIN 1.750 V and W1 1.900 V gave 1.800 V, steady over every calibration pass, so this is an offset, not a slow buffer. W1 is never set above `dut.vin_max` (1.9 V), so 1.85 V was out of reach. VIN topped out at 1.7996 V, under the 1.80 V trigger, so the scope never triggered and both edges are invalid.
+- **No load, U2 reads +65 mV high.** The interlock read W1 0.10 / 0.30 V as VIN 0.165 / 0.365 V. From −100 mV at 20 mA to +65 mV at no load is roughly 8 Ω of output resistance plus a +65 mV offset. Not explained yet: check U2's offset and anything in series between U2's output and VIN.
+- **VIN went over `dut.vin_max`.** Calibration started W1 at the 1.85 V target; with +65 mV, VIN read **1.915 V** and the hard stop shut everything down (~70 ms over the limit). The hard stop only runs after each reading, so it couldn't prevent that first overshoot. **Fixed (`7690e77`):** each level now starts 250 mV under its target and comes up to it. Simulator-tested with +65 mV; not yet re-run on the board.
+- **The VIN edge looks slow:** in the saved captures VIN creeps ~25 mV/ms, so a 50 mV step takes milliseconds, longer than the 0.8 ms capture. `--window-ms 10` would show the whole edge.
+- **Added:** the line-tran / psrr wiring printout now lists the enable jumpers (J6 1-2 "HI": EN_AIN = VIN, so EN steps with VIN), and `line-tran --enable dio` drives EN from the AD2 (DIO 5 / 6, V+ on VIO) instead. Simulator only.
+- **Prompts:** `!` commands in Claude Code can't answer the wiring prompt (no keyboard input): run in a terminal, or use `--yes` once the printout is checked.
+
 ## 2026-11-14: `dut.i_max` 21 mA, no `iq --rail en` (no hardware run)
 
 - **`dut.i_max` raised from 20 to 21 mA (approved 2026-11-14)** so the refitted load cell reaches 20 mA: code 22 (B1 + B2 + B4) is 20.04 mA at 1.2 V; code 23 (21.04 mA) and up are refused. `line_reg`, `line_tran` and `psrr` now default to `load_code = 22`, and `load_tran` steps codes 1 <-> 22 (trigger still DIO 4); `load-reg` sweeps codes 0-22.
