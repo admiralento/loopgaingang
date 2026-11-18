@@ -313,6 +313,7 @@ Without `[buffer]` (the demo board) line-tran and psrr use the single-rail path 
   2. **Interlock, stage 2:** stage 1 can't tell a correct bench from a VIN probe that's off VIN (both read ~0 V). So the rail goes to `dut.vin_max` (safe even if the supply were on VIN) and W1 steps between the two `proof_levels` (0.1 and 0.3 V). VIN must follow W1. If it doesn't (supply on VIN, probe off, buffer not driving), the test stops before the rail goes above `dut.vin_max`.
      - **Not yet tried on hardware:** the BUF634 must be able to drive the proof levels with its rail at 1.9 V. If the first real run stops here with the wiring right, change `proof_levels`.
   3. **Calibration:** raises the rail to `psu_voltage` and calibrates out the buffer's offset from VIN measured at the board (on the AD2's 5 V range). The steps land on `vin_low` / `vin_high` within 5 mV. The W1 correction is capped at 250 mV.
+     - **From below:** W1 starts 250 mV under each target and comes up to it, so a buffer that reads high can't overshoot. On 2026-11-17 W1 started at the target, U2 was +65 mV high with no load, and VIN reached 1.915 V (over `dut.vin_max`) before the hard stop.
      - **Hard stop:** any VIN reading above `dut.vin_max` less the AD2's error margin (about 20 mV at 1.9 V).
   4. **Steps:** steps W1 between the two levels, triggering on VIN itself.
 - **Computes:** everything from the transient analysis, plus the peak VOUT deviation per volt of VIN step (mV/V).

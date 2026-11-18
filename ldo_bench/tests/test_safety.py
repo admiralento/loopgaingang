@@ -87,21 +87,36 @@ def test_interlock_stops_with_vin_probe_off(proc, buffer_board):
 
 
 # --- VIN limit with the AD2's measurement margin ---------------------------------
+def _offset_jumps_near_the_top(jump: float):
+    """A buffer that reads true until W1 reaches 1.8 V, then `jump` V high (nonlinear near the top).
+
+    Calibration comes up from below, so a constant offset is calibrated out without overshoot
+    (test_line_tran); only an offset that changes on the way up can still put a reading over the
+    limit, and then the hard stop must fire.
+    """
+
+    def setup(b):
+        b.sim_model.buffer_offset = 0.0
+        real = b.vin_from_wavegen
+
+        def vin_from_wavegen(v):
+            b.sim_model.buffer_offset = jump if v >= 1.8 else 0.0
+            real(v)
+
+        b.vin_from_wavegen = vin_from_wavegen
+
+    return setup
+
+
 def test_calibration_stops_inside_the_measurement_margin(jafwak):
     """A VIN reading just under vin_max is already too close: the AD2 could be reading low."""
 
-    def offset(b):
-        b.sim_model.buffer_offset = 0.045  # W1 = 1.85 V gives VIN = 1.895 V: < 1.9, > 1.9 - margin
-
-    err, _ = run_buffer_test(line_tran, jafwak, offset)
+    err, _ = run_buffer_test(line_tran, jafwak, _offset_jumps_near_the_top(0.045))  # VIN 1.895 V at W1 1.85
     assert "above dut.vin_max" in str(err)
 
 
 def test_calibration_stops_above_vin_max(jafwak):
-    def offset(b):
-        b.sim_model.buffer_offset = 0.1
-
-    err, _ = run_buffer_test(line_tran, jafwak, offset)
+    err, _ = run_buffer_test(line_tran, jafwak, _offset_jumps_near_the_top(0.1))
     assert "above dut.vin_max" in str(err)
 
 

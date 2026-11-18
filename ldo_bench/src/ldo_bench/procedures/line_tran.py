@@ -333,6 +333,9 @@ def calibrate(bench: Bench, target: float, limit: float | None = None) -> tuple[
 
     Simple fixed-point iteration: W1 += (target - measured VIN), up to CAL_ITERATIONS times, done
     when VIN is within CAL_TOLERANCE. The buffer is unity gain, so a few passes remove its offset.
+    W1 starts CAL_MAX_CORRECTION below the target and comes up, so a positive buffer offset can't
+    put VIN above the target before the first reading (bench, 2026-11-17: W1 started at a 1.85 V
+    target with U2 +65 mV high gave VIN 1.915 V, over dut.vin_max).
     If it doesn't converge, the last setpoint is applied, measured, and the issue says so. Also
     used by psrr for its DC level. `limit` (V) replaces the VIN hard stop: buffer-check, with the
     chip disconnected, uses buffer.check_peak_max. W1 stays within dut.vin_max either way.
@@ -353,7 +356,7 @@ def calibrate(bench: Bench, target: float, limit: float | None = None) -> tuple[
             raise InstrumentError(f"VIN reached {v:.3f} V with W1 at {w:.3f} V, {what}: stopping")
         return v
 
-    w = target  # start from the target: unity gain buffer, only its offset to remove
+    w = max(target - CAL_MAX_CORRECTION, 0.0)  # from below: the first correction lands on the target
     for _ in range(CAL_ITERATIONS):
         vin = apply(w)
         err = target - vin

@@ -69,3 +69,25 @@ def test_line_tran_rejection_by_hand():
     m = SettlingResult(1.2, 1.205, 5e-4, 1.2, 1e-5, 1e-5, 1.2, 10e6, 100, "pre")  # +5 mV kick
     e = line_tran.EdgeResult("rising", 1.75, 1.85, m, np.zeros(1), np.zeros(1), np.zeros(1), np.zeros(1))
     assert e.rejection == pytest.approx(0.005 / 0.1)  # 50 mV per V of VIN step
+
+
+def test_positive_buffer_offset_never_overshoots_vin(jafwak):
+    """Bench, 2026-11-17: U2 read +65 mV above W1 at no load. Calibration that starts with W1 at the
+    target put VIN at 1.915 V (over dut.vin_max) before the first reading. It must come up from
+    below: no VIN reading during calibration may exceed the target it is heading for (+5 mV)."""
+    readings: list[float] = []
+
+    def offset(b):
+        b.sim_model.buffer_offset = 0.065
+        real = b.measure_vin_fine
+
+        def spy():
+            v = real()
+            readings.append(v)
+            return v
+
+        b.measure_vin_fine = spy
+
+    res, _ = run(jafwak, setup=offset, load_code=0)
+    assert not [i for i in res.issues if "VIN reached" in i], res.issues
+    assert max(readings) <= jafwak.line_tran.vin_high + 0.005, max(readings)
