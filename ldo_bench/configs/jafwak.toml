@@ -57,10 +57,10 @@ points = 2000
 
 [loadbank]
 # Binary-weighted load cell (load_cell.kicad_sch), B0 = LSB. Refitted 2026-11-14 for a 1-20 mA sweep
-# (load_cell.kicad_sch still shows the old 250 / 125 / 62.5 / 31.6 / 15.4 ohm).
+# (the schematic shows these values since "New R vals", 71b7ee1).
 # Current per bit at 1.2 V: 1.00, 1.76, 3.64, 8.00, 14.63 mA  (all on: ~29 mA; code 22 = 20.04 mA is the top allowed)
 dio_pins = [0, 1, 2, 3, 4]
-resistors = [1200.0, 680.0, 330.0, 150.0, 82.0]   # B0..B4 (R20, R19, R17/R18, R16, R15 on the schematic)
+resistors = [1200.0, 680.0, 330.0, 150.0, 82.0]   # B0..B4 (R20, R19, R18, R16, R15 on the schematic)
 switch_resistance = 0.0      # FDV305N Rds(on) (ohm), if you want it in the current estimate
 active_high = true
 
