@@ -100,7 +100,7 @@ high_current = true          # up to 20.04 mA: psu.high_current_limit
 [line_reg]
 vin_start = 1.25
 vin_stop = 1.9               # = dut.vin_max
-vin_step = 0.05
+vin_step = 0.01
 load_code = 22               # 20.04 mA (B1 + B2 + B4)
 high_current = true          # psu.high_current_limit
 

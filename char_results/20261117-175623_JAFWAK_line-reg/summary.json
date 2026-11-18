@@ -1,0 +1,28 @@
+{
+  "valid": true,
+  "issues": [],
+  "notes": [
+    "is the knee the pass device or the BGR? Compare it with vref-line's BGR minimum VIN (bring-up plan Test 3): a knee at or above it means the BGR sets the dropout"
+  ],
+  "vin_source": "ad2",
+  "split_rails_v": null,
+  "load_code": 22,
+  "i_load_a": 0.020035215860179992,
+  "points": 66,
+  "vout_source": "dmm",
+  "v_ref": 1.1965765,
+  "slope": 0.04844113442200762,
+  "intercept": 1.1049328379737013,
+  "r2": 0.9955393665485106,
+  "fit_vin_min": 1.7191885995318914,
+  "fit_vin_max": 1.897724797767443,
+  "delta_v": 0.008648495977922553,
+  "percent_per_v": 4.048310694887258,
+  "dropout_vin": 1.679525166510174,
+  "dropout_voltage": 0.4949144315101741,
+  "dropout_fraction": 0.01,
+  "vref": {
+    "source": "bgr",
+    "bgr_measured_v": 1.17
+  }
+}
