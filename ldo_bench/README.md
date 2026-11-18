@@ -101,7 +101,7 @@ The DC, transient, psrr and iq tests also take `--vref ext`. It drives VREF_IN f
 
 `load-reg`, `line-reg`, `load-tran`, `enable-startup` and `temp` take `--ext-load-ohm 1200`: a fixed resistor on VOUT whose current is added to every load estimate (and to the `dut.i_max` check). See [tests.md](docs/tests.md#external-load---ext-load-ohm).
 
-`smoke`, `load-reg`, `line-reg`, `load-tran`, `vref-line` and `temp` also take `--enable dio`. The run then drives the LDO's enable from the AD2 (J6 7-8, J13 pins 12 / 10 / 14) instead of it being tied on with jumpers (J6 1-2): EN is low while VIN rises, high once VIN is up, and low again before anything turns off. See [tests.md](docs/tests.md#enable-from-the-ad2---enable-dio-jafwak).
+`smoke`, `load-reg`, `line-reg`, `load-tran`, `line-tran`, `vref-line` and `temp` also take `--enable dio`. The run then drives the LDO's enable from the AD2 (J6 7-8, J13 pins 12 / 10 / 14) instead of it being tied on with jumpers (J6 1-2): EN is low while VIN rises, high once VIN is up, and low again before anything turns off. See [tests.md](docs/tests.md#enable-from-the-ad2---enable-dio-jafwak).
 
 ## Configs
 
@@ -166,6 +166,7 @@ Each run writes a folder under `results/<test>/`, e.g. `results/load-tran/202611
 | `buffer-check` (added 2026-11-13) | simulator only: run it first on the reworked board, chip disconnected |
 | `--vref ext` (PSU OUT2 on VREF_IN) and `compare` | simulator only |
 | `vref-line`, `temp`, `enable-sine --shape square`, `--enable dio` (added 2026-11-13) | simulator only |
+| `line-tran --enable dio` (added 2026-11-17) | simulator only |
 | `enable-current` (added 2026-11-13; replaces `iq --rail en`) | simulator only |
 | `enable-sine --output vout`, `line-reg --split-rails`, `--ext-load-ohm`, vref-line's 10 GOhm / 10 MOhm check (added 2026-11-14) | simulator only |
 | `psu-hold`, `psu-sweep`, the 10 mA / 60 mA split current limit (added 2026-11-13) | simulator only |

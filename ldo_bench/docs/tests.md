@@ -13,7 +13,7 @@ Every command also takes:
 - `-o <folder>`: results folder (default `results/`).
 - `--psu` / `--ad-serial`: pick an instrument when there are several.
 - `--vref bgr|ext`: the reference VOUT follows. `ext` uses the supply's second output in place of the BGR (JAFWAK, JP2 removed). Not on the enable or bench-check tests; see [External reference](#external-reference-bgr-vs---vref-ext-jafwak).
-- `--enable static|dio` (smoke, load-reg, line-reg, load-tran, vref-line, temp): how the LDO is enabled. `static` (default): tied on with jumpers. `dio`: driven from the AD2; see [Enable from the AD2](#enable-from-the-ad2---enable-dio-jafwak).
+- `--enable static|dio` (smoke, load-reg, line-reg, load-tran, line-tran, vref-line, temp): how the LDO is enabled. `static` (default): tied on with jumpers. `dio`: driven from the AD2; see [Enable from the AD2](#enable-from-the-ad2---enable-dio-jafwak).
 
 Before powering anything up, each command prints the wiring it expects and asks you to confirm it: one connection per line, scope 1+ and 1− on one line, scope 2 on its own, named by the board's silkscreen label and connector pin (`[board]` in the config). The lists below summarise it; run a command with `--sim` to see exactly what it prints. Option values in the examples are just examples; defaults come from the board's config section, which is named under each test.
 
@@ -306,7 +306,7 @@ Without `[buffer]` (the demo board) line-tran and psrr use the single-rail path 
   - AD2 W1 -> buffer input SMA (VIN_FG / V_SIG); buffer output onto VIN (JP4)
   - Scope 1+ -> VOUT at the output pins, 1- -> GND
   - Scope 2+ -> VIN at the LDO input (trigger + VIN level), 2- -> GND
-  - LDO enabled with jumpers (JAFWAK: J6 1-2 "HI", J8 1-2 and 9-10 "LDO"). EN_AIN = VIN, so EN steps with VIN
+  - LDO enabled with jumpers (JAFWAK: J6 1-2 "HI", J8 1-2 and 9-10 "LDO"). EN_AIN = VIN, so EN steps with VIN; `--enable dio` holds it from the AD2 instead
   - DIO [0, 1, 2, 3, 4] -> load bank bits B0..B4, AD2 GND -> board GND
 - **Does:**
   1. **Interlock, stage 1:** powers the rail at only 1.0 V with W1 off, and checks that VIN stays low. If VIN follows the supply, the leads are on VIN: stop.
@@ -320,6 +320,7 @@ Without `[buffer]` (the demo board) line-tran and psrr use the single-rail path 
 - **Options:**
   - `--low 1.75 --high 1.85`
   - `--load 19mA`
+  - `--enable dio`: EN from the AD2 (DIO 5 / 6, AD2 V+ on VIO) instead of tied to VIN, so EN doesn't step with VIN. EN stays low through the interlock; W1 goes to `vin_low`, then EN goes high before calibration (so the buffer is calibrated with the LDO's load on it), and low again before the rails come down
   - `--avg`, `--window-ms`, `--plot-us`, `--no-xscope`
 - **Config:** `[line_tran]`.
 
@@ -497,7 +498,7 @@ resistor, or none). `load-reg`'s default sweep ("every code within dut.i_max") l
 
 ## Enable from the AD2: `--enable dio` (JAFWAK)
 
-`smoke`, `load-reg`, `line-reg`, `load-tran`, `vref-line` and `temp` don't need the enable line: by default the LDO is tied on with jumpers (J6 1-2 "HI", EN_AIN = VIN, with J8 1-2 and 9-10 "LDO"), so it turns on as VIN rises. With `--enable dio` the run drives it from the AD2 through `[enable]` instead, the same path `iq` and `enable-startup` use.
+`smoke`, `load-reg`, `line-reg`, `load-tran`, `line-tran`, `vref-line` and `temp` don't need the enable line: by default the LDO is tied on with jumpers (J6 1-2 "HI", EN_AIN = VIN, with J8 1-2 and 9-10 "LDO"), so it turns on as VIN rises. With `--enable dio` the run drives it from the AD2 through `[enable]` instead, the same path `iq` and `enable-startup` use.
 
 - **Wiring** (added to the test's own; the run prints it): AD2 DIO 5 -> J13 pin 12 (EN), DIO 6 -> J13 pin 10 (~EN), AD2 V+ -> J13 pin 14 (VIO); J6 7-8 "EN" and nothing else on J6; J8 1-2 and 9-10 "LDO".
 - **Order:** EN is driven low before VIN comes up (V_33 on first), high once VIN is up, then the run waits `enable.settle_time` (0.2 s) before measuring. It goes low again when the test ends and, if the run stops for any reason, as the first step of the shutdown after the external reference.

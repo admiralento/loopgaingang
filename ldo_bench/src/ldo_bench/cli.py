@@ -1031,6 +1031,7 @@ def line_tran(
     ad_serial: AdOpt = None,
     no_xscope: NoXScopeOpt = False,
     vref: VrefOpt = Vref.bgr,
+    enable: EnableOpt = Enable.static,
     yes: YesOpt = False,
     verbose: VerboseOpt = False,
 ) -> None:
@@ -1062,7 +1063,7 @@ def line_tran(
         yes=yes,
         use_dmm=False,
         use_xscope=not no_xscope,
-        **_modes(cfg, vref, split_buffer=True),
+        **_modes(cfg, vref, enable, split_buffer=True),
     )
 
 

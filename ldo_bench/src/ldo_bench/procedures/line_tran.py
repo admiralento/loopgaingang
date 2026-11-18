@@ -13,9 +13,11 @@ Two buffer paths, picked by the config:
     ramp together through Bench.buffer_rails_on (VIN checked after every step), then the same
     proof_levels with VS_BUFF at dut.vin_max; Bench.buffer_rails_off at the end.
 
-run(): load code; interlock; rail to psu_voltage; calibrate W1 for vin_low and vin_high (an
+run(): load code; EN low (--enable dio); interlock; rail to psu_voltage; with --enable dio, W1 to
+vin_low then EN high (so calibration sees the LDO's load); calibrate W1 for vin_low and vin_high (an
 unreachable level is an issue, VIN over the limit a hard stop); VOUT DC check; each edge averaged,
-then settling_analysis and the capture checks as in load-tran, plus the peak per volt of VIN step.
+then settling_analysis and the capture checks as in load-tran, plus the peak per volt of VIN step;
+EN low before the rails come down. Without --enable dio the LDO is tied on and EN_AIN follows VIN.
 """
 
 from __future__ import annotations
@@ -190,7 +192,10 @@ def buffer_wiring(bench: Bench, load_code: int, note: str = "") -> list[str]:
         w.scope_vout(cfg, note),
         w.scope_vin(cfg, "VIN at the LDO input; the trigger"),
     ]
-    lines += w.enable_static(cfg)  # no --enable here: the LDO is tied on (EN_AIN = VIN, so EN steps with VIN)
+    if (
+        not bench.enable_dio
+    ):  # tied on: EN_AIN = VIN, so EN steps with VIN (--enable dio: confirm_wiring adds the DIO path)
+        lines += w.enable_static(cfg)
     if load_code:
         lines += w.load_bank(cfg, supply_given=cfg.buffer is not None)  # the PSU powers VS_BUFF here
     return [*lines, w.ad2_gnd(cfg)]
@@ -378,8 +383,12 @@ def run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig) -> LineTranResult:
     bench.confirm_wiring("line transient", wiring(bench, lt), ref_probe=("vin", 0), psu_to="rail")
     setups = bench.scope_setups()
     bench.loadbank.set(lt.load_code)
+    bench.ldo_enable(False)  # --enable dio only: EN held low while the rails and VIN come up
     interlock(bench, lt.psu_voltage, lt.proof_levels)  # must pass before the rail goes above dut.vin_max
     buffer_up(bench, lt.psu_voltage)
+    if bench.enable_dio:  # VIN up first, then EN: calibrate with the LDO (and its load) drawing from U2
+        bench.vin_from_wavegen(lt.vin_low)
+        bench.ldo_enable(True)
     w_lo, v_lo, cal_lo = calibrate(bench, lt.vin_low)
     w_hi, v_hi, cal_hi = calibrate(bench, lt.vin_high)
     log.info("VIN levels %.4f / %.4f V (W1 %.4f / %.4f V)", v_lo, v_hi, w_lo, w_hi)
@@ -457,6 +466,7 @@ def run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig) -> LineTranResult:
         else:
             log.info("%s: peak %+.2f mV, settling %.2f us", edge, m.deviation * 1e3, m.settling_time * 1e6)
 
+    bench.ldo_enable(False)  # --enable dio only: EN low before the rails come down
     buffer_down(bench)
     bench.loadbank.off()
     return LineTranResult(
