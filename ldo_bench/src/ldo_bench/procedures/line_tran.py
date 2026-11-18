@@ -190,6 +190,7 @@ def buffer_wiring(bench: Bench, load_code: int, note: str = "") -> list[str]:
         w.scope_vout(cfg, note),
         w.scope_vin(cfg, "VIN at the LDO input; the trigger"),
     ]
+    lines += w.enable_static(cfg)  # no --enable here: the LDO is tied on (EN_AIN = VIN, so EN steps with VIN)
     if load_code:
         lines += w.load_bank(cfg, supply_given=cfg.buffer is not None)  # the PSU powers VS_BUFF here
     return [*lines, w.ad2_gnd(cfg)]

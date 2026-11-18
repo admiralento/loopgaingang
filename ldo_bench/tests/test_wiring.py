@@ -112,3 +112,14 @@ def test_load_bank_needs_no_vs_buff_but_the_tmp235_does(jafwak):
             assert not any("VS_BUFF" in ln for ln in lines), lines
         t = temp.wiring(b, jafwak.temp)
     assert any("VS_BUFF (J4)" in ln and "TMP235" in ln for ln in t)
+
+
+def test_buffer_tests_list_the_enable_jumpers(jafwak):
+    """line-tran and psrr have the LDO tied on with jumpers (EN_AIN = VIN): the printout must say so."""
+    from ldo_bench.procedures import line_tran, psrr
+
+    with open_bench(jafwak, sim=True) as b:
+        for lines in (line_tran.wiring(b, jafwak.line_tran), psrr.wiring(b, jafwak.psrr)):
+            text = "\n".join(lines)
+            for jumper in jafwak.board.static_enable_jumpers:
+                assert jumper in text, jumper

@@ -306,6 +306,7 @@ Without `[buffer]` (the demo board) line-tran and psrr use the single-rail path 
   - AD2 W1 -> buffer input SMA (VIN_FG / V_SIG); buffer output onto VIN (JP4)
   - Scope 1+ -> VOUT at the output pins, 1- -> GND
   - Scope 2+ -> VIN at the LDO input (trigger + VIN level), 2- -> GND
+  - LDO enabled with jumpers (JAFWAK: J6 1-2 "HI", J8 1-2 and 9-10 "LDO"). EN_AIN = VIN, so EN steps with VIN
   - DIO [0, 1, 2, 3, 4] -> load bank bits B0..B4, AD2 GND -> board GND
 - **Does:**
   1. **Interlock, stage 1:** powers the rail at only 1.0 V with W1 off, and checks that VIN stays low. If VIN follows the supply, the leads are on VIN: stop.
@@ -328,6 +329,7 @@ Without `[buffer]` (the demo board) line-tran and psrr use the single-rail path 
   - AD2 W1 -> buffer input SMA (VIN_FG / V_SIG); buffer output onto VIN (JP4)
   - Scope 1+ -> VOUT at the output pins, 1- -> GND (short ground lead)
   - Scope 2+ -> VIN at the LDO input pins, 2- -> GND
+  - LDO enabled with jumpers (JAFWAK: J6 1-2 "HI", J8 1-2 and 9-10 "LDO"). EN_AIN = VIN, so EN moves with the tone
   - DIO [0, 1, 2, 3, 4] -> load bank bits B0..B4, AD2 GND -> board GND
 - **Does:**
   1. **Setup:** the same two-stage interlock and DC calibration as line-tran, at `vin`.
