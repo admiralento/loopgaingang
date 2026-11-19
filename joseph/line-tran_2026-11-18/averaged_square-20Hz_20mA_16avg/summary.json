@@ -1,0 +1,56 @@
+{
+  "xcheck": {},
+  "valid": true,
+  "issues": [],
+  "buffer_rail_v": 5.0,
+  "load_code": 22,
+  "i_load_a": 0.020035215860179992,
+  "w1_low_v": 1.75,
+  "w1_high_v": 1.85,
+  "averages": 16,
+  "square_hz": 20.0,
+  "edges": {
+    "rising": {
+      "nominal": 1.192827241663002,
+      "peak": 1.1933420317116088,
+      "band": 5.147900486068835e-05,
+      "settle_level": 1.192827241663002,
+      "settling_time": NaN,
+      "noise": 5.74471211274405e-05,
+      "final": 1.197575645886637,
+      "sample_rate": 409836.0655737705,
+      "step_index": 1616,
+      "reference": "pre",
+      "deviation": 0.0005147900486068835,
+      "upper": 1.1928787206678626,
+      "lower": 1.1927757626581412,
+      "trustworthy": false,
+      "vin_from": 1.7467612008748203,
+      "vin_to": 1.8476396137027091,
+      "rejection": 0.0051030744256968024
+    },
+    "falling": {
+      "nominal": 1.1975851204070138,
+      "peak": 1.1971269207768576,
+      "band": 4.58199630156253e-05,
+      "settle_level": 1.1975851204070138,
+      "settling_time": NaN,
+      "noise": 6.71151707789794e-05,
+      "final": 1.1928226941996387,
+      "sample_rate": 409836.0655737705,
+      "step_index": 1625,
+      "reference": "pre",
+      "deviation": -0.000458199630156253,
+      "upper": 1.1976309403700294,
+      "lower": 1.1975393004439983,
+      "trustworthy": false,
+      "vin_from": 1.8476396137027091,
+      "vin_to": 1.7467612008748203,
+      "rejection": 0.00454209793068413
+    }
+  },
+  "vref": {
+    "source": "bgr",
+    "bgr_measured_v": 1.17
+  }
+}

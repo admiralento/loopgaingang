@@ -1,0 +1,530 @@
+diff --git a/ldo_bench/docs/tests.md b/ldo_bench/docs/tests.md
+index 4cc42b5..d47d358 100644
+--- a/ldo_bench/docs/tests.md
++++ b/ldo_bench/docs/tests.md
+@@ -310,16 +310,18 @@ Without `[buffer]` (the demo board) line-tran and psrr use the single-rail path
+ - **Does:**
+   1. **Interlock, stage 1:** powers the rail at only 1.0 V with W1 off, and checks that VIN stays low. If VIN follows the supply, the leads are on VIN: stop.
+   2. **Interlock, stage 2:** stage 1 can't tell a correct bench from a VIN probe that's off VIN (both read ~0 V). So the rail goes to `dut.vin_max` (safe even if the supply were on VIN) and W1 steps between the two `proof_levels` (0.1 and 0.3 V). VIN must follow W1. If it doesn't (supply on VIN, probe off, buffer not driving), the test stops before the rail goes above `dut.vin_max`.
+-     - **Not yet tried on hardware:** the BUF634 must be able to drive the proof levels with its rail at 1.9 V. If the first real run stops here with the wiring right, change `proof_levels`.
++     - **On hardware (2026-11-18):** U2 drove the proof levels at 1.9 V (VIN 0.099 / 0.299 V).
+   3. **Calibration:** raises the rail to `psu_voltage` and calibrates out the buffer's offset from VIN measured at the board (on the AD2's 5 V range). The steps land on `vin_low` / `vin_high` within 5 mV. The W1 correction is capped at 250 mV.
+      - **Hard stop:** any VIN reading above `dut.vin_max` less the AD2's error margin (about 20 mV at 1.9 V).
+-  4. **Steps:** steps W1 between the two levels, triggering on VIN itself.
++  4. **Steps:** steps W1 between the two levels, triggering on VIN itself. VIN is recorded on the AD2's fine 5 V range, and the trigger hysteresis is a quarter of the step (25 mV). The default (1 % of range) is 0.5 V on the 50 V range of `[ad2] ref`, which a 100 mV step never cleared (first bench run, 2026-11-18).
+ - **Computes:** everything from the transient analysis, plus the peak VOUT deviation per volt of VIN step (mV/V).
+ - **Setup check:** a buffer that can't reach a level (headroom, JP4, W1 wiring).
+ - **Options:**
+   - `--low 1.75 --high 1.85`
+   - `--load 19mA`
+   - `--avg`, `--window-ms`, `--plot-us`, `--no-xscope`
++  - `--square-hz 20`: W1 runs as a free-running square between the two calibrated setpoints (`Bench.vin_square_from_wavegen`, both levels within `dut.vin_max`) instead of one DC step per capture; W1 goes back to DC before the rails come down. Use it: the AD2's DC level moves slowly (τ ≈ 2.3 ms on 2026-11-18), its square switches in ~0.2 ms. Pick a frequency whose half-period is longer than `--window-ms` (20 Hz with 20 ms).
++  - `--raw`: one capture per edge, no averaging; the plots show only the measured samples (no smoothed trace).
+ - **Config:** `[line_tran]`.
+ 
+ ### `psrr`: power-supply rejection vs frequency
+diff --git a/ldo_bench/src/ldo_bench/bench.py b/ldo_bench/src/ldo_bench/bench.py
+index 4748657..fa8b0eb 100644
+--- a/ldo_bench/src/ldo_bench/bench.py
++++ b/ldo_bench/src/ldo_bench/bench.py
+@@ -590,6 +590,25 @@ class Bench:
+         self._awg_on = True
+         self._vin_level, self._vin_from = lo, "wavegen"
+ 
++    def vin_square_from_wavegen(self, *, low: float, high: float, frequency: float) -> None:
++        """Wavegen square between `low` and `high` (V) onto VIN through the BUF634 (line-tran --square-hz).
++
++        Both levels obey 0..min(dut.vin_max, 5 V), as vin_from_wavegen. frequency in Hz. A later
++        vin_from_wavegen() returns W1 to DC (the driver reconfigures it from scratch).
++        """
++        limit = self.wavegen_limit
++        if not (0 <= low < high <= limit + 1e-9) or frequency <= 0:
++            raise InstrumentError(
++                f"refusing to drive VIN with a {low:.3f}..{high:.3f} V, {frequency} Hz square from the "
++                f"wavegen (limit 0..{limit} V)"
++            )
++        self._vref_allows_vin(low)
++        self.awg.set_wave(
++            self.cfg.ad2.wavegen_channel, shape="square", frequency=frequency, low=low, high=high
++        )
++        self._awg_on = True
++        self._vin_level, self._vin_from = low, "wavegen"
++
+     def enable_logic(self, on: bool) -> None:
+         """AD2 V+ on V_33 (the enable level shifters' 3.3 V side), if the config says the AD2 supplies it.
+ 
+diff --git a/ldo_bench/src/ldo_bench/cli.py b/ldo_bench/src/ldo_bench/cli.py
+index 597674f..608d86a 100644
+--- a/ldo_bench/src/ldo_bench/cli.py
++++ b/ldo_bench/src/ldo_bench/cli.py
+@@ -23,6 +23,7 @@ Exit codes:
+ 
+ from __future__ import annotations
+ 
++import dataclasses
+ import logging
+ from collections.abc import Callable, Iterator
+ from contextlib import contextmanager
+@@ -1024,6 +1025,18 @@ def line_tran(
+     averages: AvgOpt = None,
+     window_ms: WindowOpt = None,
+     plot_us: PlotUsOpt = None,
++    square_hz: Annotated[
++        float | None,
++        typer.Option(
++            help="W1 as a free-running square at this frequency (Hz) instead of one DC step per capture"
++        ),
++    ] = None,
++    raw: Annotated[
++        bool,
++        typer.Option(
++            "--raw", help="One capture per edge (no averaging); plots show only the measured samples"
++        ),
++    ] = False,
+     out: OutOpt = Path("results"),
+     sim: SimOpt = False,
+     save_sim: SaveSimOpt = False,
+@@ -1045,7 +1058,7 @@ def line_tran(
+         vin_low=low,
+         vin_high=high,
+         load_code=_load_code(cfg, load),
+-        averages=averages,
++        averages=1 if raw else averages,
+         sample_rate=_rate_for_window(window_ms, n),
+         plot_window=None if plot_us is None else plot_us * 1e-6,
+     )
+@@ -1053,7 +1066,7 @@ def line_tran(
+         cfg,
+         config,
+         proc,
+-        lambda b: proc.run(b, lt, cfg.analysis),
++        lambda b: dataclasses.replace(proc.run(b, lt, cfg.analysis, square_hz), raw=raw),
+         out=out,
+         sim=sim,
+         save_sim=save_sim,
+diff --git a/ldo_bench/src/ldo_bench/instruments/ad2.py b/ldo_bench/src/ldo_bench/instruments/ad2.py
+index 0b3c11b..4ef8e2f 100644
+--- a/ldo_bench/src/ldo_bench/instruments/ad2.py
++++ b/ldo_bench/src/ldo_bench/instruments/ad2.py
+@@ -28,7 +28,15 @@ from collections.abc import Callable
+ 
+ import numpy as np
+ 
+-from ldo_bench.instruments.base import Capture, ChannelSetup, DcReading, Edge, InstrumentError, WaveShape
++from ldo_bench.instruments.base import (
++    Capture,
++    ChannelSetup,
++    DcReading,
++    Edge,
++    InstrumentError,
++    WaveShape,
++    default_hysteresis,
++)
+ 
+ log = logging.getLogger(__name__)
+ 
+@@ -177,6 +185,7 @@ class AnalogDiscovery2:
+         force: bool = False,
+         dio_trigger: tuple[int, Edge] | None = None,
+         free_running: bool = False,
++        hysteresis: float | None = None,
+     ) -> Capture:
+         p, ai = self._p, self.dev.analogIn
+         if trigger_channel not in setups:
+@@ -219,8 +228,11 @@ class AnalogDiscovery2:
+             ai.triggerChannelSet(trigger_channel - 1)
+             ai.triggerTypeSet(p.DwfAnalogInTriggerType.Edge)
+             ai.triggerLevelSet(trigger_level)
+-            # 1 % of range hysteresis, so noise on a slow edge can't retrigger
+-            ai.triggerHysteresisSet(0.01 * setups[trigger_channel].range)
++            # hysteresis, so noise on a slow edge can't retrigger; default 1 % of range (0.5 V on the
++            # 50 V range, more than a 100 mV VIN step: line-tran passes its own)
++            ai.triggerHysteresisSet(
++                default_hysteresis(setups[trigger_channel].range) if hysteresis is None else hysteresis
++            )
+             ai.triggerConditionSet(p.DwfTriggerSlope.Rise if edge == "rising" else p.DwfTriggerSlope.Fall)
+         # Single mode: position = time of the window centre relative to the trigger.
+         # E.g. pre_trigger 0.1: centre is 0.4 window after the trigger, so 10 % of samples precede it.
+diff --git a/ldo_bench/src/ldo_bench/instruments/base.py b/ldo_bench/src/ldo_bench/instruments/base.py
+index 1eb70a1..16a4f2e 100644
+--- a/ldo_bench/src/ldo_bench/instruments/base.py
++++ b/ldo_bench/src/ldo_bench/instruments/base.py
+@@ -29,6 +29,11 @@ class InstrumentError(RuntimeError):
+     """Raised for any instrument communication or configuration problem."""
+ 
+ 
++def default_hysteresis(channel_range: float) -> float:
++    """Scope trigger hysteresis (V) when a capture doesn't set one: 1 % of the channel's range (V p-p)."""
++    return 0.01 * channel_range
++
++
+ @dataclass(frozen=True)
+ class DcReading:
+     """Average of one scope channel over a free-running acquisition."""
+@@ -177,6 +182,7 @@ class Oscilloscope(Protocol):
+         force: bool = False,
+         dio_trigger: tuple[int, Edge] | None = None,
+         free_running: bool = False,
++        hysteresis: float | None = None,
+     ) -> Capture:
+         """Arm a single triggered capture, call `stimulus()` once armed, return the data.
+ 
+@@ -195,6 +201,9 @@ class Oscilloscope(Protocol):
+         free_running=True: the signal runs on its own (a periodic wavegen wave, stimulus does
+         nothing), so the scope may trigger as soon as it's armed. Otherwise a trigger before
+         stimulus() is an InstrumentError: the capture would not contain the step.
++        hysteresis (V): before an edge counts, the trigger channel must first be this far on the other
++        side of trigger_level (below it for rising). None = 1 % of the trigger channel's range, which
++        on the 50 V range is 0.5 V: a step smaller than that never triggers, so pass a smaller one.
+         """
+         ...
+ 
+diff --git a/ldo_bench/src/ldo_bench/instruments/sim.py b/ldo_bench/src/ldo_bench/instruments/sim.py
+index 342ddb5..69d3e91 100644
+--- a/ldo_bench/src/ldo_bench/instruments/sim.py
++++ b/ldo_bench/src/ldo_bench/instruments/sim.py
+@@ -41,7 +41,15 @@ from dataclasses import dataclass, field
+ 
+ import numpy as np
+ 
+-from ldo_bench.instruments.base import Capture, ChannelSetup, DcReading, Edge, InstrumentError, WaveShape
++from ldo_bench.instruments.base import (
++    Capture,
++    ChannelSetup,
++    DcReading,
++    Edge,
++    InstrumentError,
++    WaveShape,
++    default_hysteresis,
++)
+ 
+ # Fraction of the quiescent current drawn by each of the board's J1 supply rails (iq series test).
+ # EN_VDD's static share is ~0.3 nA of the 150 uA, as in the PEX (0.28 nA); enable-current adds its
+@@ -471,12 +479,14 @@ class SimAnalogDiscovery:
+         force: bool = False,
+         dio_trigger: tuple[int, Edge] | None = None,
+         free_running: bool = False,  # accepted for the protocol; the model has no arm race
++        hysteresis: float | None = None,
+     ) -> Capture:
+         """Synthesise the capture by evaluating the model before and after stimulus().
+ 
+         Dispatches to the PSRR, enable-sine or DIO-triggered models when those are set up;
+         otherwise a load / line step with a damped ring. Raises like a trigger timeout if the
+-        step doesn't cross trigger_level.
++        step doesn't cross trigger_level, or (like the AD2) doesn't start at least `hysteresis`
++        on the other side of it.
+         """
+         m = self.m
+         if m.awg_wave and m.psu_to == "rail":
+@@ -493,10 +503,11 @@ class SimAnalogDiscovery:
+ 
+         trig_before = self._value(trigger_channel, v0, ref0)
+         trig_after = self._value(trigger_channel, v1, ref1)
++        hyst = default_hysteresis(setups[trigger_channel].range) if hysteresis is None else hysteresis
+         crossed = (
+-            trig_before < trigger_level <= trig_after
++            trig_before <= trigger_level - hyst and trig_after >= trigger_level
+             if edge == "rising"
+-            else trig_before > trigger_level >= trig_after
++            else trig_before >= trigger_level + hyst and trig_after <= trigger_level
+         )
+         if not crossed and not force:
+             raise InstrumentError(
+diff --git a/ldo_bench/src/ldo_bench/procedures/line_tran.py b/ldo_bench/src/ldo_bench/procedures/line_tran.py
+index aae7b2b..a4eac74 100644
+--- a/ldo_bench/src/ldo_bench/procedures/line_tran.py
++++ b/ldo_bench/src/ldo_bench/procedures/line_tran.py
+@@ -51,6 +51,10 @@ CAL_TOLERANCE = 0.005  # V, how close the calibrated VIN levels must land
+ CAL_ITERATIONS = 4
+ PROOF_FOLLOW = 0.5  # VIN must move by at least this fraction of the W1 proof step
+ CAL_MAX_CORRECTION = 0.25  # V: W1 never goes further than this from the target chasing a dead buffer
++# AD2 trigger hysteresis as a fraction of the VIN step. The scope's default (1 % of range) is 0.5 V on
++# the 50 V range, so a 100 mV step never triggered (bench, 2026-11-18). Each level sits half a step
++# from the trigger, so a quarter step leaves room for the buffer's calibration error and noise.
++TRIGGER_HYSTERESIS = 0.25
+ 
+ 
+ @dataclass
+@@ -100,6 +104,8 @@ class LineTranResult:
+     vout_nominal: float = 1.0  # V, dut.vout_nominal (drawn on invalid plots)
+     setup_issues: list[str] = field(default_factory=list)  # found before any capture
+     plot_window: float | None = None  # s after the step shown in plot.png (None = automatic)
++    square_hz: float | None = None  # Hz: W1 ran as a free-running square (--square-hz); None = DC steps
++    raw: bool = False  # --raw: plots show only the measured samples (no smoothed trace)
+ 
+     @property
+     def issues(self) -> list[str]:
+@@ -160,6 +166,8 @@ class LineTranResult:
+             "w1_low_v": self.w1_low,
+             "w1_high_v": self.w1_high,
+             "averages": self.averages,
++            "square_hz": self.square_hz,
++            "raw": self.raw,
+             "edges": {
+                 e.edge: {
+                     **e.metrics.as_dict(),
+@@ -174,7 +182,8 @@ class LineTranResult:
+     def report(self) -> str:
+         lines = [
+             f"Line transient at {self.i_load * 1e3:.1f} mA (code {self.load_code}), "
+-            f"buffer rail {self.rail:.2f} V, {self.averages} averages per edge:"
++            f"buffer rail {self.rail:.2f} V, {self.averages} averages per edge"
++            + (f", W1 a {self.square_hz:g} Hz square:" if self.square_hz else ":")
+         ]
+         for e in self.edges:
+             extra = [f"    per VIN   {e.rejection * 1e3:.1f} mV of VOUT per V of VIN step"]
+@@ -367,15 +376,21 @@ def calibrate(bench: Bench, target: float, limit: float | None = None) -> tuple[
+     )
+ 
+ 
+-def run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig) -> LineTranResult:
++def run(
++    bench: Bench, lt: LineTranConfig, an: AnalysisConfig, square_hz: float | None = None
++) -> LineTranResult:
+     """Measure each VIN edge in lt.edges (see the module docstring for the steps).
+ 
+     lt: the [line_tran] section. an: the [analysis] settings for settling_analysis. The interlock
+     and dut.vin_max raise InstrumentError (the run stops); everything else is recorded as issues.
++    square_hz (Hz): instead of one DC step per capture, W1 runs as a free-running square between the
++    two calibrated setpoints (Bench.vin_square_from_wavegen) and each capture takes its next edge.
++    W1 goes back to DC (the low setpoint) before the rails come down.
+     """
+     a = bench.cfg.ad2
+     bench.confirm_wiring("line transient", wiring(bench, lt), ref_probe=("vin", 0), psu_to="rail")
+-    setups = bench.scope_setups()
++    # VIN on the fine range when it fits (0.3 mV a count, not 3 mV), for both the trigger and the record
++    setups = bench.vin_fine_setups()
+     bench.loadbank.set(lt.load_code)
+     interlock(bench, lt.psu_voltage, lt.proof_levels)  # must pass before the rail goes above dut.vin_max
+     buffer_up(bench, lt.psu_voltage)
+@@ -393,6 +408,9 @@ def run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig) -> LineTranResult:
+     i_load = bench.loadbank.current(lt.load_code, bench.cfg.dut.vout_nominal)
+     # trigger halfway between the commanded levels (the measured ones may be wrong if the buffer is)
+     trig_level = (lt.vin_low + lt.vin_high) / 2
++    if square_hz:
++        bench.vin_square_from_wavegen(low=w_lo, high=w_hi, frequency=square_hz)
++        bench.sleep(max(lt.rest_time, 5 / square_hz))  # a few periods for VIN to settle into the square
+ 
+     results = []
+     for edge in lt.edges:
+@@ -406,11 +424,13 @@ def run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig) -> LineTranResult:
+             trigger_channel=a.ref_channel,
+             trigger_level=trig_level,
+             trigger_edge=edge,
+-            start=lambda w=w_from: bench.vin_from_wavegen(w),
+-            step=lambda w=w_to: bench.vin_from_wavegen(w),
++            start=(lambda: None) if square_hz else (lambda w=w_from: bench.vin_from_wavegen(w)),
++            step=(lambda: None) if square_hz else (lambda w=w_to: bench.vin_from_wavegen(w)),
+             label=f"VIN step {edge}",
+             # VIN step at 1/8 of the screen (at least 0.4 V full scale), centred on the trigger level
+             xscope=XScopeSetup(ref_range=max(8 * abs(lt.vin_high - lt.vin_low), 0.4), ref_offset=trig_level),
++            hysteresis=TRIGGER_HYSTERESIS * abs(lt.vin_high - lt.vin_low),
++            free_running=bool(square_hz),
+         )
+         cap, trig_issues = sc.cap, sc.issues
+         vout, vin = cap.channel(a.vout_channel), cap.channel(a.ref_channel)
+@@ -456,6 +476,8 @@ def run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig) -> LineTranResult:
+         else:
+             log.info("%s: peak %+.2f mV, settling %.2f us", edge, m.deviation * 1e3, m.settling_time * 1e6)
+ 
++    if square_hz:
++        bench.vin_from_wavegen(w_lo)  # W1 back to DC before the rails come down
+     buffer_down(bench)
+     bench.loadbank.off()
+     return LineTranResult(
+@@ -469,6 +491,7 @@ def run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig) -> LineTranResult:
+         bench.cfg.dut.vout_nominal,
+         setup_issues,
+         lt.plot_window,
++        square_hz,
+     )
+ 
+ 
+@@ -489,6 +512,7 @@ def plot(res: LineTranResult, dut: str, full: bool = False, per_edge: bool = Fal
+         full=full,
+         window=res.plot_window,
+         per_edge=per_edge,
++        raw=res.raw,
+         vout_nominal=res.vout_nominal,
+         ref_label="VIN, AD2 (V)",
+         suptitle=f"Line transient: {dut}  ·  {res.i_load * 1e3:.1f} mA load  ·  {res.averages} averages  ·  "
+diff --git a/ldo_bench/src/ldo_bench/procedures/transient.py b/ldo_bench/src/ldo_bench/procedures/transient.py
+index f2f88f0..5bfe337 100644
+--- a/ldo_bench/src/ldo_bench/procedures/transient.py
++++ b/ldo_bench/src/ldo_bench/procedures/transient.py
+@@ -150,6 +150,8 @@ def averaged_step(
+     step: Callable[[], None],
+     label: str,
+     xscope: XScopeSetup | None = None,
++    hysteresis: float | None = None,
++    free_running: bool = False,
+ ) -> StepCapture:
+     """`tc.averages` captures of the step start() -> step(), aligned and averaged, plus any issues.
+ 
+@@ -162,6 +164,9 @@ def averaged_step(
+ 
+     setups: AD2 channel range / offset by channel. trigger_channel / trigger_level (V) /
+     trigger_edge: the AD2 trigger, on the ref channel. label: name used in log messages.
++    hysteresis (V): the AD2 trigger's, passed to Scope.capture (None = its default, 1 % of range).
++    free_running: the stimulus runs on its own (a wavegen square); start / step are then no-ops and
++    each capture takes the next edge (Scope.capture free_running).
+ 
+     If the AD2 times out on capture k, the run is not stopped: the issue is recorded, a forced
+     capture is taken, and the function returns early with the average of the captures that did
+@@ -223,6 +228,8 @@ def averaged_step(
+             "pre_trigger": tc.pre_trigger,
+             "stimulus": step,
+             "timeout": tc.timeout,
++            "hysteresis": hysteresis,
++            "free_running": free_running,
+         }
+         try:
+             caps.append(bench.scope.capture(**kw))
+@@ -433,6 +440,7 @@ def plot_edges(
+     full: bool = False,
+     window: float | None = None,
+     per_edge: bool = False,
++    raw: bool = False,
+ ):
+     """One column per edge: the trigger channel's trace on a small panel on top, sharing the time
+     axis with VOUT below, both in absolute volts.
+@@ -448,7 +456,9 @@ def plot_edges(
+     ref_label: y label of the top panel. vout_nominal: drawn as the expected VOUT on invalid edges.
+     full: show the whole capture instead of zooming on the step (plot_full.png). window: time after
+     the step to show (s); None picks it from the settling times. per_edge: size each valid edge's
+-    span to its own settling time instead of the slowest edge's (plot_zoom.png; ignores `window`). The cross-check scope's traces,
++    span to its own settling time instead of the slowest edge's (plot_zoom.png; ignores `window`).
++    raw: draw only the measured VOUT samples (no smoothed trace); the peak marker sits on a measured
++    sample. The cross-check scope's traces,
+     if any, are overlaid in another colour. Returns the matplotlib Figure.
+     """
+     from matplotlib.ticker import FormatStrFormatter
+@@ -526,8 +536,11 @@ def plot_edges(
+         x_offset = _pre_step_offset(e, x) if xok else float("nan")
+         if valid:
+             ax.axhspan(m.lower, m.upper, color=plotting.GRID, alpha=0.8, lw=0, zorder=0)
+-            ax.plot(us[view], v, color=plotting.SERIES[0], lw=0.8, alpha=0.35, zorder=2, label="Averaged")
+-            ax.plot(us[view], vs, color=plotting.SERIES[0], lw=1.8, zorder=3, label="Smoothed")
++            if raw:
++                ax.plot(us[view], v, color=plotting.SERIES[0], lw=0.8, zorder=3, label="Measured (raw)")
++            else:
++                ax.plot(us[view], v, color=plotting.SERIES[0], lw=0.8, alpha=0.35, zorder=2, label="Averaged")
++                ax.plot(us[view], vs, color=plotting.SERIES[0], lw=1.8, zorder=3, label="Smoothed")
+             if np.isfinite(m.settling_time) and m.settling_time * scale <= us[view][-1]:
+                 ax.axvline(m.settling_time * scale, color=plotting.INK_2, lw=1, ls=(0, (3, 2)), zorder=2)
+                 ax.annotate(
+@@ -552,10 +565,11 @@ def plot_edges(
+                 )
+             # the sample closest to the peak value (the analysis returns the value, not its index)
+             i0 = max(m.step_index, 0)  # the peak is after the step: don't match an equal value before it
+-            i_pk = i0 + int(np.argmin(np.abs(e.vout_smoothed[i0:] - m.peak)))
++            shown = e.vout if raw else e.vout_smoothed
++            i_pk = i0 + int(np.argmin(np.abs(shown[i0:] - m.peak)))
+             ax.plot(
+                 us[i_pk],
+-                e.vout_smoothed[i_pk],
++                shown[i_pk],
+                 "o",
+                 ms=6,
+                 color=plotting.SERIES[0],
+@@ -565,7 +579,7 @@ def plot_edges(
+             )
+             ax.annotate(
+                 f"{m.deviation * 1e3:+.1f} mV",
+-                (us[i_pk], e.vout_smoothed[i_pk]),
++                (us[i_pk], shown[i_pk]),
+                 xytext=(8, 0),
+                 textcoords="offset points",
+                 fontsize=8,
+@@ -573,7 +587,8 @@ def plot_edges(
+                 va="center",
+             )
+             # Scale to the response and band; the 1-sample switching glitch would squash it.
+-            lo, hi = min(vs.min(), m.lower), max(vs.max(), m.upper)
++            drawn = v if raw else vs
++            lo, hi = min(drawn.min(), m.lower), max(drawn.max(), m.upper)
+         else:
+             ax.plot(us[view], v, color=plotting.SERIES[0], lw=1.0, zorder=3, label="Measured (averaged)")
+             lo, hi = float(np.percentile(v, 0.5)), float(np.percentile(v, 99.5))
+diff --git a/ldo_bench/tests/test_line_tran.py b/ldo_bench/tests/test_line_tran.py
+index c27afdf..10a9abf 100644
+--- a/ldo_bench/tests/test_line_tran.py
++++ b/ldo_bench/tests/test_line_tran.py
+@@ -69,3 +69,77 @@ def test_line_tran_rejection_by_hand():
+     m = SettlingResult(1.2, 1.205, 5e-4, 1.2, 1e-5, 1e-5, 1.2, 10e6, 100, "pre")  # +5 mV kick
+     e = line_tran.EdgeResult("rising", 1.75, 1.85, m, np.zeros(1), np.zeros(1), np.zeros(1), np.zeros(1))
+     assert e.rejection == pytest.approx(0.005 / 0.1)  # 50 mV per V of VIN step
++
++
++def test_small_vin_step_triggers_on_50v_range(jafwak):
++    """Bench, 2026-11-18: with [ad2] ref on the 50 V range the AD2's default trigger hysteresis is 0.5 V,
++    so a 100 mV VIN step never triggered. line-tran must set its own hysteresis (and use the fine range)."""
++    assert jafwak.ad2.ref.range == 50.0  # the config that failed on the bench
++    res, _ = run(jafwak)
++    assert not res.issues, res.issues
++    for e in res.edges:
++        assert e.metrics.step_index >= 0
++
++
++def test_sim_trigger_needs_hysteresis_before_the_edge(jafwak):
++    """The simulated scope, like the AD2, ignores a crossing that doesn't start `hysteresis` below the level."""
++    from ldo_bench.instruments.base import ChannelSetup, InstrumentError
++
++    with open_bench(jafwak, sim=True) as b:
++        m, ch = b.sim_model, jafwak.ad2.ref_channel
++        setups = {1: ChannelSetup(5.0, 0.0), ch: ChannelSetup(50.0, 0.0)}
++
++        m.psu_to, m.psu_on = "vin", True  # sim VIN = the PSU setpoint
++
++        def capture(hysteresis):
++            m.psu_v = 1.75
++
++            def step():
++                m.psu_v = 1.85
++
++            return b.scope.capture(
++                sample_rate=1e6,
++                n_samples=1000,
++                setups=setups,
++                trigger_channel=ch,
++                trigger_level=1.8,
++                edge="rising",
++                pre_trigger=0.2,
++                stimulus=step,
++                timeout=1.0,
++                hysteresis=hysteresis,
++            )
++
++        with pytest.raises(InstrumentError, match="trigger timeout"):
++            capture(None)  # default: 1 % of 50 V = 0.5 V, more than the 100 mV step
++        assert capture(0.025).edge_found
++
++
++def test_square_refuses_levels_above_vin_max(jafwak):
++    from ldo_bench.instruments.base import InstrumentError
++
++    with open_bench(jafwak, sim=True) as b:
++        with pytest.raises(InstrumentError, match="refusing"):
++            b.vin_square_from_wavegen(low=1.75, high=jafwak.dut.vin_max + 0.05, frequency=20)
++        with pytest.raises(InstrumentError, match="refusing"):
++            b.vin_square_from_wavegen(low=1.85, high=1.75, frequency=20)
++        assert b.sim_model.awg_wave == {}  # nothing reached the wavegen
++
++
++def test_square_mode_runs_and_ends_on_dc(jafwak):
++    """--square-hz: W1 runs a square between the calibrated setpoints, then is back on DC before shutdown."""
++    lt = jafwak.line_tran.model_copy(update={"averages": 2})
++    seen = []
++    with open_bench(jafwak, sim=True) as b:
++        real = b.awg.set_wave
++
++        def spy(ch, **kw):
++            seen.append(kw)
++            real(ch, **kw)
++
++        b.awg.set_wave = spy
++        res = line_tran.run(b, lt, jafwak.analysis, square_hz=20)
++        assert b.sim_model.awg_wave == {}  # back on DC (then off) by the end
++    assert len(seen) == 1 and seen[0]["shape"] == "square" and seen[0]["frequency"] == 20
++    assert seen[0]["low"] == pytest.approx(res.w1_low) and seen[0]["high"] == pytest.approx(res.w1_high)
++    assert res.summary()["square_hz"] == 20
