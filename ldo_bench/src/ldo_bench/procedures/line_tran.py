@@ -239,8 +239,15 @@ def buffer_down(bench: Bench) -> None:
 
 
 def wiring(bench: Bench, lt: LineTranConfig) -> list[str]:
-    """Wiring lines shown before the run."""
-    return buffer_wiring(bench, lt.load_code)
+    """Wiring lines shown before the run; the 54621A's too when the run uses it (same points as the AD2)."""
+    cfg = bench.cfg
+    lines = buffer_wiring(bench, lt.load_code)
+    if bench.xscope is not None:
+        lines += [
+            w.xscope(cfg, "vout", cfg.board.vout_probe, note="cross-check"),
+            w.xscope(cfg, "ref", cfg.board.vin_probe, note="VIN, its trigger"),
+        ]
+    return lines
 
 
 def vin_limit(bench: Bench) -> float:

@@ -246,7 +246,7 @@ On JAFWAK every wiring printout with the chip powered also lists the J1 ON jumpe
     - **Smoothed** (thick): the averaged trace with the switching glitch (±`blank_time` around the step) bridged by a straight line, then a `smooth_time` (1 µs) moving average. The peak, settling band and settling time are all measured on it, as in the WaveForms script.
     - **54621A:** the cross-check scope's own averaged trace.
 - **Longer window:** `--window-ms 5` lowers the sample rate to fit 5 ms into the same 8192 samples. Fast details get coarser at lower rates.
-- **54621A cross-check:** optional `[xscope]`. Every edge is also captured on the 54621A, overlaid as "54621A", and its peak and settling time are compared. `--no-xscope` skips it. See [instruments.md](instruments.md#agilent-54621a-cross-check-scope).
+- **54621A cross-check:** optional `[xscope]`. Every edge is also captured on the 54621A, overlaid as "54621A", and its peak and settling time are compared. `--no-xscope` skips it. When the run finds it, the wiring printout lists both of its channels (on the same points as the AD2's); when it isn't found, it isn't listed and the run goes on without it. See [instruments.md](instruments.md#agilent-54621a-cross-check-scope).
 - **Extra files:** `waveform_rising.csv` / `waveform_falling.csv`.
 
 ### `load-tran`: load transient

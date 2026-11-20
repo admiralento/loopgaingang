@@ -216,7 +216,8 @@ def trigger_setup(bench: Bench, lt: LoadTranConfig) -> tuple[int, bool]:
 
 
 def wiring(bench: Bench, pin: int) -> list[str]:
-    """Wiring lines shown before the run; `pin` is the trigger DIO from trigger_setup."""
+    """Wiring lines shown before the run; `pin` is the trigger DIO from trigger_setup. The 54621A's
+    too when the run uses it."""
     cfg = bench.cfg
     bit = w.bank_bits(cfg)[cfg.loadbank.dio_pins.index(pin)]
     lines = [
@@ -224,6 +225,11 @@ def wiring(bench: Bench, pin: int) -> list[str]:
         w.scope_vout(cfg, "short ground lead"),
         w.scope(cfg, "ref", bit, note=f"DIO {pin}, the trigger"),
     ]
+    if bench.xscope is not None:  # the 54621A on the same points as the AD2
+        lines += [
+            w.xscope(cfg, "vout", cfg.board.vout_probe, note="cross-check"),
+            w.xscope(cfg, "ref", bit, note=f"DIO {pin}, its trigger"),
+        ]
     if not bench.enable_dio:
         lines += w.enable_static(cfg)
     return [*lines, *w.load_bank(cfg), w.ad2_gnd(cfg)]
