@@ -53,6 +53,10 @@ CAL_TOLERANCE = 0.005  # V, how close the calibrated VIN levels must land
 CAL_ITERATIONS = 4
 PROOF_FOLLOW = 0.5  # VIN must move by at least this fraction of the W1 proof step
 CAL_MAX_CORRECTION = 0.25  # V: W1 never goes further than this from the target chasing a dead buffer
+# AD2 trigger hysteresis as a fraction of the VIN step. The scope's default (1 % of range) is 0.5 V on
+# the 50 V range, so a 100 mV step never triggered (bench, 2026-11-17 and 2026-11-19). Each level sits
+# half a step from the trigger, so a quarter step leaves room for calibration error and noise.
+TRIGGER_HYSTERESIS = 0.25
 
 
 @dataclass
@@ -384,7 +388,8 @@ def run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig) -> LineTranResult:
     """
     a = bench.cfg.ad2
     bench.confirm_wiring("line transient", wiring(bench, lt), ref_probe=("vin", 0), psu_to="rail")
-    setups = bench.scope_setups()
+    # VIN on the fine range when it fits (0.3 mV a count, not 3 mV), for both the trigger and the record
+    setups = bench.vin_fine_setups()
     bench.loadbank.set(lt.load_code)
     bench.ldo_enable(False)  # --enable dio only: EN held low while the rails and VIN come up
     interlock(bench, lt.psu_voltage, lt.proof_levels)  # must pass before the rail goes above dut.vin_max
@@ -424,6 +429,7 @@ def run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig) -> LineTranResult:
             label=f"VIN step {edge}",
             # VIN step at 1/8 of the screen (at least 0.4 V full scale), centred on the trigger level
             xscope=XScopeSetup(ref_range=max(8 * abs(lt.vin_high - lt.vin_low), 0.4), ref_offset=trig_level),
+            hysteresis=TRIGGER_HYSTERESIS * abs(lt.vin_high - lt.vin_low),
         )
         cap, trig_issues = sc.cap, sc.issues
         vout, vin = cap.channel(a.vout_channel), cap.channel(a.ref_channel)

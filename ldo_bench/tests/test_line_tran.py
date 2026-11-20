@@ -91,3 +91,74 @@ def test_positive_buffer_offset_never_overshoots_vin(jafwak):
     res, _ = run(jafwak, setup=offset, load_code=0)
     assert not [i for i in res.issues if "VIN reached" in i], res.issues
     assert max(readings) <= jafwak.line_tran.vin_high + 0.005, max(readings)
+
+
+def _sim_step_capture(b, cfg, hysteresis):
+    """One simulated capture of a 1.75 -> 1.85 V VIN step (PSU straight on VIN), trigger at 1.80 V."""
+    from ldo_bench.instruments.base import ChannelSetup
+
+    m, ch = b.sim_model, cfg.ad2.ref_channel
+    m.psu_to, m.psu_on, m.psu_v = "vin", True, 1.75  # sim VIN = the PSU setpoint
+
+    def step():
+        m.psu_v = 1.85
+
+    return b.scope.capture(
+        sample_rate=1e6,
+        n_samples=1000,
+        setups={cfg.ad2.vout_channel: ChannelSetup(5.0, 0.0), ch: ChannelSetup(50.0, 0.0)},
+        trigger_channel=ch,
+        trigger_level=1.8,
+        edge="rising",
+        pre_trigger=0.2,
+        stimulus=step,
+        timeout=1.0,
+        hysteresis=hysteresis,
+    )
+
+
+def test_sim_trigger_needs_hysteresis_before_the_edge(jafwak):
+    """Like the AD2, the simulated scope ignores a crossing that doesn't start `hysteresis` beyond the
+    level. Its default (1 % of range) is 0.5 V on the 50 V range: more than a 100 mV step."""
+    from ldo_bench.instruments.base import InstrumentError
+
+    with open_bench(jafwak, sim=True) as b:
+        with pytest.raises(InstrumentError, match="trigger timeout"):
+            _sim_step_capture(b, jafwak, None)
+        assert _sim_step_capture(b, jafwak, 0.025).edge_found
+
+
+def test_small_vin_step_triggers_with_ref_on_50v_range(jafwak):
+    """Bench, 2026-11-17 and 2026-11-19: with [ad2] ref on the 50 V range the AD2's default trigger
+    hysteresis is 0.5 V, so line-tran's 100 mV VIN step never triggered. line-tran must record VIN on
+    the fine range and set its own hysteresis."""
+    assert jafwak.ad2.ref.range == 50.0  # the config that failed on the bench
+    res, _ = run(jafwak)
+    assert not [i for i in res.issues if "never triggered" in i], res.issues
+    for e in res.edges:
+        assert e.metrics.step_index >= 0
+
+
+def test_trigger_hysteresis_leaves_room_for_calibration_error(jafwak):
+    """Each calibrated level may land up to CAL_TOLERANCE nearer the trigger. The fine range alone gives
+    a 50 mV default hysteresis, exactly half the 100 mV step: on the bench a level 1 mV short would
+    never trigger. line-tran must pass a hysteresis that clears that margin, with VIN on the fine range."""
+    seen: list[dict] = []
+
+    def spy(b):
+        real = b.scope.capture
+
+        def capture(**kw):
+            seen.append(kw)
+            return real(**kw)
+
+        b.scope.capture = capture
+
+    run(jafwak, setup=spy)
+    lt, ch = jafwak.line_tran, jafwak.ad2.ref_channel
+    half_step = abs(lt.vin_high - lt.vin_low) / 2
+    assert seen
+    for kw in seen:
+        assert kw["hysteresis"] is not None
+        assert 0 < kw["hysteresis"] <= half_step - line_tran.CAL_TOLERANCE
+        assert kw["setups"][ch].range < jafwak.ad2.ref.range  # the fine range, not [ad2] ref's 50 V

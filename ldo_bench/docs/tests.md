@@ -315,7 +315,7 @@ Without `[buffer]` (the demo board) line-tran and psrr use the single-rail path 
   3. **Calibration:** raises the rail to `psu_voltage` and calibrates out the buffer's offset from VIN measured at the board (on the AD2's 5 V range). The steps land on `vin_low` / `vin_high` within 5 mV. The W1 correction is capped at 250 mV.
      - **From below:** W1 starts 250 mV under each target and comes up to it, so a buffer that reads high can't overshoot. On 2026-11-17 W1 started at the target, U2 was +65 mV high with no load, and VIN reached 1.915 V (over `dut.vin_max`) before the hard stop.
      - **Hard stop:** any VIN reading above `dut.vin_max` less the AD2's error margin (about 20 mV at 1.9 V).
-  4. **Steps:** steps W1 between the two levels, triggering on VIN itself.
+  4. **Steps:** steps W1 between the two levels, triggering on VIN itself. VIN is recorded on the AD2's fine 5 V range, and the trigger hysteresis is a quarter of the step (25 mV). The scope's default (1 % of range) is 0.5 V on the 50 V range of `[ad2] ref`, which a 100 mV step never clears: that's why line-tran never triggered on 2026-11-17 and 2026-11-19.
 - **Computes:** everything from the transient analysis, plus the peak VOUT deviation per volt of VIN step (mV/V).
 - **Setup check:** a buffer that can't reach a level (headroom, JP4, W1 wiring).
 - **Options:**

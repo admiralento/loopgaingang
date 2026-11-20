@@ -150,6 +150,7 @@ def averaged_step(
     step: Callable[[], None],
     label: str,
     xscope: XScopeSetup | None = None,
+    hysteresis: float | None = None,
 ) -> StepCapture:
     """`tc.averages` captures of the step start() -> step(), aligned and averaged, plus any issues.
 
@@ -162,6 +163,8 @@ def averaged_step(
 
     setups: AD2 channel range / offset by channel. trigger_channel / trigger_level (V) /
     trigger_edge: the AD2 trigger, on the ref channel. label: name used in log messages.
+    hysteresis (V): the AD2 trigger's, passed to Oscilloscope.capture (None = its default, 1 % of
+    the trigger channel's range).
 
     If the AD2 times out on capture k, the run is not stopped: the issue is recorded, a forced
     capture is taken, and the function returns early with the average of the captures that did
@@ -223,6 +226,7 @@ def averaged_step(
             "pre_trigger": tc.pre_trigger,
             "stimulus": step,
             "timeout": tc.timeout,
+            "hysteresis": hysteresis,
         }
         try:
             caps.append(bench.scope.capture(**kw))

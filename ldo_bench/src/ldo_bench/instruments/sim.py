@@ -41,7 +41,15 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from ldo_bench.instruments.base import Capture, ChannelSetup, DcReading, Edge, InstrumentError, WaveShape
+from ldo_bench.instruments.base import (
+    Capture,
+    ChannelSetup,
+    DcReading,
+    Edge,
+    InstrumentError,
+    WaveShape,
+    default_hysteresis,
+)
 
 # Fraction of the quiescent current drawn by each of the board's J1 supply rails (iq series test).
 # EN_VDD's static share is ~0.3 nA of the 150 uA, as in the PEX (0.28 nA); enable-current adds its
@@ -471,12 +479,14 @@ class SimAnalogDiscovery:
         force: bool = False,
         dio_trigger: tuple[int, Edge] | None = None,
         free_running: bool = False,  # accepted for the protocol; the model has no arm race
+        hysteresis: float | None = None,
     ) -> Capture:
         """Synthesise the capture by evaluating the model before and after stimulus().
 
         Dispatches to the PSRR, enable-sine or DIO-triggered models when those are set up;
         otherwise a load / line step with a damped ring. Raises like a trigger timeout if the
-        step doesn't cross trigger_level.
+        step doesn't cross trigger_level, or (like the AD2) doesn't start at least `hysteresis`
+        on the other side of it.
         """
         m = self.m
         if m.awg_wave and m.psu_to == "rail":
@@ -493,10 +503,11 @@ class SimAnalogDiscovery:
 
         trig_before = self._value(trigger_channel, v0, ref0)
         trig_after = self._value(trigger_channel, v1, ref1)
+        hyst = default_hysteresis(setups[trigger_channel].range) if hysteresis is None else hysteresis
         crossed = (
-            trig_before < trigger_level <= trig_after
+            trig_before <= trigger_level - hyst and trig_after >= trigger_level
             if edge == "rising"
-            else trig_before > trigger_level >= trig_after
+            else trig_before >= trigger_level + hyst and trig_after <= trigger_level
         )
         if not crossed and not force:
             raise InstrumentError(
