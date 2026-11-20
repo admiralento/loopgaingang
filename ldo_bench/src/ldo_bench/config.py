@@ -1067,10 +1067,10 @@ class PsrrConfig(BufferProofConfig):
         "8591E read VOUT, from sa_from up to here (Hz)",
     )
     sa_cal_averages: int = Field(
-        32,
+        128,
         ge=1,
-        description="meter = sa: AD2 captures per point from sa_from to sa_cal_to, so its VOUT clears the margin "
-        "(VOUT is only ~100 uV there; 32 lowers the AD2's floor ~9 dB against 4)",
+        description="meter = sa: AD2 captures per point from sa_from to sa_cal_to, so its VOUT clears the margin. "
+        "VOUT is only ~80-150 uV there (bench 2026-11-20); 32 left the 10 kHz point at 20.0 dB, 128 is ~6 dB lower",
     )
     sa_cal_margin_db: float = Field(
         20.0,

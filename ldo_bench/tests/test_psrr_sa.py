@@ -108,3 +108,22 @@ def test_cli_meter_sa():
     assert "8591E" in r.output and "path gain" in r.output
     r = invoke("psrr", "-c", config_path("demo_board"), "--sim", "--yes", "--meter", "sa")
     assert r.exit_code == 2, r.output
+
+
+def test_the_analyzers_raw_readings_are_saved_even_without_a_path_gain(jafwak):
+    """Bench, 2026-11-20: the path gain failed and nothing showed what the 8591E had read."""
+    res, _, _ = _run(_cfg(jafwak, sa_cal_margin_db=200.0))
+    assert res.path_gain_db is None
+    for row in res.rows:
+        if row["frequency_hz"] >= 10e3:
+            assert row["sa_vpeak_v"] > 0 and row["sa_floor_vpeak_v"] > 0
+            assert row["sa_rbw_hz"] > 0 and abs(row["sa_peak_frequency_hz"] - row["frequency_hz"]) < 1e3
+            assert math.isfinite(row["sa_dbm"]) and math.isfinite(row["sa_margin_db"])
+        else:
+            assert math.isnan(row["sa_vpeak_v"])
+    issue = next(i for i in res.issues if "couldn't be measured" in i)
+    assert "AD2" in issue and "8591E" in issue and "dB" in issue  # each overlap point's two margins
+
+
+def test_overlap_captures_default_to_128(jafwak):
+    assert jafwak.psrr.sa_cal_averages == 128

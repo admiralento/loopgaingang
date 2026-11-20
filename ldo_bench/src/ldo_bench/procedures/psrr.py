@@ -200,6 +200,21 @@ class SaReading:
     floor_vpeak: float
     rbw: float  # Hz
     peak_frequency: float  # Hz, where the marker found the tone
+    dbm: float  # the tone as the analyzer read it (dBm into 50 ohm)
+
+    @property
+    def margin_db(self) -> float:
+        """How far the tone is above the analyzer's floor (dB)."""
+        return (
+            20 * math.log10(self.vpeak / self.floor_vpeak)
+            if self.vpeak > 0 and self.floor_vpeak > 0
+            else math.nan
+        )
+
+
+def _margin_db(amp: float, floor: float) -> float:
+    """amp over floor (dB); NaN if either isn't positive."""
+    return 20 * math.log10(amp / floor) if amp > 0 and floor > 0 else math.nan
 
 
 class SaPsrrMeter:
@@ -244,11 +259,13 @@ class SaPsrrMeter:
         noise = max(
             self.sa.marker_at(f + SA_FLOOR_RBWS * rbw).vpeak, self.sa.marker_at(f - SA_FLOOR_RBWS * rbw).vpeak
         )
-        return SaReading(tone.vpeak, noise * 10 ** (SA_FLOOR_DB / 20), rbw, tone.frequency)
+        return SaReading(tone.vpeak, noise * 10 ** (SA_FLOOR_DB / 20), rbw, tone.frequency, tone.dbm)
 
     def finish(self, points: list[PsrrPoint]) -> tuple[list[str], list[str]]:
         """Measure the path gain from the overlap, convert the analyzer's points to VOUT. (issues, notes)."""
         ps, margin = self.ps, 10 ** (self.ps.sa_cal_margin_db / 20)
+        for p in points:  # the analyzer's own readings are kept on every point it read, whatever follows
+            p.sa = self.readings.get(p.frequency)
         for p in points:
             if p.frequency in self.readings:
                 r = self.readings[p.frequency]
@@ -263,10 +280,16 @@ class SaPsrrMeter:
                     self.path_points.append((p.frequency, r.vpeak / abs(p.tone.vout)))
         sa_points = [p for p in points if p.frequency in self.readings]
         if not self.path_points:
+            seen = "; ".join(
+                f"{p.frequency:g} Hz: AD2 {_margin_db(abs(p.tone.vout), p.tone.vout_floor):.1f} dB, "
+                f"8591E {p.sa.margin_db:.1f} dB"
+                for p in sa_points
+                if p.frequency <= ps.sa_cal_to
+            )
             issue = (
                 f"the 8591E's path gain couldn't be measured: no point from {ps.sa_from:g} to {ps.sa_cal_to:g} Hz "
-                f"had both the AD2's and the analyzer's VOUT {ps.sa_cal_margin_db:g} dB above their floors. Its "
-                "points keep the AD2's VOUT (check U4's rails, J10, the J9 coax and the DC block)"
+                f"had both the AD2's and the analyzer's VOUT {ps.sa_cal_margin_db:g} dB above their floors "
+                f"({seen}). Its points keep the AD2's VOUT (check U4's rails, J10, the J9 coax and the DC block)"
             )
             for p in sa_points:
                 p.issues.append(issue)
@@ -320,6 +343,7 @@ class PsrrPoint:
     w1_amplitude: float  # what W1 played (after levelling)
     issues: list[str] = field(default_factory=list)  # setup problems at this frequency
     ad2_vout: float | None = None  # V peak: the AD2's own VOUT reading where the 8591E measured (cross-check)
+    sa: SaReading | None = None  # the 8591E's raw reading at this frequency (meter = sa, from sa_from up)
 
     @property
     def vin_amp(self) -> float:
@@ -406,6 +430,13 @@ class PsrrResult:
                 "w1_amp_v": p.w1_amplitude,
                 "vout_meter": p.tone.vout_meter,
                 "ad2_vout_amp_v": p.ad2_vout if p.ad2_vout is not None else float("nan"),
+                # the 8591E's raw reading at its input (before the path gain), saved whatever the path gain did
+                "sa_dbm": p.sa.dbm if p.sa else float("nan"),
+                "sa_vpeak_v": p.sa.vpeak if p.sa else float("nan"),
+                "sa_floor_vpeak_v": p.sa.floor_vpeak if p.sa else float("nan"),
+                "sa_margin_db": p.sa.margin_db if p.sa else float("nan"),
+                "sa_rbw_hz": p.sa.rbw if p.sa else float("nan"),
+                "sa_peak_frequency_hz": p.sa.peak_frequency if p.sa else float("nan"),
                 "sample_rate_hz": p.tone.sample_rate,
                 "cycles": p.tone.cycles,
                 "load_code": self.load_code,
