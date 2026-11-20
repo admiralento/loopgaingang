@@ -319,7 +319,7 @@ Talks to the analyzer only: no board, PSU or AD2. Run it before anything relies 
 - **Does:**
   1. Preset, single-sweep mode.
   2. **Calibrator:** 300 MHz, 1 MHz span, 3 kHz RBW, one sweep, marker to the peak. It must be CAL OUT (within 1/100 of the span), at −20 dBm ± `sa.cal_tolerance_db` (1 dB; not from the datasheet yet).
-  3. **Narrowest RBW:** asks for 30 Hz and reads back what was set: 30 Hz means Option 130, 1 kHz is standard.
+  3. **Narrowest RBW:** asks for 30 Hz and reads back what was set: 30 Hz means Option 130. The bench unit gives 300 Hz (2026-11-20).
   4. **Noise floor:** the marker level at 1 MHz (no tone there) with that RBW, in dBm and µV.
   5. Preset (continuous sweep), leaving the front panel normal.
 - **Not valid (exit 3):** no calibrator tone (CAL OUT not cabled), wrong frequency, or the level outside the tolerance.

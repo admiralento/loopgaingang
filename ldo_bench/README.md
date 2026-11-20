@@ -167,7 +167,7 @@ Each run writes a folder under `results/<test>/`, e.g. `results/load-tran/202611
 | `--vref ext` (PSU OUT2 on VREF_IN) and `compare` | simulator only |
 | `line-tran --vref ad2`, `--vref-v` (added 2026-11-20) | simulator only |
 | HP 8591E: `ID?` / `REV?` / `SER?` (2026-11-20) | yes, over the UsbGpib adapter |
-| `sa-check`, the 8591E driver's other commands (added 2026-11-20) | simulator only |
+| `sa-check`, the 8591E driver's other commands (added 2026-11-20) | ran 2026-11-20: every command accepted; calibrator not yet read (CAL OUT not cabled) |
 | `vref-line`, `temp`, `enable-sine --shape square`, `--enable dio` (added 2026-11-13) | simulator only |
 | `line-tran --enable dio` (added 2026-11-17) | simulator only |
 | `enable-current` (added 2026-11-13; replaces `iq --rail en`) | simulator only |

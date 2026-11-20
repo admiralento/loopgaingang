@@ -10,7 +10,7 @@ run() steps:
    within sa.cal_tolerance_db of sa.cal_level (-20 dBm). Either failing is a setup issue (exit 3):
    CAL OUT not cabled to INPUT, or the analyzer or the driver reading wrong.
 3. Narrowest RBW: ask for 30 Hz and read back what the analyzer set (30 Hz means Option 130 is fitted;
-   1 kHz is the standard narrowest).
+   the bench unit gives 300 Hz).
 4. Noise floor: at sa.floor_frequency (1 MHz, no tone there) with that RBW, one sweep, the marker level.
    For the record: it sets the smallest tone the PSRR measurement could see.
 5. Preset again (IP only: continuous sweep), so the front panel is left in its normal state.

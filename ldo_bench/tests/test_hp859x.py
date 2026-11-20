@@ -37,7 +37,7 @@ def test_tune_sends_the_8590_commands_and_reports_the_rbw_it_got():
         "AT 10DB;",
     ]
     assert got == 3e3
-    assert sa.tune(center=1e6, span=1e3, rbw=30) == 1e3  # no Option 130: 1 kHz is the narrowest
+    assert sa.tune(center=1e6, span=1e3, rbw=30) == 300  # no Option 130: 300 Hz, as on the bench unit
     link.narrow_rbw = True
     assert sa.tune(center=1e6, span=1e3, rbw=30) == 30
 

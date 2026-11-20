@@ -21,6 +21,12 @@ New, for Tests 5 onward (not run yet): `enable-sine --output vout` (Test 5), `li
 (Test 7, Method B). The 1 mA the plan got from 1.2 kOhm on J5 is now load code 1, so `--ext-load-ohm`
 isn't needed for Tests 6-8; load-tran steps 1 <-> 20.04 mA (codes 1 <-> 22).
 
+## 2026-11-20: HP 8591E on GPIB, first `sa-check`; `line-tran --vref ad2` (simulator only)
+
+- **8591E found** on the UsbGpib adapter, `USB0::1003::8293::HP8591E::0::INSTR`. Empty reply to `*IDN?`; `ID?` → `HP8591E`, `REV?` → `940822`, `SER?` → `3728`.
+- **`sa-check`** (`results/sa-check/20261120-124843_JAFWAK_sa-check_INVALID`): every command the driver uses was accepted (no `ERR?` codes). **No calibrator tone:** the highest peak near 300 MHz read −88.4 dBm (noise), probably because CAL OUT wasn't cabled to INPUT; to re-run with it cabled. **Narrowest RBW 300 Hz** (no Option 130; I had assumed 1 kHz). **Marker at 1 MHz** with nothing known on the input: −109.3 dBm in 300 Hz (1.08 µV peak).
+- **Added, simulator only:** `line-tran --vref ad2` / `--vref-v` (AD2 V+ on VREF_IN, read on the DMM) with its safeguards (V+ off at open, VIN checked on every capture, a loud failure if V+ won't turn off).
+
 ## 2026-11-19: `line-tran` at 1 mA on JAFWAK: no trigger; the trigger fix, a square on W1
 
 **Run:** `results/line-tran/20261119-170318_JAFWAK_line-tran_INVALID` (code 1, 1 mA, `--window-ms 10`, `--no-xscope`, DC steps).

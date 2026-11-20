@@ -864,7 +864,8 @@ class Sim8591Link:
     `tones` maps frequency (Hz) -> level (dBm) at the input; by default the analyzer's own CAL OUT
     (300 MHz, -20 dBm) is cabled to it, as for `sa-check`. `tone_source(f)` (optional) gives extra
     tones live, e.g. VOUT's ripple from the LDO model. The noise floor is noise_dbm_1khz at 1 kHz
-    RBW, scaled by 10 log10(RBW). Test knobs: narrow_rbw (Option 130: 30 Hz RBW), reject (a command
+    RBW, scaled by 10 log10(RBW). The narrowest RBW is 300 Hz, as the bench unit (sa-check, 2026-11-20).
+    Test knobs: narrow_rbw (Option 130: 30 Hz RBW), reject (a command
     word that raises an error code), done_reply, garble (a query that answers garbage),
     amplitude_override (MKA? reply), err (queued error codes), id_reply.
     """
@@ -913,7 +914,7 @@ class Sim8591Link:
         elif word == "SP":
             self.sp = _hp_number(arg)
         elif word == "RB":
-            self.rb = _rbw_step(_hp_number(arg), 30.0 if self.narrow_rbw else 1e3)
+            self.rb = _rbw_step(_hp_number(arg), 30.0 if self.narrow_rbw else 300.0)  # 300 Hz: the bench unit
         elif word == "MKF":
             self.marker = _hp_number(arg)
         elif word == "MKPK":
