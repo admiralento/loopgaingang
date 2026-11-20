@@ -25,6 +25,7 @@ isn't needed for Tests 6-8; load-tran steps 1 <-> 20.04 mA (codes 1 <-> 22).
 
 - **8591E found** on the UsbGpib adapter, `USB0::1003::8293::HP8591E::0::INSTR`. Empty reply to `*IDN?`; `ID?` → `HP8591E`, `REV?` → `940822`, `SER?` → `3728`.
 - **`sa-check`** (`results/sa-check/20261120-124843_JAFWAK_sa-check_INVALID`): every command the driver uses was accepted (no `ERR?` codes). **No calibrator tone:** the highest peak near 300 MHz read −88.4 dBm (noise), probably because CAL OUT wasn't cabled to INPUT; to re-run with it cabled. **Narrowest RBW 300 Hz** (no Option 130; I had assumed 1 kHz). **Marker at 1 MHz** with nothing known on the input: −109.3 dBm in 300 Hz (1.08 µV peak).
+- **`sa-check` again with CAL OUT cabled** (`results/sa-check/20261120-125239_JAFWAK_sa-check`, valid): calibrator **−20.52 dBm at 300.003 MHz** (−0.52 dB from −20 dBm, inside the ±1 dB tolerance, which isn't from the datasheet yet). Narrowest RBW 300 Hz again. Marker at 1 MHz: −108.4 dBm in 300 Hz (1.20 µV peak), read with the preset (peak) detector, so it sits above the analyzer's average noise.
 - **Added, simulator only:** `line-tran --vref ad2` / `--vref-v` (AD2 V+ on VREF_IN, read on the DMM) with its safeguards (V+ off at open, VIN checked on every capture, a loud failure if V+ won't turn off).
 
 ## 2026-11-19: `line-tran` at 1 mA on JAFWAK: no trigger; the trigger fix, a square on W1
