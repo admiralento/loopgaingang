@@ -240,3 +240,19 @@ def test_square_half_period_must_cover_the_capture(jafwak):
     with pytest.raises(ValueError, match="square_hz"):
         type(jafwak.line_tran).model_validate(d | {"square_hz": 20, "sample_rate": 8192 / 30e-3})
     type(jafwak.line_tran).model_validate(d | {"square_hz": 20, "sample_rate": 8192 / 20e-3})
+
+
+def _vout_labels(fig):
+    return {ln.get_label() for ax in fig.axes for ln in ax.get_lines()}
+
+
+def test_raw_plots_only_measured_samples(jafwak):
+    """--raw: one capture per edge, and the plots show only what the scope read (no smoothed trace)."""
+    res, _ = run(jafwak, averages=1)
+    assert "Smoothed" in _vout_labels(line_tran.plot(res, "JAFWAK"))
+    res.raw = True
+    for fig in [line_tran.plot(res, "JAFWAK"), *line_tran.extra_plots(res, "JAFWAK").values()]:
+        labels = _vout_labels(fig)
+        assert "Smoothed" not in labels and "Averaged" not in labels
+        assert "Measured (raw)" in labels
+    assert res.summary()["raw"] is True

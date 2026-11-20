@@ -325,6 +325,7 @@ Without `[buffer]` (the demo board) line-tran and psrr use the single-rail path 
   - `--enable dio`: EN from the AD2 (DIO 5 / 6, AD2 V+ on VIO) instead of tied to VIN, so EN doesn't step with VIN. EN stays low through the interlock; W1 goes to `vin_low`, then EN goes high before calibration (so the buffer is calibrated with the LDO's load on it), and low again before the rails come down
   - `--square-hz 20`: the square's frequency. Half a period must be longer than the capture window (`--window-ms`), so the capture sees one edge: 20 Hz allows up to 25 ms
   - `--dc-steps`: one W1 DC step per capture instead of the square (slow: the AD2's DC level)
+  - `--raw`: one capture per edge, no averaging (`--avg` refused with it); the plots show only the measured VOUT samples, no smoothed trace. The reported numbers still come from the analysis (which smooths), so they match a normal run's
   - `--avg`, `--window-ms`, `--plot-us`, `--no-xscope`
 - **Config:** `[line_tran]`.
 

@@ -65,3 +65,11 @@ def test_line_tran_square_must_fit_the_window():
     assert r.exit_code == 0, r.output
     r = invoke("line-tran", "-c", config_path("jafwak"), "--sim", "--yes", "--square-hz", "20", "--dc-steps")
     assert r.exit_code == 2 and "--dc-steps" in r.output, r.output
+
+
+def test_line_tran_raw_is_one_capture():
+    r = invoke("line-tran", "-c", config_path("jafwak"), "--sim", "--yes", "--raw")
+    assert r.exit_code == 0, r.output
+    assert "1 averages per edge" in r.output
+    r = invoke("line-tran", "-c", config_path("jafwak"), "--sim", "--yes", "--raw", "--avg", "4")
+    assert r.exit_code == 2 and "--raw" in r.output, r.output

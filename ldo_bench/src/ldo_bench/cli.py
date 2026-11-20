@@ -1038,6 +1038,12 @@ def line_tran(
             "--dc-steps", help="One W1 DC step per capture instead of the square (the AD2's DC level is slow)"
         ),
     ] = False,
+    raw: Annotated[
+        bool,
+        typer.Option(
+            "--raw", help="One capture per edge, no averaging; plots show only the measured samples"
+        ),
+    ] = False,
     out: OutOpt = Path("results"),
     sim: SimOpt = False,
     save_sim: SaveSimOpt = False,
@@ -1053,6 +1059,10 @@ def line_tran(
     from ldo_bench.procedures import line_tran as proc
 
     cfg = _load(config, verbose)
+    if raw:
+        if averages not in (None, 1):
+            _fail("--raw is one capture per edge: leave out --avg")
+        averages = 1
     if dc_steps:
         if square_hz is not None:
             _fail("--square-hz and --dc-steps can't be used together")
@@ -1074,7 +1084,7 @@ def line_tran(
         cfg,
         config,
         proc,
-        lambda b: proc.run(b, lt, cfg.analysis),
+        lambda b: proc.run(b, lt, cfg.analysis, raw=raw),
         out=out,
         sim=sim,
         save_sim=save_sim,

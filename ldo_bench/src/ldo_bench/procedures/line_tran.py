@@ -110,6 +110,7 @@ class LineTranResult:
     setup_issues: list[str] = field(default_factory=list)  # found before any capture
     plot_window: float | None = None  # s after the step shown in plot.png (None = automatic)
     square_hz: float | None = None  # Hz: W1 ran as a free-running square; None = one DC step per capture
+    raw: bool = False  # --raw: plots show only the measured samples (no smoothed trace)
 
     @property
     def issues(self) -> list[str]:
@@ -171,6 +172,7 @@ class LineTranResult:
             "w1_high_v": self.w1_high,
             "averages": self.averages,
             "square_hz": self.square_hz,
+            "raw": self.raw,
             "edges": {
                 e.edge: {
                     **e.metrics.as_dict(),
@@ -423,10 +425,11 @@ def calibrate(bench: Bench, target: float, limit: float | None = None) -> tuple[
     )
 
 
-def run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig) -> LineTranResult:
+def run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig, raw: bool = False) -> LineTranResult:
     """Measure each VIN edge in lt.edges (see the module docstring for the steps).
 
-    lt: the [line_tran] section. an: the [analysis] settings for settling_analysis. The interlock
+    lt: the [line_tran] section. an: the [analysis] settings for settling_analysis. raw: only marks
+    the result so its plots show the measured samples alone (--raw also sets lt.averages to 1). The interlock
     and dut.vin_max raise InstrumentError (the run stops); everything else is recorded as issues.
     """
     a = bench.cfg.ad2
@@ -546,6 +549,7 @@ def run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig) -> LineTranResult:
         setup_issues,
         lt.plot_window,
         square,
+        raw,
     )
 
 
@@ -566,6 +570,7 @@ def plot(res: LineTranResult, dut: str, full: bool = False, per_edge: bool = Fal
         full=full,
         window=res.plot_window,
         per_edge=per_edge,
+        raw=res.raw,
         vout_nominal=res.vout_nominal,
         ref_label="VIN, AD2 (V)",
         suptitle=f"Line transient: {dut}  ·  {res.i_load * 1e3:.1f} mA load  ·  {res.averages} averages  ·  "

@@ -440,6 +440,7 @@ def plot_edges(
     full: bool = False,
     window: float | None = None,
     per_edge: bool = False,
+    raw: bool = False,
 ):
     """One column per edge: the trigger channel's trace on a small panel on top, sharing the time
     axis with VOUT below, both in absolute volts.
@@ -455,8 +456,10 @@ def plot_edges(
     ref_label: y label of the top panel. vout_nominal: drawn as the expected VOUT on invalid edges.
     full: show the whole capture instead of zooming on the step (plot_full.png). window: time after
     the step to show (s); None picks it from the settling times. per_edge: size each valid edge's
-    span to its own settling time instead of the slowest edge's (plot_zoom.png; ignores `window`). The cross-check scope's traces,
-    if any, are overlaid in another colour. Returns the matplotlib Figure.
+    span to its own settling time instead of the slowest edge's (plot_zoom.png; ignores `window`).
+    raw: draw only the measured VOUT samples (no averaged-and-smoothed trace); the peak marker sits on a
+    measured sample, and the numbers are still the analysis's. The cross-check scope's traces, if any,
+    are overlaid in another colour. Returns the matplotlib Figure.
     """
     from matplotlib.ticker import FormatStrFormatter
 
@@ -533,8 +536,11 @@ def plot_edges(
         x_offset = _pre_step_offset(e, x) if xok else float("nan")
         if valid:
             ax.axhspan(m.lower, m.upper, color=plotting.GRID, alpha=0.8, lw=0, zorder=0)
-            ax.plot(us[view], v, color=plotting.SERIES[0], lw=0.8, alpha=0.35, zorder=2, label="Averaged")
-            ax.plot(us[view], vs, color=plotting.SERIES[0], lw=1.8, zorder=3, label="Smoothed")
+            if raw:
+                ax.plot(us[view], v, color=plotting.SERIES[0], lw=0.8, zorder=3, label="Measured (raw)")
+            else:
+                ax.plot(us[view], v, color=plotting.SERIES[0], lw=0.8, alpha=0.35, zorder=2, label="Averaged")
+                ax.plot(us[view], vs, color=plotting.SERIES[0], lw=1.8, zorder=3, label="Smoothed")
             if np.isfinite(m.settling_time) and m.settling_time * scale <= us[view][-1]:
                 ax.axvline(m.settling_time * scale, color=plotting.INK_2, lw=1, ls=(0, (3, 2)), zorder=2)
                 ax.annotate(
@@ -559,10 +565,11 @@ def plot_edges(
                 )
             # the sample closest to the peak value (the analysis returns the value, not its index)
             i0 = max(m.step_index, 0)  # the peak is after the step: don't match an equal value before it
-            i_pk = i0 + int(np.argmin(np.abs(e.vout_smoothed[i0:] - m.peak)))
+            shown = e.vout if raw else e.vout_smoothed
+            i_pk = i0 + int(np.argmin(np.abs(shown[i0:] - m.peak)))
             ax.plot(
                 us[i_pk],
-                e.vout_smoothed[i_pk],
+                shown[i_pk],
                 "o",
                 ms=6,
                 color=plotting.SERIES[0],
@@ -572,7 +579,7 @@ def plot_edges(
             )
             ax.annotate(
                 f"{m.deviation * 1e3:+.1f} mV",
-                (us[i_pk], e.vout_smoothed[i_pk]),
+                (us[i_pk], shown[i_pk]),
                 xytext=(8, 0),
                 textcoords="offset points",
                 fontsize=8,
@@ -580,7 +587,8 @@ def plot_edges(
                 va="center",
             )
             # Scale to the response and band; the 1-sample switching glitch would squash it.
-            lo, hi = min(vs.min(), m.lower), max(vs.max(), m.upper)
+            drawn = v if raw else vs
+            lo, hi = min(drawn.min(), m.lower), max(drawn.max(), m.upper)
         else:
             ax.plot(us[view], v, color=plotting.SERIES[0], lw=1.0, zorder=3, label="Measured (averaged)")
             lo, hi = float(np.percentile(v, 0.5)), float(np.percentile(v, 99.5))
