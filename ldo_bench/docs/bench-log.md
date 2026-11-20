@@ -21,6 +21,22 @@ New, for Tests 5 onward (not run yet): `enable-sine --output vout` (Test 5), `li
 (Test 7, Method B). The 1 mA the plan got from 1.2 kOhm on J5 is now load code 1, so `--ext-load-ohm`
 isn't needed for Tests 6-8; load-tran steps 1 <-> 20.04 mA (codes 1 <-> 22).
 
+## 2026-11-19: `line-tran` at 1 mA on JAFWAK: no trigger; the trigger fix, a square on W1
+
+**Run:** `results/line-tran/20261119-170318_JAFWAK_line-tran_INVALID` (code 1, 1 mA, `--window-ms 10`, `--no-xscope`, DC steps).
+
+- **Calibration from below worked** (its first board run): VIN landed on 1.750 / 1.849 V with W1 at 1.737 / 1.835 V (U2 about +13 mV high at 1 mA). Nothing hit the hard stop.
+- **The scope never triggered on either edge.** Cause (found in Joseph's notes, `origin/joseph`, 2026-11-18): VIN was captured on `[ad2] ref`'s 50 V range, where the AD2's default trigger hysteresis (1 % of range) is 0.5 V. A 100 mV step can't clear it. That also explains both 2026-11-17 runs.
+- **The edge is the AD2's DC mode, not U2:** the untriggered rising capture caught the step, a near-exponential ramp, 10-90 % in about 4 ms (τ ≈ 2 ms). Joseph measured τ ≈ 2.3 ms the same way. The 2026-11-17 "VIN creeps ~25 mV/ms" came from untriggered captures and is this same DC-mode ramp.
+- **Joseph's square on W1** (20 Hz, his raw single capture at 20 mA): 10-90 % about 350 µs rising and 190 µs falling, VIN peak 1.851 V (no overshoot). Faster, but still far slower than the LDO's loop, so what slows it is still open: next, probe J3 (W1), JP4 pin 1 (U2's output) and VIN on the 54621A.
+- **Board, from the PCB file (2026-11-06) and Alek:** VIN has only C15 (100 nF) in buffer mode; C12 (100 µF) is on the VIN_DC side of JP4. The file shows U2's input (pin 3) and V+ (pin 7) swapped; the 2026-11-13 rework fixed that by hand (C8 tombstoned to GND, wired to pin 7). Not checked against the board by continuity.
+
+**Changed (simulator only, not run on the board):**
+- `e1e9cf4`: line-tran captures VIN on the fine 5 V range, trigger hysteresis a quarter of the step (25 mV).
+- `34051c7`: W1 a 20 Hz square by default (`--square-hz`, `--dc-steps` for the old way), with a hard stop on VIN's peak on the square before any edge is captured. `vin_square_from_wavegen` added to AGENTS.md's Bench methods (approved).
+- `1c63e22`: `line-tran --raw` (one capture, measured samples only in the plots).
+- `af7acf5`: `buffer-check` removed (not used).
+
 ## 2026-11-17: first `line-tran` on JAFWAK (split-supply U2): VIN overshoot, buffer offset
 
 **Runs:** `results/line-tran/20261117-182246_JAFWAK_line-tran_INVALID` and `20261117-184657_..._INVALID` (code 22, 20 mA), then `line-tran --load 0 --no-xscope` (stopped, nothing saved).
