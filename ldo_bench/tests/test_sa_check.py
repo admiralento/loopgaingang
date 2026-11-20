@@ -1,5 +1,7 @@
 """sa-check on the simulated 8591E (CAL OUT cabled to INPUT), and finding the analyzer by ID?."""
 
+import math
+
 import pytest
 from helpers import config_path, invoke
 
@@ -19,7 +21,7 @@ def test_passes_on_the_calibrator(jafwak):
     assert not res.issues, res.issues
     assert res.cal.dbm == pytest.approx(-20.0, abs=0.1)
     assert res.narrowest_rbw == 300 and res.summary()["option_130"] is False
-    assert res.floor.dbm == pytest.approx(-115.0 + 10 * __import__("math").log10(0.3), abs=0.1)
+    assert res.floor.dbm == pytest.approx(-115.0 + 10 * math.log10(0.3), abs=0.1)
     assert [c for c in link.sent if c != "ERR?"][-1] == "IP;"  # left preset, sweeping continuously
     assert "calibrator" in res.report() and "no Option 130" in res.report()
 
