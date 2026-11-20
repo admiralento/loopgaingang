@@ -1075,11 +1075,28 @@ class LineTranConfig(TransientCaptureConfig, BufferProofConfig):
     vin_high: float = Field(gt=0, description="W1 high level -> VIN through the BUF634 (V)")
     load_code: int = Field(0, ge=0, description="Load bank code during the steps")
     buffer_headroom: float = Field(2.0, ge=0, description="Required VS_BUFF - Vin margin for the BUF634 (V)")
+    square_hz: float | None = Field(
+        20.0,
+        gt=0,
+        description=(
+            "W1 runs as a free-running square (Hz) between the two calibrated setpoints, and each capture "
+            "takes its next edge. None = one DC step per capture: the AD2's DC level moves with tau ~2 ms "
+            "(bench, 2026-11-18/19), its square in ~0.2-0.35 ms. Half a period must be longer than the "
+            "capture window (n_samples / sample_rate)"
+        ),
+    )
 
     @model_validator(mode="after")
     def _check(self) -> LineTranConfig:
         if self.vin_high <= self.vin_low:
             raise ValueError("line_tran.vin_high must be above vin_low")
+        window = self.n_samples / self.sample_rate
+        if self.square_hz is not None and 1 / (2 * self.square_hz) <= window:
+            raise ValueError(
+                f"line_tran.square_hz ({self.square_hz:g} Hz): half a period "
+                f"({1e3 / (2 * self.square_hz):.1f} ms) must be longer than the capture window "
+                f"({window * 1e3:.1f} ms), or a capture sees the next edge too. Lower square_hz or the window"
+            )
         if self.vin_high > AD2_WAVEGEN_MAX_V:
             raise ValueError(f"line_tran.vin_high exceeds the AD2 wavegen limit ({AD2_WAVEGEN_MAX_V} V)")
         if self.psu_voltage < self.vin_high + self.buffer_headroom:

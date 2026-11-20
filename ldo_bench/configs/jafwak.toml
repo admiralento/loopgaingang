@@ -151,6 +151,7 @@ n_samples = 8192
 pre_trigger = 0.2
 averages = 16
 edges = ["rising", "falling"]
+square_hz = 20               # W1 a square between the two levels (the AD2's DC level moves with tau ~2 ms); --dc-steps for DC
 
 [board]                      # every wiring line names these: silkscreen label + connector pin (PCB file, 2026-11-13)
 vin_dc = "VIN_DC (J7)"

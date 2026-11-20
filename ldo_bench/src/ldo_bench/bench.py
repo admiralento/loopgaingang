@@ -590,6 +590,25 @@ class Bench:
         self._awg_on = True
         self._vin_level, self._vin_from = lo, "wavegen"
 
+    def vin_square_from_wavegen(self, *, low: float, high: float, frequency: float) -> None:
+        """Wavegen square between `low` and `high` (V) onto VIN through the BUF634 (line-tran).
+
+        Both levels obey 0..min(dut.vin_max, 5 V), as in vin_from_wavegen; frequency in Hz. A later
+        vin_from_wavegen() (or the shutdown) puts W1 back on DC: the driver reconfigures it from scratch.
+        """
+        limit = self.wavegen_limit
+        if not (0 <= low < high <= limit + 1e-9) or frequency <= 0:
+            raise InstrumentError(
+                f"refusing to drive VIN with a {low:.3f}..{high:.3f} V, {frequency:g} Hz square from the "
+                f"wavegen (limit 0..{limit} V)"
+            )
+        self._vref_allows_vin(low)
+        self.awg.set_wave(
+            self.cfg.ad2.wavegen_channel, shape="square", frequency=frequency, low=low, high=high
+        )
+        self._awg_on = True
+        self._vin_level, self._vin_from = low, "wavegen"
+
     def enable_logic(self, on: bool) -> None:
         """AD2 V+ on V_33 (the enable level shifters' 3.3 V side), if the config says the AD2 supplies it.
 

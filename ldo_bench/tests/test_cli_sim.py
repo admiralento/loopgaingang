@@ -40,3 +40,28 @@ def test_every_command_is_listed():
     assert {"load-reg", "line-reg", "load-tran", "line-tran", "psrr", "iq", "temp", "buffer-check"} <= set(
         TESTS
     )
+
+
+@pytest.mark.parametrize(
+    ("args", "expected"),
+    [
+        ([], "W1 a 20 Hz square"),
+        (["--square-hz", "10"], "W1 a 10 Hz square"),
+        (["--dc-steps"], "W1 DC steps"),
+    ],
+)
+def test_line_tran_square_options(args, expected):
+    """The square is line-tran's default; --square-hz changes it and --dc-steps turns it off."""
+    r = invoke("line-tran", "-c", config_path("jafwak"), "--sim", "--yes", *args)
+    assert r.exit_code == 0, r.output
+    assert expected in r.output
+
+
+def test_line_tran_square_must_fit_the_window():
+    """--window-ms 30 with the 20 Hz square: half a period (25 ms) is shorter than the capture."""
+    r = invoke("line-tran", "-c", config_path("jafwak"), "--sim", "--yes", "--window-ms", "30")
+    assert r.exit_code == 2 and "square_hz" in r.output, r.output
+    r = invoke("line-tran", "-c", config_path("jafwak"), "--sim", "--yes", "--window-ms", "30", "--dc-steps")
+    assert r.exit_code == 0, r.output
+    r = invoke("line-tran", "-c", config_path("jafwak"), "--sim", "--yes", "--square-hz", "20", "--dc-steps")
+    assert r.exit_code == 2 and "--dc-steps" in r.output, r.output

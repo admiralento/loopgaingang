@@ -8,7 +8,7 @@ Bench automation for characterizing our LDO (the JAFWAK board) and the TPS7A7001
 | Line regulation | `line-reg` | VOUT vs VIN → mV/V and the dropout voltage |
 | VREF vs VIN | `vref-line` | the BGR output (TP3) vs VIN → mV/V and the lowest VIN it works at (JAFWAK) |
 | Load transient | `load-tran` | VOUT after a load step → peak deviation, settling time |
-| Line transient | `line-tran` | VOUT after a VIN step (through the BUF634) |
+| Line transient | `line-tran` | VOUT after a VIN step (W1 a 20 Hz square through the BUF634; `--dc-steps` for DC steps) |
 | PSRR | `psrr` | VIN ripple rejection, 100 Hz – 1 MHz |
 | Quiescent current | `iq` | supply current enabled / disabled vs VIN |
 | Enable thresholds | `enable-sine` | enable comparator VT+, VT-, hysteresis; `--shape square`: EN_AIN → EN_OUT propagation delay (JAFWAK) |

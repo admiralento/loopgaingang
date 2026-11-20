@@ -483,12 +483,39 @@ class SimAnalogDiscovery:
     ) -> Capture:
         """Synthesise the capture by evaluating the model before and after stimulus().
 
-        Dispatches to the PSRR, enable-sine or DIO-triggered models when those are set up;
-        otherwise a load / line step with a damped ring. Raises like a trigger timeout if the
+        Dispatches to the PSRR, enable-sine or DIO-triggered models when those are set up; a square
+        on VIN through the buffer (line-tran) is its next edge, played as a line step between the
+        square's levels; otherwise a load / line step with a damped ring. Raises like a trigger timeout if the
         step doesn't cross trigger_level, or (like the AD2) doesn't start at least `hysteresis`
         on the other side of it.
         """
         m = self.m
+        if m.awg_wave and m.psu_to == "rail" and next(iter(m.awg_wave.values()))[0] == "square":
+            # line-tran's square on VIN through the buffer: the next edge, as a step between its levels
+            stimulus()
+            ch, wave = next(iter(m.awg_wave.items()))
+            _, _, lo, hi = wave
+            start, end = (lo, hi) if edge == "rising" else (hi, lo)
+            del m.awg_wave[ch]
+            m.awg_v[ch] = start
+            try:  # the class's own capture, not an instance attribute a test may have wrapped
+                return SimAnalogDiscovery.capture(
+                    self,
+                    sample_rate=sample_rate,
+                    n_samples=n_samples,
+                    setups=setups,
+                    trigger_channel=trigger_channel,
+                    trigger_level=trigger_level,
+                    edge=edge,
+                    pre_trigger=pre_trigger,
+                    stimulus=lambda: m.awg_v.__setitem__(ch, end),
+                    timeout=timeout,
+                    force=force,
+                    hysteresis=hysteresis,
+                )
+            finally:
+                m.awg_v.pop(ch, None)
+                m.awg_wave[ch] = wave
         if m.awg_wave and m.psu_to == "rail":
             return self._psrr_capture(sample_rate, n_samples, stimulus)
         if m.awg_wave:

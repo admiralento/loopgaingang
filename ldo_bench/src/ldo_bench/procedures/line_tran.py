@@ -15,9 +15,12 @@ Two buffer paths, picked by the config:
 
 run(): load code; EN low (--enable dio); interlock; rail to psu_voltage; with --enable dio, W1 to
 vin_low then EN high (so calibration sees the LDO's load); calibrate W1 for vin_low and vin_high (an
-unreachable level is an issue, VIN over the limit a hard stop); VOUT DC check; each edge averaged,
-then settling_analysis and the capture checks as in load-tran, plus the peak per volt of VIN step;
-EN low before the rails come down. Without --enable dio the LDO is tied on and EN_AIN follows VIN.
+unreachable level is an issue, VIN over the limit a hard stop); VOUT DC check; with square_hz
+(the default), W1 runs as a square between the two setpoints and one untriggered capture checks
+VIN on it against the limit (a hard stop), else each edge is one DC step per capture; each edge
+averaged, then settling_analysis and the capture checks as in load-tran, plus the peak per volt of
+VIN step; W1 back to DC; EN low before the rails come down. Without --enable dio the LDO is tied on
+and EN_AIN follows VIN.
 """
 
 from __future__ import annotations
@@ -31,7 +34,7 @@ from ldo_bench import wiring as w
 from ldo_bench.analysis import SettlingResult, settling_analysis
 from ldo_bench.bench import Bench
 from ldo_bench.config import AnalysisConfig, LineTranConfig
-from ldo_bench.instruments.base import InstrumentError
+from ldo_bench.instruments.base import ChannelSetup, InstrumentError
 from ldo_bench.procedures.transient import (
     XCheck,
     XScopeSetup,
@@ -106,6 +109,7 @@ class LineTranResult:
     vout_nominal: float = 1.0  # V, dut.vout_nominal (drawn on invalid plots)
     setup_issues: list[str] = field(default_factory=list)  # found before any capture
     plot_window: float | None = None  # s after the step shown in plot.png (None = automatic)
+    square_hz: float | None = None  # Hz: W1 ran as a free-running square; None = one DC step per capture
 
     @property
     def issues(self) -> list[str]:
@@ -166,6 +170,7 @@ class LineTranResult:
             "w1_low_v": self.w1_low,
             "w1_high_v": self.w1_high,
             "averages": self.averages,
+            "square_hz": self.square_hz,
             "edges": {
                 e.edge: {
                     **e.metrics.as_dict(),
@@ -180,7 +185,8 @@ class LineTranResult:
     def report(self) -> str:
         lines = [
             f"Line transient at {self.i_load * 1e3:.1f} mA (code {self.load_code}), "
-            f"buffer rail {self.rail:.2f} V, {self.averages} averages per edge:"
+            f"buffer rail {self.rail:.2f} V, {self.averages} averages per edge, "
+            + (f"W1 a {self.square_hz:g} Hz square:" if self.square_hz else "W1 DC steps:")
         ]
         for e in self.edges:
             extra = [f"    per VIN   {e.rejection * 1e3:.1f} mV of VOUT per V of VIN step"]
@@ -239,6 +245,43 @@ def vin_limit(bench: Bench) -> float:
     """Highest VIN reading (V) allowed: dut.vin_max less the AD2's measurement error there."""
     vmax = bench.cfg.dut.vin_max
     return vmax - bench.cfg.ad2.vin_margin(vmax)
+
+
+def check_square(
+    bench: Bench, lt: LineTranConfig, setups: dict[int, ChannelSetup], trig_level: float
+) -> None:
+    """Hard stop on the running square: VIN's highest sample over 1.5 periods against vin_limit.
+
+    Calibration measured each level at DC; the square's own levels (and any overshoot on its edges)
+    are only seen here, once, before any edge is captured. Waits a few periods first so VIN has
+    settled into the square. Over the limit: W1 idle (DC 0 V with the split buffer), InstrumentError.
+    """
+    f = lt.square_hz
+    if f is None:
+        raise ValueError("check_square needs line_tran.square_hz")
+    bench.sleep(max(lt.rest_time, 5 / f))
+    ch = bench.cfg.ad2.ref_channel
+    cap = bench.scope.capture(
+        sample_rate=lt.n_samples / (1.5 / f),
+        n_samples=lt.n_samples,
+        setups=setups,
+        trigger_channel=ch,
+        trigger_level=trig_level,
+        edge="rising",
+        pre_trigger=lt.pre_trigger,
+        stimulus=lambda: None,
+        timeout=lt.timeout,
+        force=True,
+        free_running=True,
+    )
+    peak, limit = float(np.max(cap.channel(ch))), vin_limit(bench)
+    if peak > limit:
+        input_idle(bench)
+        raise InstrumentError(
+            f"VIN reached {peak:.3f} V on the {f:g} Hz square, above dut.vin_max "
+            f"({bench.cfg.dut.vin_max} V) less the AD2's error margin: stopping"
+        )
+    log.info("square: VIN peak %.4f V over 1.5 periods (limit %.4f V)", peak, limit)
 
 
 def interlock(bench: Bench, rail: float, proof_levels: tuple[float, float] = (0.1, 0.3)) -> None:
@@ -411,6 +454,15 @@ def run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig) -> LineTranResult:
     i_load = bench.loadbank.current(lt.load_code, bench.cfg.dut.vout_nominal)
     # trigger halfway between the commanded levels (the measured ones may be wrong if the buffer is)
     trig_level = (lt.vin_low + lt.vin_high) / 2
+    square = lt.square_hz
+    if square and w_hi <= w_lo:  # a buffer that can't reach the levels (already an issue above)
+        issue = f"W1 setpoints {w_lo:.3f} / {w_hi:.3f} V make no square: ran DC steps instead"
+        log.warning("line transient: %s", issue)
+        setup_issues.append(issue)
+        square = None
+    if square:
+        bench.vin_square_from_wavegen(low=w_lo, high=w_hi, frequency=square)
+        check_square(bench, lt, setups, trig_level)
 
     results = []
     for edge in lt.edges:
@@ -424,12 +476,14 @@ def run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig) -> LineTranResult:
             trigger_channel=a.ref_channel,
             trigger_level=trig_level,
             trigger_edge=edge,
-            start=lambda w=w_from: bench.vin_from_wavegen(w),
-            step=lambda w=w_to: bench.vin_from_wavegen(w),
+            # the square runs on its own: each capture takes its next edge
+            start=(lambda: None) if square else (lambda w=w_from: bench.vin_from_wavegen(w)),
+            step=(lambda: None) if square else (lambda w=w_to: bench.vin_from_wavegen(w)),
             label=f"VIN step {edge}",
             # VIN step at 1/8 of the screen (at least 0.4 V full scale), centred on the trigger level
             xscope=XScopeSetup(ref_range=max(8 * abs(lt.vin_high - lt.vin_low), 0.4), ref_offset=trig_level),
             hysteresis=TRIGGER_HYSTERESIS * abs(lt.vin_high - lt.vin_low),
+            free_running=bool(square),
         )
         cap, trig_issues = sc.cap, sc.issues
         vout, vin = cap.channel(a.vout_channel), cap.channel(a.ref_channel)
@@ -475,6 +529,8 @@ def run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig) -> LineTranResult:
         else:
             log.info("%s: peak %+.2f mV, settling %.2f us", edge, m.deviation * 1e3, m.settling_time * 1e6)
 
+    if square:
+        bench.vin_from_wavegen(w_lo)  # W1 back on DC before EN and the rails come down
     bench.ldo_enable(False)  # --enable dio only: EN low before the rails come down
     buffer_down(bench)
     bench.loadbank.off()
@@ -489,6 +545,7 @@ def run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig) -> LineTranResult:
         bench.cfg.dut.vout_nominal,
         setup_issues,
         lt.plot_window,
+        square,
     )
 
 

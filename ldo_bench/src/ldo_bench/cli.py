@@ -1024,6 +1024,20 @@ def line_tran(
     averages: AvgOpt = None,
     window_ms: WindowOpt = None,
     plot_us: PlotUsOpt = None,
+    square_hz: Annotated[
+        float | None,
+        typer.Option(
+            "--square-hz",
+            help="W1 square frequency (Hz; default: line_tran.square_hz, 20). Half a period must be "
+            "longer than the capture window",
+        ),
+    ] = None,
+    dc_steps: Annotated[
+        bool,
+        typer.Option(
+            "--dc-steps", help="One W1 DC step per capture instead of the square (the AD2's DC level is slow)"
+        ),
+    ] = False,
     out: OutOpt = Path("results"),
     sim: SimOpt = False,
     save_sim: SaveSimOpt = False,
@@ -1039,6 +1053,11 @@ def line_tran(
     from ldo_bench.procedures import line_tran as proc
 
     cfg = _load(config, verbose)
+    if dc_steps:
+        if square_hz is not None:
+            _fail("--square-hz and --dc-steps can't be used together")
+        # before the other options, so a long --window-ms isn't checked against the square
+        cfg = _load_with(cfg, line_tran=_section(cfg, "line_tran").model_copy(update={"square_hz": None}))
     n = _section(cfg, "line_tran").n_samples
     cfg, lt = _override(
         cfg,
@@ -1049,6 +1068,7 @@ def line_tran(
         averages=averages,
         sample_rate=_rate_for_window(window_ms, n),
         plot_window=None if plot_us is None else plot_us * 1e-6,
+        square_hz=square_hz,
     )
     _run(
         cfg,

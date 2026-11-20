@@ -315,13 +315,16 @@ Without `[buffer]` (the demo board) line-tran and psrr use the single-rail path 
   3. **Calibration:** raises the rail to `psu_voltage` and calibrates out the buffer's offset from VIN measured at the board (on the AD2's 5 V range). The steps land on `vin_low` / `vin_high` within 5 mV. The W1 correction is capped at 250 mV.
      - **From below:** W1 starts 250 mV under each target and comes up to it, so a buffer that reads high can't overshoot. On 2026-11-17 W1 started at the target, U2 was +65 mV high with no load, and VIN reached 1.915 V (over `dut.vin_max`) before the hard stop.
      - **Hard stop:** any VIN reading above `dut.vin_max` less the AD2's error margin (about 20 mV at 1.9 V).
-  4. **Steps:** steps W1 between the two levels, triggering on VIN itself. VIN is recorded on the AD2's fine 5 V range, and the trigger hysteresis is a quarter of the step (25 mV). The scope's default (1 % of range) is 0.5 V on the 50 V range of `[ad2] ref`, which a 100 mV step never clears: that's why line-tran never triggered on 2026-11-17 and 2026-11-19.
+  4. **Square (the default, `square_hz` = 20 Hz):** W1 runs as a free-running square between the two calibrated setpoints. The AD2's DC level moves slowly (τ ≈ 2 ms on 2026-11-18 and 2026-11-19: a 10–90 % edge of about 4 ms); its square switches in about 0.2–0.35 ms (Joseph's raw capture, 2026-11-18). After a few periods, one untriggered capture over 1.5 periods checks VIN's highest sample against the same hard stop as calibration, before any edge is captured; over it, W1 goes to idle and the run stops. If the two setpoints come out equal (a buffer that can't reach the levels, already an issue), the run uses DC steps instead and says so. W1 goes back to DC before the rails come down. `--dc-steps` gives one DC step per capture, as before.
+  5. **Steps:** each capture takes the square's next edge (or one DC step), triggering on VIN itself. VIN is recorded on the AD2's fine 5 V range, and the trigger hysteresis is a quarter of the step (25 mV). The scope's default (1 % of range) is 0.5 V on the 50 V range of `[ad2] ref`, which a 100 mV step never clears: that's why line-tran never triggered on 2026-11-17 and 2026-11-19.
 - **Computes:** everything from the transient analysis, plus the peak VOUT deviation per volt of VIN step (mV/V).
 - **Setup check:** a buffer that can't reach a level (headroom, JP4, W1 wiring).
 - **Options:**
   - `--low 1.75 --high 1.85`
   - `--load 19mA`
   - `--enable dio`: EN from the AD2 (DIO 5 / 6, AD2 V+ on VIO) instead of tied to VIN, so EN doesn't step with VIN. EN stays low through the interlock; W1 goes to `vin_low`, then EN goes high before calibration (so the buffer is calibrated with the LDO's load on it), and low again before the rails come down
+  - `--square-hz 20`: the square's frequency. Half a period must be longer than the capture window (`--window-ms`), so the capture sees one edge: 20 Hz allows up to 25 ms
+  - `--dc-steps`: one W1 DC step per capture instead of the square (slow: the AD2's DC level)
   - `--avg`, `--window-ms`, `--plot-us`, `--no-xscope`
 - **Config:** `[line_tran]`.
 

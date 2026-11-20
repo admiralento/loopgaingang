@@ -92,6 +92,7 @@ Procedures never program a voltage onto the DUT directly. They call Bench method
 | `psu_output(v)` | PSU with only a meter or load on it (psu-check, loadbank-check, `psu-hold` / `psu-sweep --to bench`) | `psu.v_max` |
 | `set_psu_limit(high=, amps=)` | the PSU's current limit, before the output first turns on | `psu.current_limit`, or `psu.high_current_limit` with `high=True`; `amps` only lower |
 | `vin_from_wavegen(v)` | W1 DC → buffer → VIN | `min(dut.vin_max, 5 V)` |
+| `vin_square_from_wavegen(low, high, f)` | W1 square → buffer → VIN (line-tran) | both levels within `min(dut.vin_max, 5 V)`; line-tran then checks VIN on the square against the limit |
 | `vin_sine_from_wavegen(dc, amplitude, f)` | W1 sine → buffer → VIN | peak within `min(dut.vin_max, 5 V)` |
 | `en_ain_sine(ch, f, low, high, shape)` | W1 sine, triangle or square → EN_AIN (enable-sine) | −0.3 V to `min(dut.vin_max, 5 V)` |
 | `en_ain_dc(ch, v)` | W1 DC → EN_AIN (enable-current's static point, and between its points: EN_AIN is never left floating) | the same |

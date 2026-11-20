@@ -72,7 +72,9 @@ def test_line_tran_vin_swing_must_match(jafwak, monkeypatch):
 
         def big_ref(**k):
             c = real(**k)
-            c.ch2[:] = (c.ch2 - c.ch2.mean()) * 3 + c.ch2.mean()  # 0.6 V swing, commanded 0.2 V
+            if k.get("force"):  # the square's VIN check: a 3x swing there reads over vin_max (a hard stop)
+                return c
+            c.ch2[:] = (c.ch2 - c.ch2.mean()) * 3 + c.ch2.mean()  # 0.3 V swing, commanded 0.1 V
             return c
 
         monkeypatch.setattr(b.scope, "capture", big_ref)
