@@ -51,9 +51,10 @@ def test_buffer_without_headroom_is_reported(jafwak_single):
 
     res, _ = run(jafwak_single, setup=weak_buffer)  # runs to the end, records the problem
     assert any("headroom" in i for i in res.issues)
-    # the calibration never chased the dead buffer upward
+    # the calibration never chased the dead buffer upward: W1 within line-tran's cap (w1_max, else vin_max)
     lt = jafwak_single.line_tran
-    assert max(seen) <= min(lt.vin_high + line_tran.CAL_MAX_CORRECTION, jafwak_single.dut.vin_max) + 1e-9
+    cap = lt.w1_max if lt.w1_max is not None else jafwak_single.dut.vin_max
+    assert max(seen) <= min(lt.vin_high + line_tran.CAL_MAX_CORRECTION, cap) + 1e-9
 
 
 def test_load_limit_applies(jafwak):
@@ -256,3 +257,96 @@ def test_raw_plots_only_measured_samples(jafwak):
         assert "Smoothed" not in labels and "Averaged" not in labels
         assert "Measured (raw)" in labels
     assert res.summary()["raw"] is True
+
+
+# --- line_tran.w1_max: W1 above dut.vin_max through U2, for line-tran only -------------------
+def _with_w1_max(cfg, w1_max):
+    from ldo_bench.config import BenchConfig
+
+    d = cfg.model_dump()
+    d["line_tran"]["w1_max"] = w1_max
+    return BenchConfig.model_validate(d)
+
+
+def test_w1_max_bounds(jafwak):
+    """At least dut.vin_max (it only ever raises W1's cap), at most dut.vin_max + 0.2 V."""
+    vmax = jafwak.dut.vin_max
+    assert _with_w1_max(jafwak, vmax + 0.05).line_tran.w1_max == pytest.approx(vmax + 0.05)
+    for bad in (vmax - 0.01, vmax + 0.21):
+        with pytest.raises(ValueError, match="w1_max"):
+            _with_w1_max(jafwak, bad)
+
+
+def test_w1_max_applies_to_line_tran_only(jafwak):
+    """The higher cap holds only while line-tran runs, only for W1 into the buffer (never EN_AIN),
+    and is gone after the run."""
+    from ldo_bench.instruments.base import InstrumentError
+
+    cfg = _with_w1_max(jafwak, 1.95)
+    with open_bench(cfg, sim=True) as b:
+        with pytest.raises(InstrumentError, match="refusing"):
+            b.vin_from_wavegen(1.92)  # not during another test
+        b.allow_line_tran_w1(True)
+        assert b.buffer_w1_limit == pytest.approx(1.95)
+        b.vin_from_wavegen(1.92)
+        with pytest.raises(InstrumentError, match="refusing"):
+            b.vin_from_wavegen(1.96)
+        with pytest.raises(InstrumentError, match="refusing"):
+            b.en_ain_dc(cfg.ad2.wavegen_channel, 1.92)  # EN_AIN keeps dut.vin_max
+        b.allow_line_tran_w1(False)
+        with pytest.raises(InstrumentError, match="refusing"):
+            b.vin_from_wavegen(1.92)
+    with open_bench(cfg, sim=True) as b:
+        line_tran.run(b, cfg.line_tran.model_copy(update={"averages": 2}), cfg.analysis)
+        with pytest.raises(InstrumentError, match="refusing"):
+            b.vin_from_wavegen(1.92)  # reset after the run
+
+
+def test_w1_max_reaches_1v85_with_u2_reading_low(jafwak):
+    """Bench, 2026-11-19: at 18.3 mA U2 read 58 mV low, so 1.85 V needed W1 at ~1.91 V."""
+    cfg = _with_w1_max(jafwak, 1.95)
+    res, _ = run(cfg, setup=lambda b: setattr(b.sim_model, "buffer_offset", -0.06))
+    assert not res.issues, res.issues
+    assert res.w1_high > cfg.dut.vin_max
+    assert res.edges[0].v_to == pytest.approx(cfg.line_tran.vin_high, abs=0.005)
+
+
+def test_unreachable_level_stops_before_any_capture(jafwak):
+    """Without w1_max the same U2 can't reach 1.85 V: the run records it and captures nothing."""
+    from ldo_bench import plotting
+
+    captures = []
+
+    def setup(b):
+        b.sim_model.buffer_offset = -0.06
+        real = b.scope.capture
+        b.scope.capture = lambda **kw: captures.append(kw) or real(**kw)
+
+    res, b = run(_with_w1_max(jafwak, None), setup=setup)
+    assert any("not 1.850 V" in i for i in res.issues), res.issues
+    assert captures == [] and res.edges == []
+    assert not b.sim_model.psu_on and b.sim_model.awg_wave == {}
+    plotting.close(line_tran.plot(res, "JAFWAK"))  # an issues-only plot, no crash
+    for fig in line_tran.extra_plots(res, "JAFWAK").values():
+        plotting.close(fig)
+    assert res.rows == [] and res.summary()["valid"] is False
+
+
+def test_vin_hard_stop_still_holds_with_w1_above_vin_max(jafwak):
+    """If U2's offset swings to its +65 mV datasheet max while W1 is above dut.vin_max, the next VIN
+    reading stops the run."""
+    from ldo_bench.instruments.base import InstrumentError
+
+    cfg = _with_w1_max(jafwak, 1.95)
+    with pytest.raises(InstrumentError, match="VIN reached"), open_bench(cfg, sim=True) as b:
+        m, real = b.sim_model, b.awg.set_dc
+        m.buffer_offset = -0.06
+
+        def swing(ch, v):
+            if v > cfg.dut.vin_max:
+                m.buffer_offset = 0.065
+            real(ch, v)
+
+        b.awg.set_dc = swing
+        line_tran.run(b, cfg.line_tran.model_copy(update={"averages": 2}), cfg.analysis)
+    assert not m.psu_on

@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from ldo_bench import plotting
 from ldo_bench import wiring as w
 from ldo_bench.analysis import SettlingResult, settling_analysis
 from ldo_bench.bench import Bench
@@ -393,7 +394,8 @@ def calibrate(bench: Bench, target: float) -> tuple[float, float, str | None]:
     put VIN above the target before the first reading (bench, 2026-11-17: W1 started at a 1.85 V
     target with U2 +65 mV high gave VIN 1.915 V, over dut.vin_max).
     If it doesn't converge, the last setpoint is applied, measured, and the issue says so. Also
-    used by psrr for its DC level. W1 stays within dut.vin_max.
+    used by psrr for its DC level. W1 stays within bench.buffer_w1_limit: dut.vin_max, or
+    line_tran.w1_max while line-tran has raised it.
     """
     what = f"above dut.vin_max ({bench.cfg.dut.vin_max} V) less the AD2's error margin"
     limit = vin_limit(bench)
@@ -413,8 +415,8 @@ def calibrate(bench: Bench, target: float) -> tuple[float, float, str | None]:
         err = target - vin
         if abs(err) <= CAL_TOLERANCE:
             return w, vin, None
-        # capped near the target, and never above the DUT's VIN limit (a weak buffer becomes an issue)
-        w_max = min(target + CAL_MAX_CORRECTION, bench.cfg.dut.vin_max)
+        # capped near the target, and never above W1's limit (a weak buffer becomes an issue)
+        w_max = min(target + CAL_MAX_CORRECTION, bench.buffer_w1_limit)
         w = min(max(w + err, target - CAL_MAX_CORRECTION, 0.0), w_max)
     vin = apply(w)  # the setpoint left applied is the one the reported VIN was measured at
     if abs(target - vin) <= CAL_TOLERANCE:
@@ -432,8 +434,18 @@ def run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig, raw: bool = False)
 
     lt: the [line_tran] section. an: the [analysis] settings for settling_analysis. raw: only marks
     the result so its plots show the measured samples alone (--raw also sets lt.averages to 1). The interlock
-    and dut.vin_max raise InstrumentError (the run stops); everything else is recorded as issues.
+    and dut.vin_max raise InstrumentError (the run stops); everything else is recorded as issues. A level
+    calibration can't reach is a setup issue: the run then stops before any capture. W1 may go up to
+    line_tran.w1_max (above dut.vin_max) only after the interlock, and only until this returns.
     """
+    try:
+        return _run(bench, lt, an, raw)
+    finally:
+        bench.allow_line_tran_w1(False)
+
+
+def _run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig, raw: bool) -> LineTranResult:
+    """run() without the W1 limit reset."""
     a = bench.cfg.ad2
     bench.confirm_wiring("line transient", wiring(bench, lt), ref_probe=("vin", 0), psu_to="rail")
     # VIN on the fine range when it fits (0.3 mV a count, not 3 mV), for both the trigger and the record
@@ -442,12 +454,36 @@ def run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig, raw: bool = False)
     bench.ldo_enable(False)  # --enable dio only: EN held low while the rails and VIN come up
     interlock(bench, lt.psu_voltage, lt.proof_levels)  # must pass before the rail goes above dut.vin_max
     buffer_up(bench, lt.psu_voltage)
+    bench.allow_line_tran_w1(True)  # the interlock has passed: W1 may now go up to line_tran.w1_max
     if bench.enable_dio:  # VIN up first, then EN: calibrate with the LDO (and its load) drawing from U2
         bench.vin_from_wavegen(lt.vin_low)
         bench.ldo_enable(True)
     w_lo, v_lo, cal_lo = calibrate(bench, lt.vin_low)
     w_hi, v_hi, cal_hi = calibrate(bench, lt.vin_high)
     log.info("VIN levels %.4f / %.4f V (W1 %.4f / %.4f V)", v_lo, v_hi, w_lo, w_hi)
+    i_load = bench.loadbank.current(lt.load_code, bench.cfg.dut.vout_nominal)
+    if cal_lo or cal_hi:  # a level out of reach: the edges would be wrong or never trigger
+        issues = [i for i in (cal_lo, cal_hi) if i]
+        for i in issues:
+            log.warning("line transient: %s (stopping before any capture)", i)
+        input_idle(bench)
+        bench.ldo_enable(False)
+        buffer_down(bench)
+        bench.loadbank.off()
+        return LineTranResult(
+            lt.psu_voltage,
+            lt.load_code,
+            i_load,
+            w_lo,
+            w_hi,
+            lt.averages,
+            [],
+            bench.cfg.dut.vout_nominal,
+            issues,
+            lt.plot_window,
+            lt.square_hz,
+            raw,
+        )
     bench.vin_from_wavegen(w_lo)
     bench.reference_on()  # --vref ext only: after the interlock and calibration, with VIN up
     vout_dc, _ = bench.measure_dc(0.05)
@@ -456,15 +492,9 @@ def run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig, raw: bool = False)
     ]
     for i in setup_issues:
         log.warning("line transient: %s (running anyway; the data will show it)", i)
-    i_load = bench.loadbank.current(lt.load_code, bench.cfg.dut.vout_nominal)
     # trigger halfway between the commanded levels (the measured ones may be wrong if the buffer is)
     trig_level = (lt.vin_low + lt.vin_high) / 2
     square = lt.square_hz
-    if square and w_hi <= w_lo:  # a buffer that can't reach the levels (already an issue above)
-        issue = f"W1 setpoints {w_lo:.3f} / {w_hi:.3f} V make no square: ran DC steps instead"
-        log.warning("line transient: %s", issue)
-        setup_issues.append(issue)
-        square = None
     if square:
         bench.vin_square_from_wavegen(low=w_lo, high=w_hi, frequency=square)
         check_square(bench, lt, setups, trig_level)
@@ -556,11 +586,20 @@ def run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig, raw: bool = False)
 
 
 def plot(res: LineTranResult, dut: str, full: bool = False, per_edge: bool = False):
-    """plot.png: one column per edge (VIN on top, VOUT below), zoomed on the step.
+    """plot.png: one column per edge (VIN on top, VOUT below), zoomed on the step. With no edges
+    (the run stopped before capturing) it shows only the setup issues.
 
     full=True shows the whole capture instead (plot_full.png); per_edge=True sizes each edge's span to
     its own settling time (plot_zoom.png).
     """
+    if not res.edges:
+        fig, axes = plotting.figure(1, 1, size=(7.0, 3.0), squeeze=False)
+        axes[0][0].axis("off")
+        plotting.issue_box(axes[0][0], res.issues, width=90)
+        plotting.suptitle(
+            fig, f"Line transient: {dut}  ·  {res.i_load * 1e3:.1f} mA load  ·  no capture", invalid=True
+        )
+        return fig
     span = ""
     if full and res.edges:
         t = res.edges[0].t * 1e3
@@ -582,4 +621,6 @@ def plot(res: LineTranResult, dut: str, full: bool = False, per_edge: bool = Fal
 
 def extra_plots(res, dut: str) -> dict:
     """Saved next to plot.png: the whole capture window, and each edge zoomed to its own settling time."""
+    if not res.edges:
+        return {}
     return {"plot_full.png": plot(res, dut, full=True), "plot_zoom.png": plot(res, dut, per_edge=True)}

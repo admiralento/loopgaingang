@@ -122,7 +122,7 @@ Command-line options go through the same checks.
 - **psu-hold:** stops on its own after 60 minutes at most (`psu_hold.max_minutes`), even without Ctrl-C.
 - **Buffer interlock:** line-tran and psrr power the BUF634 rail above the LDO's VIN limit. Before doing that, they check at 1 V that the supply isn't on VIN, then, with the rail at `dut.vin_max`, that VIN follows W1 (which also proves the VIN probe is on VIN).
 - **Split-supply U2** (`[buffer]`, JAFWAK after the U2 rework): U2's V− is on −5 V from PSU OUT2 wired reversed. W1 holds U2's input at DC 0 V before either rail comes up and is never turned off while they are up (a floating input sends U2's output to a rail). VS_BUFF and V− ramp together in 0.1 V steps with VIN read after each one; outside −0.1…+0.3 V both come down and the run stops. Shutdown keeps W1 at 0 V until both rails are off. `--vref ext` is refused for line-tran / psrr (it also needs OUT2).
-- **VIN margin:** with VIN driven through the buffer, every limit check keeps the AD2's measurement error (about 20 mV at 1.9 V, an unverified datasheet figure) below `dut.vin_max`.
+- **VIN margin:** with VIN driven through the buffer, every limit check keeps the AD2's measurement error (about 20 mV at 1.9 V, an unverified datasheet figure) below `dut.vin_max`. W1 itself stays within `dut.vin_max` too, except in line-tran, which may take it up to `line_tran.w1_max` (≤ `dut.vin_max` + 0.2 V) to make up U2's drop under load; VIN keeps its limit.
 - **OVP:** if the supply rejects the OVP setting, the run stops.
 - **psrr peak:** psrr stops if the measured VIN peak goes over that margin.
 - **External reference (`--vref ext`):**

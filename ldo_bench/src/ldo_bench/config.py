@@ -24,6 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 # AD2 limits
 AD2_DIO_PINS = 16  # DIO 0..15
 AD2_WAVEGEN_MAX_V = 5.0  # highest wavegen output used for VIN (V)
+W1_MAX_ABOVE_VIN_MAX = 0.2  # V: line_tran.w1_max may sit at most this far above dut.vin_max
 AD2_MAX_SAMPLE_RATE = 100e6  # scope sample rate ceiling (Hz)
 
 
@@ -1060,6 +1061,15 @@ class LineTranConfig(TransientCaptureConfig, BufferProofConfig):
     vin_high: float = Field(gt=0, description="W1 high level -> VIN through the BUF634 (V)")
     load_code: int = Field(0, ge=0, description="Load bank code during the steps")
     buffer_headroom: float = Field(2.0, ge=0, description="Required VS_BUFF - Vin margin for the BUF634 (V)")
+    w1_max: float | None = Field(
+        None,
+        gt=0,
+        description=(
+            "Highest W1 setpoint (V) into the buffer during line-tran only; None = dut.vin_max. For a buffer "
+            "whose output sits below W1 under load (U2: ~5 ohm x the LDO's input current). VIN itself is "
+            "still stopped at dut.vin_max less the AD2 margin on every reading. dut.vin_max .. +0.2 V"
+        ),
+    )
     square_hz: float | None = Field(
         20.0,
         gt=0,
@@ -1417,6 +1427,15 @@ class BenchConfig(_Model):
             code_ok("psrr.load_code", ps.load_code)
         if self.line_tran:
             lt = self.line_tran
+            if lt.w1_max is not None and not (
+                self.dut.vin_max
+                <= lt.w1_max
+                <= min(self.dut.vin_max + W1_MAX_ABOVE_VIN_MAX, AD2_WAVEGEN_MAX_V)
+            ):
+                raise ValueError(
+                    f"line_tran.w1_max ({lt.w1_max} V) must be between dut.vin_max ({self.dut.vin_max} V) and "
+                    f"dut.vin_max + {W1_MAX_ABOVE_VIN_MAX} V (and within the AD2's {AD2_WAVEGEN_MAX_V} V)"
+                )
             # Here the PSU feeds the buffer rail; VIN comes from the wavegen through the buffer.
             if lt.psu_voltage > self.psu.v_max:
                 raise ValueError(f"line_tran.psu_voltage exceeds psu.v_max ({self.psu.v_max} V)")

@@ -170,6 +170,7 @@ class Bench:
         self.vref_proof: dict | None = None  # what reference_on() measured, for the run's records
         # what VIN is now (V) and what drives it, so the reference never sits above it
         self._vin_level: float | None = None
+        self._w1_limit: float | None = None  # line_tran.w1_max while line-tran runs (allow_line_tran_w1)
         self._vin_from: Literal["psu", "wavegen"] | None = None
         # enable from the AD2 (see the class docstring)
         self.enable_dio = enable_dio
@@ -563,10 +564,24 @@ class Bench:
         """Highest wavegen level (V) that may reach the DUT: min(dut.vin_max, the AD2's 5 V)."""
         return min(self.cfg.dut.vin_max, AD2_WAVEGEN_MAX_V)
 
+    @property
+    def buffer_w1_limit(self) -> float:
+        """Highest W1 setpoint (V) into the buffer (VIN through U2): wavegen_limit, or line_tran.w1_max
+        while line-tran has raised it (allow_line_tran_w1). EN_AIN always keeps wavegen_limit."""
+        return self._w1_limit if self._w1_limit is not None else self.wavegen_limit
+
+    def allow_line_tran_w1(self, on: bool) -> None:
+        """line-tran only: let W1 into the buffer go up to line_tran.w1_max (V), or back to wavegen_limit.
+
+        Its VIN readings still stop the run at dut.vin_max less the AD2 margin. The shutdown resets it.
+        """
+        lt = self.cfg.line_tran
+        self._w1_limit = lt.w1_max if (on and lt is not None and lt.w1_max is not None) else None
+
     def vin_from_wavegen(self, volts: float) -> None:
-        """Wavegen drives VIN through the BUF634: a DC level of `volts` (V), at most
-        min(dut.vin_max, 5 V). The buffer rail must already be up (buffer_rail)."""
-        limit = self.wavegen_limit
+        """Wavegen drives VIN through the BUF634: a DC level of `volts` (V), at most buffer_w1_limit
+        (min(dut.vin_max, 5 V) unless line-tran raised it). The buffer rail must already be up."""
+        limit = self.buffer_w1_limit
         if not 0 <= volts <= limit:
             raise InstrumentError(f"refusing to drive VIN to {volts} V from the wavegen (limit {limit} V)")
         self._vref_allows_vin(volts)
@@ -579,7 +594,7 @@ class Bench:
 
         dc, amplitude in V (amplitude = peak, not peak-to-peak); frequency in Hz.
         """
-        limit = self.wavegen_limit
+        limit = self.buffer_w1_limit
         lo, hi = dc - amplitude, dc + amplitude
         if amplitude <= 0 or lo < 0 or hi > limit + 1e-9:
             raise InstrumentError(
@@ -596,7 +611,7 @@ class Bench:
         Both levels obey 0..min(dut.vin_max, 5 V), as in vin_from_wavegen; frequency in Hz. A later
         vin_from_wavegen() (or the shutdown) puts W1 back on DC: the driver reconfigures it from scratch.
         """
-        limit = self.wavegen_limit
+        limit = self.buffer_w1_limit
         if not (0 <= low < high <= limit + 1e-9) or frequency <= 0:
             raise InstrumentError(
                 f"refusing to drive VIN with a {low:.3f}..{high:.3f} V, {frequency:g} Hz square from the "
@@ -1002,6 +1017,7 @@ class Bench:
             # BGR_VDD / OTA_VDD down before VIN (VDD) goes: never powered without VDD
             ("split rails 0 V", lambda: self.rails_out.set_voltage(0.0) if self.rails_out else None),
             ("LDO enable low", lambda: self.set_enable(False) if self._enable_driven else None),
+            ("W1 limit back to dut.vin_max", lambda: self.allow_line_tran_w1(False)),
             # split-supply buffer: U2's input stays driven at 0 V until both of its rails are off
             (
                 "buffer input 0 V",

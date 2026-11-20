@@ -134,7 +134,7 @@ edges = ["rising", "falling"]
 [buffer]                     # U2 reworked (2026-11-13): V- on -5 V, so the buffer tests run on a split supply
 v_minus = 5.0                # PSU OUT2 wired reversed: OUT2 + -> GND, OUT2 - -> U2 pin 4 (-5 V)
 channel = 2
-current_limit = 0.02         # A on the -5 V rail (BUF634 low-Iq mode: ~1.5-2.3 mA)
+current_limit = 0.02         # A on the -5 V rail; U2 in wide-BW mode since 2026-11-19 (BW to V-): IQ 8.5 mA typ, 12 mA max
 rail_current_limit = 0.1     # A on VS_BUFF (OUT1) while the buffer runs (approved 2026-11-13)
 ramp_step = 0.1              # V: the two rails ramp together in these steps, VIN read after each
 vin_window = [-0.1, 0.3]     # V on VIN while the rails ramp with W1 at 0 V; outside it everything comes down
@@ -150,6 +150,7 @@ n_samples = 8192
 pre_trigger = 0.2
 averages = 16
 edges = ["rising", "falling"]
+w1_max = 1.95                # V: W1 may go this high in line-tran only (U2 ~5 ohm under load); VIN still stops at vin_max (approved 2026-11-19)
 square_hz = 20               # W1 a square between the two levels (the AD2's DC level moves with tau ~2 ms); --dc-steps for DC
 
 [board]                      # every wiring line names these: silkscreen label + connector pin (PCB file, 2026-11-13)
