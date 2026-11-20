@@ -175,3 +175,50 @@ def test_cli_refuses_bad_combinations():
     assert _cli("--vref", "ad2", "--enable", "dio").exit_code == 2  # V+ is the enable logic rail
     r = invoke("load-reg", "-c", config_path("jafwak"), "--sim", "--yes", "--vref", "ad2")
     assert r.exit_code == 2 and "line-tran" in r.output, r.output
+
+
+# --- the three gaps: V+ left on before a run, VIN collapsing mid-run, V+ that won't turn off -----
+def test_vplus_is_off_as_soon_as_the_bench_opens(jafwak):
+    """A V+ left on (an earlier run killed without its shutdown, the WaveForms app) is turned off
+    before anything else: it would otherwise sit on VREF_IN before VIN exists."""
+    from ldo_bench.bench import Bench
+    from ldo_bench.instruments.sim import LdoModel, SimAnalogDiscovery, SimDmm, SimPowerSupply
+
+    lb = jafwak.loadbank
+    m = LdoModel(jafwak.dut.vout_nominal, lb.resistors, lb.dio_pins, lb.active_high)
+    ad2 = SimAnalogDiscovery(m, jafwak.ad2.vout_channel)
+    ad2.set_vplus(1.2)  # left over
+    Bench(jafwak, SimPowerSupply(m), ad2, dmm=SimDmm(m), sim_model=m, vref_external=True, vref_source="ad2")
+    assert ad2.vplus is None and m.vplus_v == 0.0
+
+
+def test_vin_collapsing_mid_run_turns_vplus_off_at_the_next_capture(jafwak):
+    """U2's rails lost while V+ is on (a tripped limit, a lead off): the next capture's VIN is below
+    VREF - above_vin, so V+ goes off at once and the run stops."""
+    captures_after = []
+    with pytest.raises(InstrumentError, match="VIN"), _open(jafwak) as b:
+        m, real = b.sim_model, b.scope.capture
+
+        def collapse(**kw):
+            if m.vplus_v > 0 and m.psu_on:
+                m.psu_on = False  # VS_BUFF / V- gone: U2 can't drive VIN
+            elif not m.psu_on:
+                captures_after.append(m.vplus_v)
+            return real(**kw)
+
+        b.scope.capture = collapse
+        line_tran.run(b, _lt(jafwak), jafwak.analysis)
+    assert m.vplus_v == 0.0
+    assert captures_after == [], "captured on after VIN collapsed"
+
+
+def test_vplus_that_wont_turn_off_is_a_loud_shutdown_failure(jafwak):
+    with _open(jafwak) as b:
+        b.vref_out.set_voltage(1.2)
+        b._vref_on = True
+
+        def dead(v):
+            raise InstrumentError("AD2 not responding")
+
+        b.scope.set_vplus = dead
+    assert any("unplug" in e and "V+" in e for e in b.shutdown_errors), b.shutdown_errors

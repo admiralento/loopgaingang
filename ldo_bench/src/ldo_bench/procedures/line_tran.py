@@ -436,6 +436,7 @@ def _long_capture(
         label=f"VIN step {edge} (long)",
         hysteresis=TRIGGER_HYSTERESIS * abs(lt.vin_high - lt.vin_low),
         free_running=square,
+        check=lambda c: bench.check_vin_for_reference(c.channel(a.ref_channel)),
     )
     cap = sc.cap
     vout, vin = cap.channel(a.vout_channel), cap.channel(a.ref_channel)
@@ -499,6 +500,7 @@ def check_square(
         force=True,
         free_running=True,
     )
+    bench.check_vin_for_reference(cap.channel(ch))
     peak, limit = float(np.max(cap.channel(ch))), vin_limit(bench)
     if peak > limit:
         input_idle(bench)
@@ -740,6 +742,7 @@ def _run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig, raw: bool) -> Lin
             xscope=XScopeSetup(ref_range=max(8 * abs(lt.vin_high - lt.vin_low), 0.4), ref_offset=trig_level),
             hysteresis=TRIGGER_HYSTERESIS * abs(lt.vin_high - lt.vin_low),
             free_running=bool(square),
+            check=lambda c: bench.check_vin_for_reference(c.channel(a.ref_channel)),
         )
         cap, trig_issues = sc.cap, sc.issues
         vout, vin = cap.channel(a.vout_channel), cap.channel(a.ref_channel)

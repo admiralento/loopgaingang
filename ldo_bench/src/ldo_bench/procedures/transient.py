@@ -152,6 +152,7 @@ def averaged_step(
     xscope: XScopeSetup | None = None,
     hysteresis: float | None = None,
     free_running: bool = False,
+    check: Callable[[Capture], None] | None = None,
 ) -> StepCapture:
     """`tc.averages` captures of the step start() -> step(), aligned and averaged, plus any issues.
 
@@ -167,6 +168,8 @@ def averaged_step(
     hysteresis (V): the AD2 trigger's, passed to Oscilloscope.capture (None = its default, 1 % of
     the trigger channel's range). free_running: the stimulus runs on its own (line-tran's square);
     start / step are then no-ops and each capture takes the next edge (Oscilloscope.capture).
+    check(capture): called on every capture as it arrives (line-tran: VIN against the external
+    reference); it raises to stop the run before the next one.
 
     If the AD2 times out on capture k, the run is not stopped: the issue is recorded, a forced
     capture is taken, and the function returns early with the average of the captures that did
@@ -232,7 +235,7 @@ def averaged_step(
             "free_running": free_running,
         }
         try:
-            caps.append(bench.scope.capture(**kw))
+            cap = bench.scope.capture(**kw)
         except InstrumentError as e:
             log.warning(
                 "%s: capture %d got no trigger (%s); recording an untriggered capture", label, k + 1, e
@@ -245,8 +248,14 @@ def averaged_step(
             bench.sleep(tc.rest_time)
             # force=True: acquire without waiting for the trigger (the step is still applied)
             forced = bench.scope.capture(**kw, force=True)
+            if check is not None:
+                check(forced)
             collect_x()
             return StepCapture(align_average(caps) if caps else forced, [issue], xs_traces, xs_issue)
+        else:
+            if check is not None:
+                check(cap)
+            caps.append(cap)
     log.info("%s: averaged %d captures at %.3g MS/s", label, len(caps), caps[0].sample_rate / 1e6)
     collect_x()
     return StepCapture(align_average(caps), [], xs_traces, xs_issue)

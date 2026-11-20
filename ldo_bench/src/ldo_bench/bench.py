@@ -211,6 +211,10 @@ class Bench:
         self.vref_out: SupplyOutput | Ad2VplusReference | None = (
             Ad2VplusReference(ad2) if vref_external and vref_source == "ad2" else None
         )
+        if isinstance(self.vref_out, Ad2VplusReference):
+            # A V+ left on (a run killed before its shutdown, the WaveForms app) would sit on VREF_IN
+            # before VIN exists: off before anything else.
+            self.vref_out.set_voltage(0.0)
         self.rails_out: SupplyOutput | None = None  # the PSU output on BGR_VDD / OTA_VDD (split_rails_on)
         self._rails_on = False
         self._vref_on = False  # driving vref.external_v (not held at 0 V)
@@ -861,6 +865,22 @@ class Bench:
             vr.proof_step * 1e3,
         )
 
+    def check_vin_for_reference(self, vin: np.ndarray) -> None:
+        """While the external reference is on: VIN samples (V) from a capture must all stay above
+        vref.external_v - vref.above_vin. If any doesn't (U2's rails lost, a lead off), the reference
+        goes off at once (no ramp: VIN is already gone) and InstrumentError stops the run."""
+        if not self._vref_on or not len(vin):
+            return
+        vr = self.cfg.vref
+        lowest, floor = float(np.min(vin)), vr.external_v - vr.above_vin
+        if lowest < floor:
+            self.vref_out.set_voltage(0.0)
+            self._vref_on = False
+            raise InstrumentError(
+                f"VIN fell to {lowest:.3f} V with the reference on VREF_IN (needs at least {floor:.3f} V): "
+                f"{self._vref_name()} turned off, stopping. Check U2's rails and the VIN leads"
+            )
+
     @property
     def vref_on(self) -> bool:
         """True while the external reference drives VREF_IN (between reference_on and reference_off)."""
@@ -1071,6 +1091,20 @@ class Bench:
         return float(self.dmm.dcv_range()) if hasattr(self.dmm, "dcv_range") else float("nan")
 
     # --- Shutdown -----------------------------------------------------------
+    def _reference_off_for_shutdown(self) -> None:
+        """Shutdown's first step: the external reference to 0 V. With AD2 V+ a failure gets a plain warning:
+        the next steps still take VIN away, so V+ may be left on VREF_IN with the chip unpowered."""
+        if self.vref_out is None:
+            return
+        try:
+            self.vref_out.set_voltage(0.0)
+        except Exception as e:
+            if self.vref_source != "ad2":
+                raise
+            raise InstrumentError(
+                f"{e}. AD2 V+ may still be on VREF_IN while VIN goes off: unplug the V+ lead from JP2 pin 1 now"
+            ) from e
+
     def _psu_off_for_shutdown(self) -> None:
         """Shutdown: PSU output off (the driver confirms it with OUTP?); records that it is confirmed off."""
         self._psu_off_confirmed = False
@@ -1109,7 +1143,7 @@ class Bench:
         shutdown_errors). Safe to call more than once.
         """
         steps: list[tuple[str, Callable[[], None]]] = [
-            ("external reference 0 V", lambda: self.vref_out.set_voltage(0.0) if self.vref_out else None),
+            ("external reference 0 V", self._reference_off_for_shutdown),
             # BGR_VDD / OTA_VDD down before VIN (VDD) goes: never powered without VDD
             ("split rails 0 V", lambda: self.rails_out.set_voltage(0.0) if self.rails_out else None),
             ("LDO enable low", lambda: self.set_enable(False) if self._enable_driven else None),

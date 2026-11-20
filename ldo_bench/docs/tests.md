@@ -550,6 +550,9 @@ uv run ldo-bench line-tran --vref ad2 --vref-v 1.15   # another level, at most v
   4. The DMM reads VREF_IN: the AD2 has no V+ readback, and its setpoint accuracy isn't known.
   5. At the end, with VIN still up, the DMM reads VREF_IN again and V+ ramps off. Only then do EN and U2's rails come down. On an error or Ctrl-C, the shutdown turns V+ off first.
   - U2's rails coming down always turn the reference off first (`buffer_rails_off`), whatever called it.
+  - **V+ off at the start:** when the bench opens, V+ is turned off before anything else, in case an earlier run was killed before its shutdown (or the WaveForms app left it on).
+  - **VIN watched while V+ is on:** every capture (fast, long, and the square check) checks VIN's lowest sample against VREF − `vref.above_vin`. If VIN has gone (U2's rails lost, a lead off), V+ goes off at once and the run stops: within one capture, not instantly.
+  - **If V+ won't turn off** in the shutdown (the AD2 not responding), the shutdown carries on, since VIN must still come down, and the failure says in red to unplug the V+ lead from JP2 pin 1.
 - **Refused:** with `--enable dio` (V+ is then the enable logic's 3.3 V rail; `Bench.enable_logic` refuses it too), without a DMM, on any test but line-tran, and `--vref-v` without `--vref ad2` / `ext`.
 - **Records:** `summary.json` / `meta.json` `vref`: `"driver": "AD2 V+"`, `external_v`, the proof readings with `dmm_v` (start), and `dmm_end_v`. The report prints them. The folder name ends in `_extref`.
 - **Not run on the board yet.**
