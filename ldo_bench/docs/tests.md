@@ -356,14 +356,24 @@ Talks to the analyzer only: no board, PSU or AD2. Run it before anything relies 
   - a note if VOUT follows VIN at low frequency (dropout, or scope 1 on VIN)
 - **Plot:** PSRR vs frequency, and the VIN / VOUT amplitudes with the VOUT floor.
 - **No scope on VREF:** the BGR's own PSRR (`--measure vref`, a scope on TP3 through a 10x probe) was removed on 2026-11-14. A scope on VREF loads the BGR and pulls VREF, and VOUT with it, down (seen in enable-startup). VREF is read only with the DMM at 10 GOhm (vref-line, temp).
-- **Spectrum analyzer:** dropped for now (2026-11-14). The AD2 resolves PSRR to about 70 dB at 50 mV, against a 40 dB spec at 10 kHz and 55 dB from PEX. Floor-limited points say "≥"; a spectrum-analyzer `PsrrMeter` would replace them once its driver exists.
+- **Spectrum analyzer (`--meter sa`, added 2026-11-20, simulator only):** VIN still comes from the AD2; from `sa_from` (10 kHz) up, VOUT comes from the HP 8591E.
+  - **Path:** VOUT → J10 → U4 (on ±5 V; V− by jumper wires, JP3 open: low-quiescent mode) → R14 47 Ω → J9 → DC block → coax → 8591E INPUT. The DC block must pass 10 kHz: many SMA blocks are only rated from about 10 MHz.
+  - **Each point:** RBW = f/10 within 300 Hz–3 kHz, span 20 RBWs, reference level −20 dBm. Marker to the peak (or at f, if the peak isn't within 2 RBWs). The floor is the louder of the readings 6 RBWs either side, + 6 dB.
+  - **Path gain, measured, never assumed:** from `sa_from` to `sa_cal_to` (50 kHz) the AD2 also measures VOUT. Where both readings are `sa_cal_margin_db` (20 dB) above their floors, their ratio is a path-gain point. The median converts every analyzer reading to VOUT.
+    - **No such point:** the analyzer's points are invalid and keep the AD2's VOUT.
+    - **Points disagreeing by more than `sa_path_tolerance_db` (1 dB):** the path isn't flat (a DC block rolling off?) and the run is invalid.
+    - **More than 3 dB from U4 into 47 Ω + 50 Ω (−5.8 dB):** a note.
+  - **Below `sa_from`** VOUT is the AD2's, as before. Analyzer points have no phase. The report shows which meter measured VOUT, and the AD2's own reading next to the analyzer's. The plot marks the AD2's as ×.
+  - **Assumed:** the path gain is flat from 50 kHz to 1 MHz (U4's bandwidth is far above it; the DC block, coax and analyzer aren't checked there).
+  - **−5 V rail:** U2 (wide-BW, 8.5–12 mA) plus U4 (low-quiescent, 1.5–2.3 mA), against `buffer.current_limit` (20 mA).
 - **Options:**
   - `--fstart`, `--fstop`, `--ppd`
   - `--amp-mv 20`
   - `--vin`
   - `--load`
   - `--avg`
-- **Config:** `[psrr]`.
+  - `--meter sa` (or `psrr.meter = "sa"`): VOUT from the 8591E from `sa_from` up
+- **Config:** `[psrr]` (`meter`, `sa_from`, `sa_cal_to`, `sa_cal_margin_db`, `sa_path_tolerance_db`), `[sa]`.
 
 ---
 

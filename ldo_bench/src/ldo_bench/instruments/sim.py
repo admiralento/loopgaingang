@@ -231,6 +231,23 @@ class LdoModel:
         crosses = lo < self.en_vt_fall * self.vin and hi > self.en_vt_rise * self.vin
         return self.en_charge * f if crosses else 0.0
 
+    # the 8591E's view of VOUT: through U4 (gain sa_u4_gain) and R14 47 ohm into its 50 ohm input
+    sa_u4_gain: float = 0.98
+    sa_path: Callable[[float], float] | None = (
+        None  # extra path gain vs frequency (e.g. a DC block); None = flat
+    )
+
+    def vout_ripple_at_sa(self) -> dict[float, float]:
+        """{f: dBm} at the 8591E input for the sine W1 plays onto VIN (psrr), through U4 and R14; {} otherwise."""
+        from ldo_bench.instruments.hp859x import vpeak_to_dbm
+
+        if not self.awg_wave or self.psu_to != "rail":
+            return {}
+        _, f, lo, hi = next(iter(self.awg_wave.values()))
+        vout = abs(self.psrr_h(f)) * (hi - lo) / 2 if self.vin > 0 else 0.0
+        gain = self.sa_u4_gain * 50 / 97 * (self.sa_path(f) if self.sa_path else 1.0)
+        return {f: vpeak_to_dbm(vout * gain)} if vout > 0 else {}
+
     def psrr_h(self, f: float) -> complex:
         """VOUT/VIN transfer function at `f` (Hz); 0 when the LDO is off."""
         if not self.enabled or self.vin <= 0:

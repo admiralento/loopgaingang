@@ -171,6 +171,7 @@ class Bench:
         vref_external: bool = False,
         enable_dio: bool = False,
         vref_source: VrefSource = "psu",
+        sa=None,
     ) -> None:
         if vref_external and cfg.vref is None:
             raise InstrumentError("an external reference needs a [vref] section in the config")
@@ -190,6 +191,7 @@ class Bench:
         self.dmm = dmm
         self.xscope = xscope  # optional 54621A cross-check scope for transients
         self.xscope_issue: str | None = None  # why it isn't available, if it was wanted
+        self.sa = sa  # HP 8591E spectrum analyzer (psrr --meter sa); passive: it never drives the DUT
         # The AD2 plays three roles; separate names keep procedure code readable.
         self.scope = ad2
         self.dio = ad2
@@ -1165,6 +1167,8 @@ class Bench:
             ("close PSU", self.psu.close),
             ("close DMM", lambda: self.dmm.close() if self.dmm is not None else None),
             ("close cross-check scope", lambda: self.xscope.close() if self.xscope is not None else None),
+            ("spectrum analyzer preset", lambda: self.sa.front_panel() if self.sa is not None else None),
+            ("close spectrum analyzer", lambda: self.sa.close() if self.sa is not None else None),
             ("close AD2", self.scope.close),
         ]
         for name, fn in steps:
@@ -1202,6 +1206,7 @@ def open_bench(
     vref_external: bool = False,
     enable_dio: bool = False,
     vref_source: VrefSource = "psu",
+    use_sa: bool = False,
 ) -> Bench:
     """Open every instrument the config asks for and return a Bench (use it in a `with` block).
 
@@ -1212,6 +1217,7 @@ def open_bench(
     can't be opened, the run continues without it and Bench.xscope_issue says why.
     vref_external: drive VREF_IN from an external reference ([vref]) instead of the BGR.
     vref_source: what drives it: "psu" (the PSU's other output) or "ad2" (AD2 V+; needs the DMM).
+    use_sa: also open the [sa] spectrum analyzer (psrr --meter sa); a failure to open it stops the run.
     enable_dio: the tests drive the LDO's enable from the AD2 ([enable]) instead of it being tied on.
     If any required instrument fails to open, the ones already opened are closed and the error
     is re-raised.
@@ -1232,6 +1238,14 @@ def open_bench(
         from ldo_bench.instruments.sim import SimDmm, SimXScope
 
         sim_ad2 = SimAnalogDiscovery(model, cfg.ad2.vout_channel)
+        sim_sa = None
+        if use_sa and cfg.sa is not None and cfg.sa.enabled:
+            from ldo_bench.instruments.hp859x import HP859x
+            from ldo_bench.instruments.sim import Sim8591Link
+
+            link = Sim8591Link(tones={})  # the input is on J9 (VOUT through U4), not CAL OUT
+            link.tone_source = model.vout_ripple_at_sa
+            sim_sa = HP859x(link)
         return Bench(
             cfg,
             SimPowerSupply(model),
@@ -1243,10 +1257,11 @@ def open_bench(
             vref_external=vref_external,
             enable_dio=enable_dio,
             vref_source=vref_source,
+            sa=sim_sa,
         )
 
     from ldo_bench.instruments import discovery
-    from ldo_bench.instruments.discovery import Finder, open_ad2, open_dmm, open_psu, open_xscope
+    from ldo_bench.instruments.discovery import Finder, open_ad2, open_dmm, open_psu, open_sa, open_xscope
 
     t0 = time.monotonic()
     log.info("Opening instruments (Ctrl-C to abort) ...")
@@ -1283,6 +1298,10 @@ def open_bench(
             except InstrumentError as e:  # optional: the AD2 measurement goes ahead without it
                 xscope_issue = f"cross-check scope not available: {e}"
                 log.warning("%s (continuing with the AD2 only; --no-xscope hides this)", xscope_issue)
+        sa = None
+        if use_sa:  # required when asked for: the run measures VOUT with it
+            sa = open_sa(cfg.sa.resource, timeout=cfg.sa.timeout, finder=finder)
+            opened.append(sa)
     except BaseException:
         for inst in reversed(opened):
             try:
@@ -1302,6 +1321,7 @@ def open_bench(
         vref_external=vref_external,
         enable_dio=enable_dio,
         vref_source=vref_source,
+        sa=sa,
     )
     bench.xscope_issue = xscope_issue
     return bench

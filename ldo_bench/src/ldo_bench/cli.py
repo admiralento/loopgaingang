@@ -319,6 +319,7 @@ def _bench(
     use_xscope: bool = False,
     vref: str = "bgr",
     enable: str = "static",
+    use_sa: bool = False,
 ) -> Iterator[Bench]:
     """Open the bench and turn instrument errors and Ctrl-C into clean exits.
 
@@ -340,6 +341,7 @@ def _bench(
             vref_external=vref in ("ext", "ad2"),
             vref_source="ad2" if vref == "ad2" else "psu",
             enable_dio=enable == "dio",
+            use_sa=use_sa,
         ) as bench:
             yield bench
     except InstrumentError as e:
@@ -1178,6 +1180,14 @@ def psrr(
     vin: Annotated[float | None, typer.Option(help="DC level on VIN (V)")] = None,
     load: LoadOpt = None,
     averages: Annotated[int | None, typer.Option("--avg", help="Captures per frequency")] = None,
+    meter: Annotated[
+        str | None,
+        typer.Option(
+            "--meter",
+            help="VOUT from: ad2 (sine fit) or sa (the HP 8591E through U4 / J9 from psrr.sa_from up, its path "
+            "gain measured against the AD2); default psrr.meter",
+        ),
+    ] = None,
     out: OutOpt = Path("results"),
     sim: SimOpt = False,
     save_sim: SaveSimOpt = False,
@@ -1187,7 +1197,7 @@ def psrr(
     yes: YesOpt = False,
     verbose: VerboseOpt = False,
 ) -> None:
-    """PSRR vs frequency: a sine on VIN through the buffer, its size on VIN and VOUT (AD2 sine fit)."""
+    """PSRR vs frequency: a sine on VIN through the buffer, its size on VIN and VOUT (AD2 sine fit, or the 8591E)."""
     from ldo_bench.procedures import psrr as proc
 
     cfg = _load(config, verbose)
@@ -1201,6 +1211,7 @@ def psrr(
         amplitude=None if amp_mv is None else amp_mv * 1e-3,
         averages=averages,
         load_code=_load_code(cfg, load),
+        meter=meter,
     )
     _run(
         cfg,
@@ -1214,6 +1225,7 @@ def psrr(
         ad=ad_serial,
         yes=yes,
         use_dmm=False,
+        use_sa=sec.meter == "sa",
         **_modes(cfg, vref, split_buffer=True),
     )
 

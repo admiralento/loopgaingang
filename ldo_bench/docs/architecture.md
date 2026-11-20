@@ -243,10 +243,4 @@ The tasks are defined in `[tool.poe.tasks]` in `pyproject.toml` (poethepoet, a d
 2. Add an `open_<kind>()` to `discovery.py` using the `Finder`, and a config section with `resource` and the RS-232 settings.
 3. Add a fake to `sim.py`, and driver tests against a fake transport.
 
-**Spectrum analyzer (PSRR past the AD2's floor):** `procedures/psrr.py` measures VOUT through a `PsrrMeter` (`measure(f) -> Tone`). A spectrum analyzer meter would:
-- tune to `f` and read the VOUT amplitude, converting dBm into 50 Ω (or through its probe) to volts peak
-- take VIN's amplitude from AD2 scope 2
-- set `vout_floor` from the analyzer's noise floor at that RBW
-- set the phase to `nan` (no phase information)
-
-`psrr.run(bench, cfg, meter=...)` accepts it as is.
+**Spectrum analyzer (PSRR past the AD2's floor):** done as `SaPsrrMeter` (`psrr --meter sa`): it wraps `Ad2SineFit` for VIN (and VOUT below `sa_from`), stashes the 8591E's raw readings, and `finish(points)`, called by `run()` after the sweep, measures the path gain from the overlap and converts them. Another meter can follow the same `measure(f) -> Tone` / optional `finish` shape.

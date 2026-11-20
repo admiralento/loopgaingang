@@ -1053,9 +1053,35 @@ class PsrrConfig(BufferProofConfig):
         2.0, ge=0, description="Required psu_voltage - VIN peak margin for the BUF634 (V)"
     )
     timeout: float = Field(10.0, gt=0, description="Max wait for one AD2 trigger (s)")
+    meter: Literal["ad2", "sa"] = Field(
+        "ad2",
+        description="VOUT from the AD2's sine fit, or (sa) from the HP 8591E through U4 / J9 from sa_from up",
+    )
+    sa_from: float = Field(
+        10e3, ge=9e3, description="meter = sa: the 8591E reads VOUT from here up (Hz; it starts at 9 kHz)"
+    )
+    sa_cal_to: float = Field(
+        50e3,
+        gt=0,
+        description="meter = sa: the path gain (U4, R14, DC block, coax) is measured where both the AD2 and the "
+        "8591E read VOUT, from sa_from up to here (Hz)",
+    )
+    sa_cal_margin_db: float = Field(
+        20.0,
+        gt=0,
+        description="meter = sa: a path-gain point needs both readings this far above their floors (dB)",
+    )
+    sa_path_tolerance_db: float = Field(
+        1.0,
+        gt=0,
+        description="meter = sa: the path-gain points must agree within this (dB); more means the path isn't flat "
+        "(e.g. a DC block rolling off) and the run is invalid",
+    )
 
     @model_validator(mode="after")
     def _check(self) -> PsrrConfig:
+        if self.meter == "sa" and self.sa_cal_to <= self.sa_from:
+            raise ValueError("psrr.sa_cal_to must be above sa_from (the path gain needs an overlap band)")
         # The sine must stay positive, inside the wavegen's range, and below the buffer rail minus
         # the BUF634's headroom (else the buffer clips the peaks).
         if self.f_stop <= self.f_start:
@@ -1460,6 +1486,8 @@ class BenchConfig(_Model):
             code_ok("iq.check_code", self.iq.check_code)
         if self.psrr:
             ps = self.psrr
+            if ps.meter == "sa" and (self.sa is None or not self.sa.enabled):
+                raise ValueError("psrr.meter = 'sa' needs an enabled [sa] section (the HP 8591E)")
             # As in line_tran: the PSU feeds the buffer rail; VIN (dc + sine) comes from the wavegen.
             if ps.psu_voltage > self.psu.v_max:
                 raise ValueError(f"psrr.psu_voltage exceeds psu.v_max ({self.psu.v_max} V)")
