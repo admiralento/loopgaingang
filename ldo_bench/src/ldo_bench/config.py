@@ -114,7 +114,7 @@ class PsuConfig(_Instrument):
         gt=0,
         description=(
             "The PSU is never programmed above this (V). Usually equals dut.vin_max; it is higher only "
-            "when the PSU powers the buffer rail (line-tran, psrr, buffer-check)."
+            "when the PSU powers the buffer rail (line-tran, psrr)."
         ),
     )
     idle_voltage: float | None = Field(
@@ -934,7 +934,7 @@ class IqConfig(_Model):
 
 
 class BufferConfig(_Model):
-    """[buffer]: the reworked injection buffer (JAFWAK U2) on a split supply, for line-tran, psrr and buffer-check.
+    """[buffer]: the reworked injection buffer (JAFWAK U2) on a split supply, for line-tran and psrr.
 
     After the rework U2's V- (pin 4) is on a negative rail, so its output can reach 0 V and the
     1.7-1.9 V VIN range. The PSU's other output, wired reversed (OUT+ to GND, OUT- to U2 pin 4),
@@ -967,21 +967,6 @@ class BufferConfig(_Model):
             "first bring-up plan). Outside it the rails come down and the run stops"
         ),
     )
-    v_plus: float = Field(5.0, gt=0, description="VS_BUFF for buffer-check (V)")
-    check_levels: list[float] = Field(
-        [1.7, 1.8, 1.85],
-        min_length=2,
-        description=(
-            "buffer-check: DC levels to reach on JP4 pin 1 (V). W1 is capped at dut.vin_max, so 1.90 V is only "
-            "reachable if U2's offset is positive; line-tran and psrr go up to 1.85 V"
-        ),
-    )
-    check_peak_max: float = Field(
-        1.95, gt=0, description="buffer-check: nothing on JP4 pin 1 may exceed this (V)"
-    )
-    check_sine_frequency: float = Field(1e4, gt=0, description="buffer-check: sine frequency (Hz)")
-    check_sine_dc: float = Field(1.8, gt=0, description="buffer-check: sine centre on JP4 pin 1 (V)")
-    check_sine_amplitude: float = Field(0.05, gt=0, description="buffer-check: sine amplitude (V peak)")
 
     @model_validator(mode="after")
     def _check(self) -> BufferConfig:
@@ -1258,8 +1243,8 @@ class BenchConfig(_Model):
         """The heaviest load (A) each configured test puts on psu.channel, with that test's section.
 
         Estimated from the load bank's resistors (at vout_nominal, or at loadbank_check.voltage for the
-        bank straight on the supply); the LDO's own few hundred uA aren't included. line-tran, psrr and
-        buffer-check aren't here: they power the buffer rail with buffer.rail_current_limit.
+        bank straight on the supply); the LDO's own few hundred uA aren't included. line-tran and psrr
+        aren't here: they power the buffer rail with buffer.rail_current_limit.
         """
         out: dict[str, tuple[object, float]] = {}
         lc = self.loadbank_check
@@ -1449,20 +1434,12 @@ class BenchConfig(_Model):
                 raise ValueError(
                     f"buffer.channel ({bu.channel}) is psu.channel: U2's negative rail needs the other output"
                 )
-            if bu.v_plus > self.psu.v_max:
-                raise ValueError(f"buffer.v_plus exceeds psu.v_max ({self.psu.v_max} V)")
             for name, sec in (("line_tran", self.line_tran), ("psrr", self.psrr)):
                 if sec is not None and bu.v_minus < sec.buffer_headroom:
                     raise ValueError(
                         f"buffer.v_minus ({bu.v_minus} V) is less than {name}.buffer_headroom "
                         f"({sec.buffer_headroom} V): U2 couldn't drive VIN down to 0 V"
                     )
-            if max(bu.check_levels) > self.dut.vin_max:
-                raise ValueError(f"buffer.check_levels exceed dut.vin_max ({self.dut.vin_max} V)")
-            if bu.check_sine_dc + bu.check_sine_amplitude > self.dut.vin_max:
-                raise ValueError(
-                    f"buffer.check_sine_dc + check_sine_amplitude exceed dut.vin_max ({self.dut.vin_max} V)"
-                )
         if self.psu.idle_voltage is not None and self.psu.idle_voltage > vin_ceiling:
             raise ValueError(
                 f"psu.idle_voltage ({self.psu.idle_voltage} V) exceeds dut.vin_max / psu.v_max ({vin_ceiling} V): "

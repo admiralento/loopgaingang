@@ -636,38 +636,6 @@ def _smoke(bench: Bench, vin: float) -> None:
     bench.loadbank.off()
 
 
-@app.command("buffer-check")
-def buffer_check(
-    config: ConfigOpt = DEFAULT_CONFIG,
-    out: OutOpt = Path("results"),
-    sim: SimOpt = False,
-    save_sim: SaveSimOpt = False,
-    psu: PsuOpt = None,
-    ad_serial: AdOpt = None,
-    yes: YesOpt = False,
-    verbose: VerboseOpt = False,
-) -> None:
-    """U2 buffer on its own, chip disconnected (JP4 open, 100 Ohm dummy): split supply, levels, step, sine."""
-    from ldo_bench.procedures import buffer_check as proc
-
-    cfg = _load(config, verbose)
-    if cfg.buffer is None:
-        _fail("buffer-check needs a [buffer] section (the split-supply U2)")
-    _run(
-        cfg,
-        config,
-        proc,
-        lambda b: proc.run(b, cfg.buffer),
-        out=out,
-        sim=sim,
-        save_sim=save_sim,
-        psu=psu,
-        ad=ad_serial,
-        yes=yes,
-        use_dmm=False,
-    )
-
-
 # --- the supply on its own ------------------------------------------------------
 IlimOpt = Annotated[
     str | None,

@@ -208,63 +208,6 @@ def test_cli_refuses_vref_ext_with_the_split_buffer(cmd, tmp_path):
     assert r.exit_code == 2 and "[buffer]" in r.output
 
 
-# --- buffer-check: U2 on its own, chip disconnected ------------------------------
-def test_buffer_check_on_sim(jafwak):
-    from ldo_bench import plotting
-    from ldo_bench.procedures import buffer_check
-
-    with open_bench(jafwak, sim=True) as b:
-        res = buffer_check.run(b, jafwak.buffer)
-        m = b.sim_model
-        assert not m.psu_on and not m.awg_v and not m.awg_wave  # rails down, W1 off last
-    assert not res.issues, res.issues
-    assert [r["out_v"] for r in res.rows] == pytest.approx(jafwak.buffer.check_levels, abs=0.005)
-    assert res.gain == pytest.approx(1.0, abs=0.01)
-    assert res.idle_v == pytest.approx(b.sim_model.buffer_offset, abs=0.002)
-    assert res.step["rising"]["peak_v"] <= jafwak.buffer.check_peak_max
-    assert res.sine["out_amplitude_v"] == pytest.approx(jafwak.buffer.check_sine_amplitude, rel=0.1)
-    assert "READY" in res.report()
-    assert "10-90 % under 2 us" in res.report()  # the sim's step is instant: a bound, not 0 us
-    plotting.close(buffer_check.plot(res, "x"))
-
-
-def test_buffer_check_flags_a_level_it_cant_reach(jafwak):
-    from ldo_bench import plotting
-    from ldo_bench.procedures import buffer_check
-
-    with open_bench(jafwak, sim=True) as b:
-        miswire(b, buffer_dropout=3.2)  # healthy at the bottom, but the 5 V rail leaves only 1.8 V at the top
-        res = buffer_check.run(b, jafwak.buffer)
-    assert any(i.startswith("1.85 V") for i in res.issues)
-    assert "NOT READY" in res.report()
-    plotting.close(buffer_check.plot(res, "x"))
-
-
-def test_buffer_check_probe_off_the_output(jafwak):
-    from ldo_bench.procedures import buffer_check
-
-    with open_bench(jafwak, sim=True) as b:
-        miswire(b, ref_probe=("dio", 0))
-        res = buffer_check.run(b, jafwak.buffer)
-    assert any("JP4 pin 1" in i for i in res.issues)
-
-
-def test_buffer_check_wiring_says_chip_disconnected(jafwak):
-    from ldo_bench.procedures import buffer_check
-
-    with open_bench(jafwak, sim=True) as b:
-        text = "\n".join(buffer_check.wiring(b, jafwak.buffer))
-    assert "JP4 open" in text and "100 Ohm" in text and "U2 pin 4" in text and "VIN_FG (J3)" in text
-
-
-def test_cli_buffer_check(tmp_path):
-    r = CliRunner().invoke(app, ["buffer-check", "-c", CFG, "--sim", "-o", str(tmp_path)])
-    assert r.exit_code == 0, r.output
-    assert "READY" in r.output
-    demo = str(Path(CFG).with_name("demo_board.toml"))
-    assert CliRunner().invoke(app, ["buffer-check", "-c", demo, "--sim"]).exit_code == 2
-
-
 def test_bench_refuses_the_split_supply_with_the_external_reference(jafwak):
     """Both use OUT2: the reference would move U2's V-. Refused even if the CLI check were bypassed."""
     with open_bench(jafwak, sim=True, vref_external=True) as b:
@@ -273,26 +216,3 @@ def test_bench_refuses_the_split_supply_with_the_external_reference(jafwak):
         with pytest.raises(InstrumentError, match="--vref ext"):
             b.buffer_rails_on(1.9)
         assert not b.sim_model.psu_on
-
-
-def test_buffer_check_limit_refusal_stops_the_run(jafwak):
-    """A Bench limit refusal is a safety stop (exit 1), not a setup issue in a saved _INVALID run."""
-    from ldo_bench.procedures import buffer_check
-
-    with open_bench(jafwak, sim=True) as b:
-        real = b.vin_sine_from_wavegen
-
-        def refuse(**k):
-            raise InstrumentError("refusing to drive VIN with a sine (limit)")
-
-        b.vin_sine_from_wavegen = refuse
-        with pytest.raises(InstrumentError, match="refusing"):
-            buffer_check.run(b, jafwak.buffer)
-        b.vin_sine_from_wavegen = real
-
-
-def test_buffer_check_needs_two_levels(jafwak):
-    d = jafwak.model_dump()
-    d["buffer"]["check_levels"] = [1.8]
-    with pytest.raises(ValidationError, match="check_levels"):
-        BenchConfig.model_validate(d)

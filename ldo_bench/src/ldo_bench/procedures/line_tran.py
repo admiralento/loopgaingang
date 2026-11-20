@@ -373,7 +373,7 @@ def _interlock_split(bench: Bench, rail: float, proof_levels: tuple[float, float
         )
 
 
-def calibrate(bench: Bench, target: float, limit: float | None = None) -> tuple[float, float, str | None]:
+def calibrate(bench: Bench, target: float) -> tuple[float, float, str | None]:
     """W1 setpoint that puts VIN at `target` through the buffer: (w1, measured VIN, issue or None).
 
     The correction is capped (CAL_MAX_CORRECTION) so a buffer that isn't driving VIN can't make us
@@ -386,15 +386,10 @@ def calibrate(bench: Bench, target: float, limit: float | None = None) -> tuple[
     put VIN above the target before the first reading (bench, 2026-11-17: W1 started at a 1.85 V
     target with U2 +65 mV high gave VIN 1.915 V, over dut.vin_max).
     If it doesn't converge, the last setpoint is applied, measured, and the issue says so. Also
-    used by psrr for its DC level. `limit` (V) replaces the VIN hard stop: buffer-check, with the
-    chip disconnected, uses buffer.check_peak_max. W1 stays within dut.vin_max either way.
+    used by psrr for its DC level. W1 stays within dut.vin_max.
     """
-    what = (
-        f"above dut.vin_max ({bench.cfg.dut.vin_max} V) less the AD2's error margin"
-        if limit is None
-        else f"above the {limit:.3f} V limit"
-    )
-    limit = vin_limit(bench) if limit is None else limit
+    what = f"above dut.vin_max ({bench.cfg.dut.vin_max} V) less the AD2's error margin"
+    limit = vin_limit(bench)
 
     def apply(w: float) -> float:
         bench.vin_from_wavegen(w)

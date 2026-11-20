@@ -10,7 +10,6 @@ import pytest
 
 from ldo_bench.bench import open_bench
 from ldo_bench.procedures import (
-    buffer_check,
     en_sine,
     iq,
     line_reg,
@@ -43,7 +42,6 @@ def _all_wiring(cfg, bench):
         ("enable-sine", en_sine, cfg.en_sine),
         ("vref-line", vref_line, cfg.vref_line),
         ("temp", temp, cfg.temp),
-        ("buffer-check", buffer_check, cfg.buffer),
     ):
         if sec is not None:
             out[name] = mod.wiring(bench, sec)

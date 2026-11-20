@@ -17,7 +17,6 @@ Bench automation for characterizing our LDO (the JAFWAK board) and the TPS7A7001
 | Temperature | `temp` | TMP235 (J13 pin 5), VREF and VOUT over time → tempco from stable plateaus (JAFWAK) |
 | Bench checks | `discover`, `psu-check`, `loadbank-check`, `smoke` | instruments found, supply accuracy, load bank wiring, quick power-up |
 | Supply control | `psu-hold`, `psu-sweep` | hold a voltage and current limit until Ctrl-C (prints V / I, saves nothing); step the voltage and save V / I |
-| Buffer check | `buffer-check` | JAFWAK's reworked U2 on its own (chip off, 100 Ω dummy): split supply, 1.70–1.85 V levels, step, sine. Run before line-tran / psrr |
 | BGR vs external reference | any DC, transient, psrr or iq test with `--vref ext`, then `compare` | the same test with 1.204 V on VREF_IN in place of the BGR (JP2 removed), side by side with the BGR run |
 
 **Docs:**
@@ -163,7 +162,6 @@ Each run writes a folder under `results/<test>/`, e.g. `results/load-tran/202611
 | E3648A over GPIB (UsbGpib), 34401A over RS-232, AD2 DC / DIO / triggered capture | yes |
 | enable-sine `--shape triangle` (JAFWAK) | yes (2026-11-12), valid; the 1 kHz sine hit an AD2 arm race, fixed but not yet re-run |
 | line-tran, psrr, iq, enable-startup (input current from the 54621A since 2026-11-14) | simulator only (line-tran / psrr on the split-supply U2 since 2026-11-13); line-tran tried on JAFWAK 2026-11-17, no valid run yet (U2 offset, see bench-log) |
-| `buffer-check` (added 2026-11-13) | simulator only: run it first on the reworked board, chip disconnected |
 | `--vref ext` (PSU OUT2 on VREF_IN) and `compare` | simulator only |
 | `vref-line`, `temp`, `enable-sine --shape square`, `--enable dio` (added 2026-11-13) | simulator only |
 | `line-tran --enable dio` (added 2026-11-17) | simulator only |

@@ -37,9 +37,7 @@ def test_runs_on_the_simulator(cmd, tmp_path):
 
 
 def test_every_command_is_listed():
-    assert {"load-reg", "line-reg", "load-tran", "line-tran", "psrr", "iq", "temp", "buffer-check"} <= set(
-        TESTS
-    )
+    assert {"load-reg", "line-reg", "load-tran", "line-tran", "psrr", "iq", "temp"} <= set(TESTS)
 
 
 @pytest.mark.parametrize(

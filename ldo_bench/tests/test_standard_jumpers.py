@@ -8,7 +8,7 @@ a J1 jumper, Method B, --vref ext) keeps its own line instead of the standard on
 import pytest
 
 from ldo_bench.bench import open_bench
-from ldo_bench.procedures import buffer_check, iq, line_reg, line_tran, load_reg, load_tran, psrr
+from ldo_bench.procedures import iq, line_reg, line_tran, load_reg, load_tran, loadbank_check, psrr
 
 J1 = [
     "Fit J1 1-3 (BGR_VDD from INB)",
@@ -68,7 +68,7 @@ def test_vref_ext_drops_jp2(jafwak):
 
 
 def test_chip_disconnected_checks_list_none(jafwak):
-    lines = wiring_of(jafwak, lambda b: buffer_check.run(b, b.cfg.buffer))
+    lines = wiring_of(jafwak, lambda b: loadbank_check.run(b, b.cfg.loadbank_check))
     assert not any("J1 " in ln or "JP2" in ln for ln in lines)
 
 
