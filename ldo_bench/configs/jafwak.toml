@@ -45,6 +45,11 @@ parity = "even"              # bench meter is set to EVEN: 7 BITS ("none" = NONE
 nplc = 10                    # integration time (power-line cycles): 10 = ~0.2 s/reading, low noise
 samples = 1                  # readings averaged per point
 
+[sa]                         # HP 8591E spectrum analyzer on GPIB (UsbGpib adapter); sa-check: CAL OUT -> INPUT
+enabled = true
+resource = ""                # "" = find it on VISA by ID?. On the bench (2026-11-20): USB0::1003::8293::HP8591E::0::INSTR
+cal_tolerance_db = 1.0       # calibrator within this of -20 dBm (not from the datasheet yet)
+
 [xscope]                     # Agilent 54621A on RS-232: cross-check of every transient edge (optional)
 enabled = true               # false, or --no-xscope, to use the AD2 only
 resource = ""                # "" = search GPIB/USB/RS-232. Or GPIB0::7::INSTR, prologix:COM5:7, serial:COM4

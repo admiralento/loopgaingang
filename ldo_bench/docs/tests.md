@@ -313,6 +313,20 @@ Without `[buffer]` (the demo board) line-tran and psrr use the single-rail path 
   - `--avg`, `--window-ms`, `--plot-us`, `--no-xscope`
 - **Config:** `[line_tran]`.
 
+### `sa-check`: HP 8591E on its calibrator
+Talks to the analyzer only: no board, PSU or AD2. Run it before anything relies on the analyzer.
+- **Wiring:** the 8591E's CAL OUT → its INPUT (50 Ω), with a short cable and nothing else on the input.
+- **Does:**
+  1. Preset, single-sweep mode.
+  2. **Calibrator:** 300 MHz, 1 MHz span, 3 kHz RBW, one sweep, marker to the peak. It must be CAL OUT (within 1/100 of the span), at −20 dBm ± `sa.cal_tolerance_db` (1 dB; not from the datasheet yet).
+  3. **Narrowest RBW:** asks for 30 Hz and reads back what was set: 30 Hz means Option 130, 1 kHz is standard.
+  4. **Noise floor:** the marker level at 1 MHz (no tone there) with that RBW, in dBm and µV.
+  5. Preset (continuous sweep), leaving the front panel normal.
+- **Not valid (exit 3):** no calibrator tone (CAL OUT not cabled), wrong frequency, or the level outside the tolerance.
+- **Stops (exit 1):** any command the analyzer rejects (`ERR?`), or a reply that isn't a reading.
+- **Saves:** `data.csv` (calibrator and floor), `summary.json` (with `option_130`), `meta.json`. No plot.
+- **Config:** `[sa]`; `--sa` overrides the resource.
+
 ### `psrr`: power-supply rejection vs frequency
 - **Wiring** (single-rail buffer; JAFWAK with `[buffer]`: see [Split-supply U2](#split-supply-u2-jafwak-buffer)):
   - PSU OUT1 -> buffer rail VS_BUFF / VDD_BUF and GND. NOT on VIN: the rail goes above the LDO's VIN limit

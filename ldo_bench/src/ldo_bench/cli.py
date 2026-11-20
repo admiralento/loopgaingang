@@ -556,6 +556,65 @@ def psu_check(
     )
 
 
+@app.command("sa-check")
+def sa_check(
+    config: ConfigOpt = DEFAULT_CONFIG,
+    out: OutOpt = Path("results"),
+    sim: SimOpt = False,
+    save_sim: SaveSimOpt = False,
+    sa: Annotated[
+        str | None, typer.Option("--sa", help="Spectrum analyzer resource (overrides sa.resource)")
+    ] = None,
+    yes: YesOpt = False,
+    verbose: VerboseOpt = False,
+) -> None:
+    """Check the HP 8591E on its own calibrator (CAL OUT cabled to INPUT, nothing else): every command, the
+    amplitude reading, the narrowest RBW and the noise floor. Talks to the analyzer only."""
+    from ldo_bench.instruments.base import InstrumentError as _Err
+    from ldo_bench.procedures import sa_check as proc
+    from ldo_bench.results import RunDir
+
+    cfg = _load(config, verbose)
+    if cfg.sa is None or not cfg.sa.enabled:
+        _fail("sa-check needs an enabled [sa] section in the config")
+    text = "\n".join(["Wiring for sa-check:", *(f"  - {ln}" for ln in proc.wiring())])
+    if sim or yes:
+        typer.echo(text)
+    elif not typer.confirm(f"{text}\nIs the analyzer wired like this? (--yes skips this)"):
+        raise typer.Exit(130)
+    try:
+        if sim:
+            from ldo_bench.instruments.hp859x import HP859x
+            from ldo_bench.instruments.sim import Sim8591Link
+
+            analyzer = HP859x(Sim8591Link())
+        else:
+            from ldo_bench.instruments.discovery import open_sa
+
+            analyzer = open_sa(sa or cfg.sa.resource, timeout=cfg.sa.timeout)
+        try:
+            res = proc.run(analyzer, cfg.sa)
+        finally:
+            analyzer.close()
+    except _Err as e:
+        typer.secho(f"Instrument error: {e}", fg="red", err=True)
+        raise typer.Exit(1) from e
+    except KeyboardInterrupt as e:
+        typer.secho("Aborted.", fg="yellow", err=True)
+        raise typer.Exit(130) from e
+    path = None
+    if not sim or save_sim:
+        run = RunDir(out, proc.NAME, cfg, config_path=config, simulated=sim, invalid=bool(res.issues))
+        run.write_csv("data.csv", res.rows)
+        run.write_json("summary.json", res.summary())
+        run.write_meta(idns={"sa": res.idn}, sim=sim)
+        path = run.path
+    if sim:
+        typer.secho(SIM_BANNER, fg="magenta", bold=True)
+    typer.echo(res.report())
+    _saved(path, fg="green" if not res.issues else "yellow", res=res)
+
+
 @app.command("loadbank-check")
 def loadbank_check(
     config: ConfigOpt = DEFAULT_CONFIG,

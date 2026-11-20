@@ -8,6 +8,7 @@ Bench automation for characterizing our LDO (the JAFWAK board) and the TPS7A7001
 | Line regulation | `line-reg` | VOUT vs VIN → mV/V and the dropout voltage |
 | VREF vs VIN | `vref-line` | the BGR output (TP3) vs VIN → mV/V and the lowest VIN it works at (JAFWAK) |
 | Load transient | `load-tran` | VOUT after a load step → peak deviation, settling time |
+| Spectrum analyzer check | `sa-check` | the HP 8591E on its own CAL OUT: commands, amplitude reading, narrowest RBW, noise floor. Analyzer only |
 | Line transient | `line-tran` | VOUT after a VIN step (W1 a 20 Hz square through the BUF634; `--dc-steps` for DC steps) |
 | PSRR | `psrr` | VIN ripple rejection, 100 Hz – 1 MHz |
 | Quiescent current | `iq` | supply current enabled / disabled vs VIN |
@@ -165,6 +166,8 @@ Each run writes a folder under `results/<test>/`, e.g. `results/load-tran/202611
 | line-tran, psrr, iq, enable-startup (input current from the 54621A since 2026-11-14) | simulator only (line-tran / psrr on the split-supply U2 since 2026-11-13); line-tran on JAFWAK: valid runs 2026-11-19 with the trigger fix and the square (1 mA at 1.75-1.85 V; 18.3 mA only at 1.65-1.75 V, U2's drop puts 1.85 V out of reach), on a modified board (R6 lifted, U2 BW to V−); see bench-log |
 | `--vref ext` (PSU OUT2 on VREF_IN) and `compare` | simulator only |
 | `line-tran --vref ad2`, `--vref-v` (added 2026-11-20) | simulator only |
+| HP 8591E: `ID?` / `REV?` / `SER?` (2026-11-20) | yes, over the UsbGpib adapter |
+| `sa-check`, the 8591E driver's other commands (added 2026-11-20) | simulator only |
 | `vref-line`, `temp`, `enable-sine --shape square`, `--enable dio` (added 2026-11-13) | simulator only |
 | `line-tran --enable dio` (added 2026-11-17) | simulator only |
 | `enable-current` (added 2026-11-13; replaces `iq --rail en`) | simulator only |

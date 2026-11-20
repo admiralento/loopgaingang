@@ -55,6 +55,7 @@ ldo_bench/
 │   │   ├── hp34401a.py     Agilent 34401A DMM (DC volts, DC amps)
 │   │   ├── ad2.py          Analog Discovery 2 through pydwf (scope, wavegen, DIO, V+)
 │   │   ├── agilent546xx.py Agilent 54621A cross-check scope
+│   │   ├── hp859x.py       HP 8591E spectrum analyzer (8590 command set, ID? not *IDN?)
 │   │   └── sim.py          the simulated bench (LdoModel and fake instruments)
 │   └── procedures/         one module per test (see below), plus transient.py shared by the transient tests
 └── tests/                  pytest: drivers against fake serial/VISA links, every procedure on the simulator

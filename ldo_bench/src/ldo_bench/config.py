@@ -200,6 +200,37 @@ class DmmConfig(_Instrument):
     samples: int = Field(1, ge=1, description="Readings averaged per point")
 
 
+class SaConfig(_Model):
+    """[sa]: the HP 8591E spectrum analyzer (8590 E-series) on GPIB, and what `sa-check` expects of it.
+
+    `sa-check` measures the analyzer's own calibrator: CAL OUT cabled to the INPUT, nothing else. It
+    exercises every command the driver uses and checks the amplitude reading before PSRR relies on it.
+    """
+
+    enabled: bool = Field(True, description="false = don't use the spectrum analyzer")
+    resource: str = Field(
+        "",
+        description="'' = find it on VISA (GPIB / USB: it answers ID?, not *IDN?). Or 'USB0::...::INSTR', "
+        "'GPIB0::18::INSTR', 'prologix:COM5:18'",
+    )
+    timeout: float = Field(
+        5.0, gt=0, description="Reply timeout for ordinary commands (s); sweeps get longer"
+    )
+    cal_frequency: float = Field(300e6, gt=0, description="CAL OUT frequency (Hz)")
+    cal_level: float = Field(-20.0, description="CAL OUT level (dBm)")
+    cal_tolerance_db: float = Field(
+        1.0,
+        gt=0,
+        description="sa-check: the calibrator must read within this of cal_level (dB). Not from the "
+        "datasheet (not read yet): tighten it once its CAL OUT accuracy is known",
+    )
+    cal_span: float = Field(1e6, gt=0, description="sa-check: span around CAL OUT (Hz)")
+    cal_rbw: float = Field(3e3, gt=0, description="sa-check: RBW for the calibrator (Hz)")
+    floor_frequency: float = Field(
+        1e6, gt=0, description="sa-check: where the noise floor is read, no tone there (Hz)"
+    )
+
+
 class XScopeConfig(_Instrument):
     """[xscope]: Agilent 54621A on RS-232, capturing each transient edge alongside the AD2 as a cross-check.
 
@@ -1217,6 +1248,7 @@ class BenchConfig(_Model):
     ad2: Ad2Config = Ad2Config()
     dmm: DmmConfig | None = None
     xscope: XScopeConfig | None = None
+    sa: SaConfig | None = None
     loadbank: LoadBankConfig
     analysis: AnalysisConfig = AnalysisConfig()
     psu_check: PsuCheckConfig = PsuCheckConfig()

@@ -833,3 +833,131 @@ class SimXScope:
 
     def close(self) -> None:
         pass
+
+
+# --- HP 8591E spectrum analyzer ---------------------------------------------------------------
+_RBW_STEPS = (1.0, 3.0)  # the 8590 series sets RBW in a 1-3-10 sequence
+
+
+def _rbw_step(hz: float, narrowest: float) -> float:
+    """The 1-3-10 RBW at or above `hz` (Hz), between `narrowest` and 3 MHz."""
+    hz = min(max(hz, narrowest), 3e6)
+    decade = 10.0 ** math.floor(math.log10(hz) + 1e-9)
+    for m in (*_RBW_STEPS, 10.0):
+        if m * decade >= hz - 1e-9:
+            return m * decade
+    return 10.0 * decade
+
+
+def _hp_number(arg: str) -> float:
+    """'300000000HZ', '1.5MHZ', '-10DBM', '10DB' -> the value in Hz / dBm / dB."""
+    a = arg.strip().upper()
+    for unit, scale in (("GHZ", 1e9), ("MHZ", 1e6), ("KHZ", 1e3), ("HZ", 1.0), ("DBM", 1.0), ("DB", 1.0)):
+        if a.endswith(unit):
+            return float(a[: -len(unit)]) * scale
+    return float(a)
+
+
+class Sim8591Link:
+    """A fake GPIB link that answers like an HP 8591E, so the real driver (HP859x) runs on it.
+
+    `tones` maps frequency (Hz) -> level (dBm) at the input; by default the analyzer's own CAL OUT
+    (300 MHz, -20 dBm) is cabled to it, as for `sa-check`. `tone_source(f)` (optional) gives extra
+    tones live, e.g. VOUT's ripple from the LDO model. The noise floor is noise_dbm_1khz at 1 kHz
+    RBW, scaled by 10 log10(RBW). Test knobs: narrow_rbw (Option 130: 30 Hz RBW), reject (a command
+    word that raises an error code), done_reply, garble (a query that answers garbage),
+    amplitude_override (MKA? reply), err (queued error codes), id_reply.
+    """
+
+    name = "sim-8591E"
+
+    def __init__(self, tones: dict[float, float] | None = None, noise_dbm_1khz: float = -115.0) -> None:
+        self.tones = {300e6: -20.0} if tones is None else dict(tones)
+        self.tone_source: Callable[[], dict[float, float]] | None = None
+        self.noise_dbm_1khz = noise_dbm_1khz
+        self.narrow_rbw = False
+        self.reject: str | None = None
+        self.done_reply = "1"
+        self.garble: str | None = None
+        self.amplitude_override: float | None = None
+        self.id_reply = "HP8591E"
+        self.err: list[int] = []
+        self.sent: list[str] = []
+        self._preset()
+
+    def _preset(self) -> None:
+        self.cf, self.sp, self.rb, self.marker = 900e6, 1.8e9, 3e6, 900e6
+
+    def _all_tones(self) -> dict[float, float]:
+        return {**self.tones, **(self.tone_source() if self.tone_source else {})}
+
+    def _level_at(self, f: float) -> float:
+        floor = self.noise_dbm_1khz + 10 * math.log10(self.rb / 1e3)
+        near = [a for tf, a in self._all_tones().items() if abs(tf - f) <= self.rb / 2]
+        return max([floor, *near])
+
+    def _do(self, part: str) -> None:
+        word, _, arg = part.strip().partition(" ")
+        word = word.upper()
+        if not word:
+            return
+        if word == self.reject:
+            self.err.append(901)
+            return
+        if word == "IP":
+            self._preset()
+        elif word in ("SNGLS", "TS", "VB", "RL", "AT"):
+            pass
+        elif word == "CF":
+            self.cf = _hp_number(arg)
+        elif word == "SP":
+            self.sp = _hp_number(arg)
+        elif word == "RB":
+            self.rb = _rbw_step(_hp_number(arg), 30.0 if self.narrow_rbw else 1e3)
+        elif word == "MKF":
+            self.marker = _hp_number(arg)
+        elif word == "MKPK":
+            lo, hi = self.cf - self.sp / 2, self.cf + self.sp / 2
+            inside = {f: a for f, a in self._all_tones().items() if lo <= f <= hi}
+            self.marker = max(inside, key=inside.get) if inside else self.cf
+        else:
+            self.err.append(113)  # unknown command
+
+    def write(self, cmd: str) -> None:
+        self.sent.append(cmd)
+        for part in cmd.split(";"):
+            self._do(part)
+
+    def query(self, cmd: str) -> str:
+        self.sent.append(cmd)
+        *setup, q = [p for p in cmd.split(";") if p.strip()]
+        for part in setup:
+            self._do(part)
+        q = q.strip().upper()
+        if q == self.garble:
+            return "#garbage"
+        if q == "ERR?":
+            codes, self.err = self.err, []
+            return ",".join(str(c) for c in codes) if codes else "0"
+        replies = {
+            "ID?": lambda: self.id_reply,
+            "REV?": lambda: "940822",
+            "SER?": lambda: "3728",
+            "*IDN?": lambda: "",
+            "RB?": lambda: f"{self.rb:g}",
+            "MKF?": lambda: f"{self.marker:.6E}",
+            "MKA?": lambda: (
+                f"{self.amplitude_override if self.amplitude_override is not None else self._level_at(self.marker):.2f}"
+            ),
+            "DONE?": lambda: self.done_reply,
+        }
+        if q not in replies:
+            self.err.append(113)
+            return ""
+        return replies[q]()
+
+    def set_timeout(self, seconds: float) -> float:
+        return 5.0
+
+    def close(self) -> None:
+        self.sent.append("<close>")
