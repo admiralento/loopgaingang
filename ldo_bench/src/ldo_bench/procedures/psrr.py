@@ -56,6 +56,7 @@ from ldo_bench.procedures.line_tran import (
     interlock,
     vin_limit,
 )
+from ldo_bench.procedures.sa_path_cal import PathGainCurve, SaReading, read_tone
 
 log = logging.getLogger(__name__)
 
@@ -71,15 +72,6 @@ LEVEL_STEPS = 6  # levelling passes per frequency
 LEVEL_MAX_STEP = 1.5  # W1's amplitude grows at most this much per pass (and per new frequency, see run())
 LEVEL_MIN_VIN = 1e-3  # V peak: below this VIN reading the gain is too uncertain to level from
 SUMMARY_FREQS = (100.0, 1e3, 10e3, 100e3, 1e6)  # Hz, reported in summary.json when measured nearby
-# --- meter = sa (HP 8591E on VOUT through U4 -> R14 47 ohm -> J9 -> DC block -> coax) -------------------
-SA_RBW_RANGE = (300.0, 3e3)  # Hz: RBW = f / 10, within this (300 Hz is the bench unit's narrowest)
-SA_SPAN_RBWS = 20  # span = this many RBWs around the tone
-SA_FLOOR_RBWS = 6  # the noise floor is read this many RBWs either side of the tone
-SA_FLOOR_DB = 6.0  # a tone counts as measured only this far above that noise reading
-SA_REF_LEVEL_DBM = -20.0  # 31.6 mV peak into 50 ohm: VOUT's ripple through U4 stays well under it
-# U4 (unity) driving the analyzer's 50 ohm through R14 (47 ohm): what the path should measure, for a note only
-SA_PATH_EXPECTED_DB = 20 * math.log10(50 / 97)
-SA_PATH_NOTE_DB = 3.0  # a measured path gain this far from the expected one gets a note
 
 
 @dataclass
@@ -192,145 +184,100 @@ class Ad2SineFit:
         )
 
 
-@dataclass
-class SaReading:
-    """What the 8591E read at one frequency, before the path gain is known (V peak at its input)."""
-
-    vpeak: float
-    floor_vpeak: float
-    rbw: float  # Hz
-    peak_frequency: float  # Hz, where the marker found the tone
-    dbm: float  # the tone as the analyzer read it (dBm into 50 ohm)
-
-    @property
-    def margin_db(self) -> float:
-        """How far the tone is above the analyzer's floor (dB)."""
-        return (
-            20 * math.log10(self.vpeak / self.floor_vpeak)
-            if self.vpeak > 0 and self.floor_vpeak > 0
-            else math.nan
-        )
-
-
-def _margin_db(amp: float, floor: float) -> float:
-    """amp over floor (dB); NaN if either isn't positive."""
-    return 20 * math.log10(amp / floor) if amp > 0 and floor > 0 else math.nan
-
-
 class SaPsrrMeter:
     """VIN from the AD2 (sine fit, as Ad2SineFit); VOUT from the HP 8591E from psrr.sa_from up.
 
-    The analyzer sees VOUT through U4, R14 (47 ohm), J9, the DC block and the coax, so its reading is
-    VOUT x the path gain. That gain is measured in the run, never assumed: from sa_from to sa_cal_to
-    the AD2 also measures VOUT, and where both readings are sa_cal_margin_db above their floors their
-    ratio is a path-gain point. finish() takes the median, checks the points agree within
-    sa_path_tolerance_db, and converts every analyzer reading to VOUT. Below sa_from (the analyzer
-    starts at 9 kHz) VOUT is the AD2's. The analyzer gives no phase.
+    The analyzer sees VOUT through U4, R14 (47 ohm), J9, the DC block and the coax: its reading is VOUT x
+    that path's gain, taken from an sa-path-cal run (`curve`, measured with a 100 mV tone and the LDO off).
+    finish() converts every analyzer reading with it and checks it against this run: where both meters read
+    VOUT sa_cal_margin_db above their floors (sa_from to sa_cal_to, with sa_cal_averages AD2 captures), they
+    must agree within sa_path_tolerance_db, else the calibration doesn't describe today's path (the coax or
+    DC block changed) and the analyzer's points are invalid. Below sa_from VOUT is the AD2's. No phase.
     """
 
-    def __init__(self, bench: Bench, ps: PsrrConfig) -> None:
+    def __init__(self, bench: Bench, ps: PsrrConfig, curve: PathGainCurve) -> None:
         if bench.sa is None:
             raise InstrumentError("psrr --meter sa needs the HP 8591E open ([sa], found on GPIB)")
-        self.bench, self.ps, self.sa = bench, ps, bench.sa
+        self.bench, self.ps, self.sa, self.curve = bench, ps, bench.sa, curve
+        for f in ps.frequencies():  # refuse before anything powers up: no extrapolating the curve
+            if f >= ps.sa_from:
+                curve.gain(f)
         self.ad2 = Ad2SineFit(bench, ps)
         self.name = "AD2 (VIN) + HP 8591E (VOUT)"
         self.readings: dict[float, SaReading] = {}  # by frequency; a re-levelled point overwrites its first
-        self.path_gain: float | None = None  # V/V, once finish() has measured it
-        self.path_points: list[tuple[float, float]] = []  # (Hz, V/V) the gain was measured from
+        self.checks: list[dict] = []  # where both meters read VOUT: how far apart (dB)
         self.sa.preset()
 
     def measure(self, frequency: float) -> Tone:
         """The AD2's tone (VIN, and VOUT as it sees it); from sa_from up also the analyzer's reading."""
-        overlap = self.ps.sa_from <= frequency <= self.ps.sa_cal_to
-        # where the path gain is measured the AD2's VOUT must clear its floor: more captures there
-        tone = self.ad2.measure(frequency, self.ps.sa_cal_averages if overlap else None)
+        check_band = self.ps.sa_from <= frequency <= self.ps.sa_cal_to
+        # where the calibration is checked the AD2's VOUT must clear its floor: more captures there
+        tone = self.ad2.measure(frequency, self.ps.sa_cal_averages if check_band else None)
         if frequency >= self.ps.sa_from:
-            self.readings[frequency] = self._read(frequency)
+            self.readings[frequency] = read_tone(self.sa, frequency)
         return tone
 
-    def _read(self, f: float) -> SaReading:
-        lo, hi = SA_RBW_RANGE
-        want = min(max(f / 10, lo), hi)
-        rbw = self.sa.tune(center=f, span=SA_SPAN_RBWS * want, rbw=want, ref_level_dbm=SA_REF_LEVEL_DBM)
-        self.sa.sweep()
-        pk = self.sa.peak()
-        # the tone: the peak if it's at f (within 2 RBWs), else whatever is at f (then it's under the noise)
-        tone = pk if abs(pk.frequency - f) <= 2 * rbw else self.sa.marker_at(f)
-        noise = max(
-            self.sa.marker_at(f + SA_FLOOR_RBWS * rbw).vpeak, self.sa.marker_at(f - SA_FLOOR_RBWS * rbw).vpeak
-        )
-        return SaReading(tone.vpeak, noise * 10 ** (SA_FLOOR_DB / 20), rbw, tone.frequency, tone.dbm)
-
     def finish(self, points: list[PsrrPoint]) -> tuple[list[str], list[str]]:
-        """Measure the path gain from the overlap, convert the analyzer's points to VOUT. (issues, notes)."""
+        """Convert the analyzer's readings with the curve, check it against the AD2. (issues, notes)."""
         ps, margin = self.ps, 10 ** (self.ps.sa_cal_margin_db / 20)
-        for p in points:  # the analyzer's own readings are kept on every point it read, whatever follows
-            p.sa = self.readings.get(p.frequency)
-        for p in points:
-            if p.frequency in self.readings:
-                r = self.readings[p.frequency]
-                usable = (
-                    not p.issues
-                    and p.frequency <= ps.sa_cal_to
-                    and p.tone.vout_floor > 0
-                    and abs(p.tone.vout) >= margin * p.tone.vout_floor
-                    and r.vpeak >= margin * r.floor_vpeak
-                )
-                if usable:
-                    self.path_points.append((p.frequency, r.vpeak / abs(p.tone.vout)))
         sa_points = [p for p in points if p.frequency in self.readings]
-        if not self.path_points:
-            seen = "; ".join(
-                f"{p.frequency:g} Hz: AD2 {_margin_db(abs(p.tone.vout), p.tone.vout_floor):.1f} dB, "
-                f"8591E {p.sa.margin_db:.1f} dB"
-                for p in sa_points
-                if p.frequency <= ps.sa_cal_to
-            )
-            issue = (
-                f"the 8591E's path gain couldn't be measured: no point from {ps.sa_from:g} to {ps.sa_cal_to:g} Hz "
-                f"had both the AD2's and the analyzer's VOUT {ps.sa_cal_margin_db:g} dB above their floors "
-                f"({seen}). Its points keep the AD2's VOUT (check U4's rails, J10, the J9 coax and the DC block)"
-            )
-            for p in sa_points:
-                p.issues.append(issue)
-            return [issue], []
-        gains_db = [20 * math.log10(g) for _, g in self.path_points]
-        self.path_gain = 10 ** (float(np.median(gains_db)) / 20)
-        issues, notes = [], []
-        spread = max(gains_db) - min(gains_db)
-        if spread > ps.sa_path_tolerance_db:
-            issues.append(
-                f"the 8591E's path gain varies {spread:.1f} dB across {len(gains_db)} points "
-                f"({', '.join(f'{f:g} Hz: {g:+.1f} dB' for (f, _), g in zip(self.path_points, gains_db, strict=True))}): "
-                "the path isn't flat (a DC block rolling off at low frequency?), so one gain can't convert the sweep"
-            )
-            for p in sa_points:
-                p.issues.append(issues[0])
-        g_db = 20 * math.log10(self.path_gain)
-        notes.append(
-            f"8591E path gain {g_db:+.2f} dB (median of {len(gains_db)} points, {min(gains_db):+.2f} to "
-            f"{max(gains_db):+.2f} dB) from VOUT on both meters at {ps.sa_from:g}-{ps.sa_cal_to:g} Hz; "
-            f"assumed the same up to {max(p.frequency for p in sa_points):g} Hz"
-        )
-        if abs(g_db - SA_PATH_EXPECTED_DB) > SA_PATH_NOTE_DB:
-            notes.append(
-                f"the path gain is {g_db - SA_PATH_EXPECTED_DB:+.1f} dB from the {SA_PATH_EXPECTED_DB:+.1f} dB that U4 into "
-                "R14 + 50 ohm should give: check the J9 coax, the DC block and U4"
-            )
+        for p in sa_points:  # the analyzer's own readings are kept on every point it read
+            p.sa = self.readings[p.frequency]
+        c = self.curve
+        notes = [
+            f"8591E path from {c.source}"
+            + (f", measured {c.age_hours:.1f} h before this run" if math.isfinite(c.age_hours) else "")
+            + f": {min(c.gain_db):+.2f} to {max(c.gain_db):+.2f} dB over {c.frequencies[0]:g}-{c.frequencies[-1]:g} Hz"
+        ]
         for p in sa_points:
-            r, t = self.readings[p.frequency], p.tone
+            r, t, g = p.sa, p.tone, c.gain(p.frequency)
+            vout = r.vpeak / g
+            if (
+                not p.issues
+                and p.frequency <= ps.sa_cal_to
+                and t.vout_floor > 0
+                and abs(t.vout) >= margin * t.vout_floor
+                and r.vpeak >= margin * r.floor_vpeak
+            ):
+                self.checks.append(
+                    {
+                        "frequency_hz": p.frequency,
+                        "ad2_vout_v": abs(t.vout),
+                        "sa_vout_v": vout,
+                        "diff_db": 20 * math.log10(vout / abs(t.vout)),
+                    }
+                )
             p.ad2_vout = abs(t.vout)
             p.tone = Tone(
                 vin=t.vin,
-                vout=complex(r.vpeak / self.path_gain, 0.0),
+                vout=complex(vout, 0.0),
                 vin_floor=t.vin_floor,
-                vout_floor=r.floor_vpeak / self.path_gain,
+                vout_floor=r.floor_vpeak / g,
                 vin_dc=t.vin_dc,
                 sample_rate=t.sample_rate,
                 cycles=t.cycles,
                 phase_known=False,
                 vout_meter="8591E",
             )
+        issues = []
+        if not self.checks:
+            notes.append(
+                f"the calibration couldn't be checked in this run: no point from {ps.sa_from:g} to {ps.sa_cal_to:g} Hz "
+                f"had both meters' VOUT {ps.sa_cal_margin_db:g} dB above their floors"
+            )
+        else:
+            worst = max(self.checks, key=lambda k: abs(k["diff_db"]))
+            listing = ", ".join(f"{k['frequency_hz']:g} Hz: {k['diff_db']:+.2f} dB" for k in self.checks)
+            if abs(worst["diff_db"]) > ps.sa_path_tolerance_db:
+                issues.append(
+                    f"the 8591E path calibration doesn't match this run: its VOUT differs from the AD2's by "
+                    f"{listing} (tolerance ±{ps.sa_path_tolerance_db:g} dB). Re-run sa-path-cal if the coax, DC "
+                    "block or U4 changed"
+                )
+                for p in sa_points:
+                    p.issues.append(issues[0])
+            else:
+                notes.append(f"calibration checked against the AD2 in this run: {listing}")
         return issues, notes
 
 
@@ -405,7 +352,7 @@ class PsrrResult:
     vout_nominal: float  # V
     setup_issues: list[str] = field(default_factory=list)  # calibration / VOUT problems
     notes: list[str] = field(default_factory=list)  # findings that don't invalidate the run
-    path_gain_db: float | None = None  # meter = sa: the 8591E path's gain, measured from the overlap (dB)
+    sa_cal: dict | None = None  # meter = sa: the calibration used (folder, age) and its checks in this run
 
     @property
     def issues(self) -> list[str]:
@@ -466,7 +413,7 @@ class PsrrResult:
             "issues": self.issues,
             "notes": self.notes,
             "meter": self.meter,
-            "sa_path_gain_db": self.path_gain_db,
+            "sa_cal": self.sa_cal,
             "buffer_rail_v": self.rail,
             "vin_dc_v": self.vin_dc,
             "w1_dc_v": self.w1_dc,
@@ -526,12 +473,21 @@ def _check_peak(bench: Bench, tone: Tone, f: float) -> None:
         )
 
 
-def run(bench: Bench, ps: PsrrConfig, meter: PsrrMeter | None = None) -> PsrrResult:
+def run(
+    bench: Bench, ps: PsrrConfig, meter: PsrrMeter | None = None, sa_cal: PathGainCurve | None = None
+) -> PsrrResult:
     """Measure PSRR at each of ps.frequencies() (see the module docstring for steps and checks).
 
-    ps: the [psrr] section. meter: how the tones are measured (default Ad2SineFit). The interlock,
-    dut.vin_max and the wavegen limit raise InstrumentError; other problems are recorded as issues.
+    ps: the [psrr] section. meter: how the tones are measured (default Ad2SineFit, or SaPsrrMeter with
+    psrr.meter = "sa", which needs `sa_cal`, an sa-path-cal curve covering sa_from up to f_stop). The
+    interlock, dut.vin_max and the wavegen limit raise InstrumentError; other problems are recorded as issues.
     """
+    if meter is None and ps.meter == "sa":  # before anything powers up: a curve that covers the sweep
+        if sa_cal is None:
+            raise InstrumentError("psrr --meter sa needs an sa-path-cal curve (run sa-path-cal, or --sa-cal)")
+        for f in ps.frequencies():
+            if f >= ps.sa_from:
+                sa_cal.gain(f)
     cfg = bench.cfg
     a = cfg.ad2
     bench.confirm_wiring("PSRR", wiring(bench, ps), ref_probe=("vin", 0), psu_to="rail")
@@ -547,7 +503,9 @@ def run(bench: Bench, ps: PsrrConfig, meter: PsrrMeter | None = None) -> PsrrRes
     for i in setup_issues:
         log.warning("psrr: %s (running anyway; the data will show it)", i)
     i_load = bench.loadbank.current(ps.load_code, cfg.dut.vout_nominal)
-    meter = meter or (SaPsrrMeter(bench, ps) if ps.meter == "sa" else Ad2SineFit(bench, ps))
+    if meter is None and ps.meter == "sa":
+        meter = SaPsrrMeter(bench, ps, sa_cal)
+    meter = meter or Ad2SineFit(bench, ps)
     # Largest amplitude W1 may play: the W1 peak within the bench's wavegen limit, and the VIN peak
     # (the measured DC level + amplitude, the buffer being unity gain) within vin_max less the AD2's
     # error margin. The second matters when the buffer's offset puts VIN above W1.
@@ -605,13 +563,16 @@ def run(bench: Bench, ps: PsrrConfig, meter: PsrrMeter | None = None) -> PsrrRes
     bench.loadbank.off()
 
     notes = []
-    path_gain_db = None
-    if isinstance(meter, SaPsrrMeter):  # the path gain from the overlap; the analyzer's points to VOUT
+    sa_cal = None
+    if isinstance(meter, SaPsrrMeter):  # the analyzer's points to VOUT with the calibration, checked
         sa_issues, sa_notes = meter.finish(points)
         setup_issues += sa_issues
         notes += sa_notes
-        if meter.path_gain is not None:
-            path_gain_db = 20 * math.log10(meter.path_gain)
+        sa_cal = {
+            "source": meter.curve.source,
+            "age_hours": meter.curve.age_hours,
+            "checks": meter.checks,
+        }
     good = [p for p in points if not p.issues]
     if good and not good[0].limited and good[0].psrr_db < 3:
         notes.append(
@@ -636,7 +597,7 @@ def run(bench: Bench, ps: PsrrConfig, meter: PsrrMeter | None = None) -> PsrrRes
         cfg.dut.vout_nominal,
         list(dict.fromkeys(setup_issues)),
         notes,
-        path_gain_db,
+        sa_cal,
     )
 
 

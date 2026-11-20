@@ -263,7 +263,7 @@ load_code = 22               # 20.04 mA (B1 + B2 + B4)
 averages = 4                 # captures per frequency, averaged coherently
 cycles = 20                  # min sine cycles per capture (8192 samples, up to 100 MS/s)
 meter = "ad2"                # or "sa" (--meter sa): VOUT from the 8591E through U4 / J9 / DC block from sa_from up
-sa_from = 10e3               # Hz; the path gain is measured against the AD2 from here to sa_cal_to (50 kHz)
+sa_from = 30e3               # Hz: below it the 8591E's LO feedthrough swamps VOUT; the sa-path-cal curve is checked to 100 kHz
 
 [split_rails]                # line-reg --split-rails: dropout "Method B", BGR_VDD / OTA_VDD on PSU OUT2
 psu_channel = 2              # OUT2 + -> J1 pin 1 (BGR_VDD) and J1 pin 13 (OTA_VDD), OUT2 - -> GND; jumpers 1-3 / 13-15 out

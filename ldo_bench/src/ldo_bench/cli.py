@@ -1170,6 +1170,41 @@ def line_tran(
     )
 
 
+@app.command("sa-path-cal")
+def sa_path_cal(
+    config: ConfigOpt = DEFAULT_CONFIG,
+    out: OutOpt = Path("results"),
+    sim: SimOpt = False,
+    save_sim: SaveSimOpt = False,
+    psu: PsuOpt = None,
+    ad_serial: AdOpt = None,
+    yes: YesOpt = False,
+    verbose: VerboseOpt = False,
+) -> None:
+    """The 8591E's path gain from U4's input (J10 out, W2 on J10 pin 1, 100 mV) to the analyzer, over psrr's
+    analyzer range, with the LDO unpowered: the curve psrr --meter sa applies."""
+    from ldo_bench.procedures import sa_path_cal as proc
+
+    cfg = _load(config, verbose)
+    for name in ("sa", "buffer", "psrr"):
+        if getattr(cfg, name) is None:
+            _fail(f"sa-path-cal needs a [{name}] section in the config")
+    _run(
+        cfg,
+        config,
+        proc,
+        lambda b: proc.run(b, cfg.psrr),
+        out=out,
+        sim=sim,
+        save_sim=save_sim,
+        psu=psu,
+        ad=ad_serial,
+        yes=yes,
+        use_dmm=False,
+        use_sa=True,
+    )
+
+
 @app.command("psrr")
 def psrr(
     config: ConfigOpt = DEFAULT_CONFIG,
@@ -1186,6 +1221,16 @@ def psrr(
             "--meter",
             help="VOUT from: ad2 (sine fit) or sa (the HP 8591E through U4 / J9 from psrr.sa_from up, its path "
             "gain measured against the AD2); default psrr.meter",
+        ),
+    ] = None,
+    sa_cal: Annotated[
+        Path | None,
+        typer.Option(
+            "--sa-cal",
+            exists=True,
+            file_okay=False,
+            help="With --meter sa: the sa-path-cal run folder whose curve converts the 8591E's readings "
+            "(default: the newest valid one under --out)",
         ),
     ] = None,
     out: OutOpt = Path("results"),
@@ -1213,11 +1258,27 @@ def psrr(
         load_code=_load_code(cfg, load),
         meter=meter,
     )
+    curve = None
+    if sec.meter == "sa":  # the path calibration, loaded before anything opens
+        from ldo_bench.instruments.base import InstrumentError as _Err
+        from ldo_bench.procedures.sa_path_cal import PathGainCurve
+
+        try:
+            if sa_cal is not None:
+                curve = PathGainCurve.load(sa_cal)
+            elif sim:  # the simulator's own path: U4 (0.98) into R14 + 50 ohm, flat
+                import math
+
+                curve = PathGainCurve.flat(20 * math.log10(0.98 * 50 / 97), 9e3, 2e6, "simulator (flat)")
+            else:
+                curve = PathGainCurve.newest(out)
+        except _Err as e:
+            _fail(str(e))
     _run(
         cfg,
         config,
         proc,
-        lambda b: proc.run(b, sec),
+        lambda b: proc.run(b, sec, sa_cal=curve),
         out=out,
         sim=sim,
         save_sim=save_sim,

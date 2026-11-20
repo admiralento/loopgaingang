@@ -93,6 +93,7 @@ Procedures never program a voltage onto the DUT directly. They call Bench method
 | `psu_output(v)` | PSU with only a meter or load on it (psu-check, loadbank-check, `psu-hold` / `psu-sweep --to bench`) | `psu.v_max` |
 | `set_psu_limit(high=, amps=)` | the PSU's current limit, before the output first turns on | `psu.current_limit`, or `psu.high_current_limit` with `high=True`; `amps` only lower |
 | `vin_from_wavegen(v)` | W1 DC → buffer → VIN | `buffer_w1_limit`: `min(dut.vin_max, 5 V)`, or `line_tran.w1_max` while line-tran has called `allow_line_tran_w1(True)` (after its interlock; reset when it returns and in the shutdown). The same limit holds for the square and sine below |
+| `u4_input_from_wavegen(dc, amplitude, f)` | W2 → U4's input, J10 pin 1, J10 removed (sa-path-cal) | 0 to 1.4 V; at most 0.6 V until `prove_j10_open()` has shown VOUT doesn't follow W2. The shutdown holds it at 0 V until the rails are off |
 | `vin_square_from_wavegen(low, high, f)` | W1 square → buffer → VIN (line-tran) | both levels within `min(dut.vin_max, 5 V)`; line-tran then checks VIN on the square against the limit |
 | `vin_sine_from_wavegen(dc, amplitude, f)` | W1 sine → buffer → VIN | peak within `min(dut.vin_max, 5 V)` |
 | `en_ain_sine(ch, f, low, high, shape)` | W1 sine, triangle or square → EN_AIN (enable-sine) | −0.3 V to `min(dut.vin_max, 5 V)` |
@@ -243,4 +244,4 @@ The tasks are defined in `[tool.poe.tasks]` in `pyproject.toml` (poethepoet, a d
 2. Add an `open_<kind>()` to `discovery.py` using the `Finder`, and a config section with `resource` and the RS-232 settings.
 3. Add a fake to `sim.py`, and driver tests against a fake transport.
 
-**Spectrum analyzer (PSRR past the AD2's floor):** done as `SaPsrrMeter` (`psrr --meter sa`): it wraps `Ad2SineFit` for VIN (and VOUT below `sa_from`), stashes the 8591E's raw readings, and `finish(points)`, called by `run()` after the sweep, measures the path gain from the overlap and converts them. Another meter can follow the same `measure(f) -> Tone` / optional `finish` shape.
+**Spectrum analyzer (PSRR past the AD2's floor):** done as `SaPsrrMeter` (`psrr --meter sa`): it wraps `Ad2SineFit` for VIN (and VOUT below `sa_from`), stashes the 8591E's raw readings (`sa_path_cal.read_tone`), and `finish(points)`, called by `run()` after the sweep, converts them with a `PathGainCurve` from an `sa-path-cal` run and checks the curve against the AD2. Another meter can follow the same `measure(f) -> Tone` / optional `finish` shape.

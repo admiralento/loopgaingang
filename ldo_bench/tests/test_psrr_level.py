@@ -1,6 +1,7 @@
 """psrr levelling past the buffer's roll-off (bench 2026-11-20: U2's ~5 ohm into ~0.5 uF on VIN, ~60 kHz),
-small tones on the analyzer's points, and more AD2 averages where the path gain is measured."""
+small tones on the analyzer's points, and more AD2 averages where its calibration is checked."""
 
+import math
 from itertools import pairwise
 
 import pytest
@@ -8,6 +9,9 @@ import pytest
 from ldo_bench.bench import open_bench
 from ldo_bench.procedures import psrr
 from ldo_bench.procedures.line_tran import vin_limit
+from ldo_bench.procedures.sa_path_cal import PathGainCurve
+
+CURVE = PathGainCurve.flat(20 * math.log10(0.98 * 50 / 97), 9e3, 2e6, "test curve")
 
 
 def _cfg(jafwak, **upd):
@@ -25,7 +29,7 @@ def _run(cfg, fc=60e3, setup=None, spy=None):
             setup(b.sim_model)
         if spy:
             spy(b)
-        res = psrr.run(b, cfg.psrr)
+        res = psrr.run(b, cfg.psrr, sa_cal=CURVE if cfg.psrr.meter == "sa" else None)
         limit = vin_limit(b)
     return res, limit
 
@@ -65,8 +69,9 @@ def test_small_tones_are_valid_on_the_analyzers_points_only(jafwak):
     assert any("only carries" in i for p in res_ad2.points if p.frequency >= 400e3 for i in p.issues)
 
 
-def test_overlap_points_take_sa_cal_averages(jafwak):
-    cfg = _cfg(jafwak, meter="sa", f_start=1e3, f_stop=100e3)
+def test_check_band_points_take_sa_cal_averages(jafwak):
+    """From sa_from to sa_cal_to (30-100 kHz) the AD2 takes sa_cal_averages, to check the curve there."""
+    cfg = _cfg(jafwak, meter="sa", f_start=1e3, f_stop=300e3, sa_cal_averages=16)
     counts: dict[float, int] = {}
 
     def spy(b):
@@ -83,16 +88,6 @@ def test_overlap_points_take_sa_cal_averages(jafwak):
     for f, n in counts.items():
         k = cfg.psrr.sa_cal_averages if cfg.psrr.sa_from <= f <= cfg.psrr.sa_cal_to else cfg.psrr.averages
         assert n % k == 0 and n >= k, (f, n)
-
-
-def test_more_overlap_averages_find_a_path_gain_four_dont(jafwak):
-    def noisy(m):
-        m.noise_rms = 4e-3  # an AD2 floor near VOUT's 10-50 kHz ripple, as on the bench
-
-    res4, _ = _run(_cfg(jafwak, meter="sa", sa_cal_averages=2), setup=noisy)
-    res32, _ = _run(_cfg(jafwak, meter="sa"), setup=noisy)
-    assert res4.path_gain_db is None
-    assert res32.path_gain_db is not None, res32.issues
 
 
 def test_a_gain_that_rises_between_frequencies_cant_push_vin_over(jafwak):

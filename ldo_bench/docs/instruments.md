@@ -125,4 +125,4 @@ The driver follows the Agilent 54620-Series Programmer's Guide (pub. 54622-97038
 - **Input:** 50 Ω, 9 kHz to 1.8 GHz, 25 V DC maximum (Option 001: 100 V DC). These come from search results for the datasheet, not the datasheet itself. Never put VOUT on it without a DC block or a buffer.
 - **Amplitudes** are read in dBm and converted to V peak into 50 Ω (`dbm_to_vpeak`).
 - **Before using it, run `sa-check`** (see [tests.md](tests.md#sa-check-hp-8591e-on-its-calibrator)).
-- **PSRR:** `psrr --meter sa` (`SaPsrrMeter`): VOUT from the 8591E through U4 / J9 from 10 kHz up, the path gain measured against the AD2 in 10–50 kHz. See [tests.md](tests.md#psrr-power-supply-rejection-vs-frequency).
+- **PSRR:** `psrr --meter sa` (`SaPsrrMeter`): VOUT from the 8591E through U4 / J9 from 30 kHz up, converted with the curve from `sa-path-cal` and checked against the AD2 at 30–100 kHz. Below ~30 kHz its LO feedthrough swamps tens-of-µV tones. See [tests.md](tests.md#psrr-power-supply-rejection-vs-frequency).

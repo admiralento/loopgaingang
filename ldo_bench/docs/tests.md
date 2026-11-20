@@ -327,6 +327,19 @@ Talks to the analyzer only: no board, PSU or AD2. Run it before anything relies 
 - **Saves:** `data.csv` (calibrator and floor), `summary.json` (with `option_130`), `meta.json`. No plot.
 - **Config:** `[sa]`; `--sa` overrides the resource.
 
+### `sa-path-cal`: the 8591E's path gain, for `psrr --meter sa`
+The LDO stays unpowered. W2 feeds U4's input directly with a known 100 mV tone, so the path from U4's input to the analyzer (U4, R14, J9, DC block, coax) is measured with plenty of signal, at each frequency.
+- **Wiring:** U2 and U4 on the split rails as for psrr; W1 → VIN_FG (holds U2's input at 0 V, so VIN stays off). **J10 removed.** W2 → J10 pin 1 (U4's input). Scope 1 → J10 pin 1; scope 2 → OUTA (VOUT). J9 → DC block → coax → 8591E (the same cable and block as psrr will use). Nothing on VIN_DC.
+- **Does:**
+  1. Rails up with W1 at 0 V. Scope 2 is on VOUT here, so the rails' ramp check reads VOUT, not VIN. If the PSU were on VIN, the LDO would start regulating and VOUT would leave the window by VIN ≈ 1.3 V, under `dut.vin_max`. A weaker guard than usual. VOUT must then read under 0.15 V, else stop.
+  2. **J10 proof** (`Bench.prove_j10_open`): W2 at 0.3 then 0.6 V DC. J10 pin 1 must follow; VOUT must not, or J10 is still in and W2 would be driving the LDO's output, so stop. W2 can't go above 0.6 V before this passes (the Bench refuses), nor ever above 1.4 V or below 0 V.
+  3. At 6 frequencies per decade from `psrr.sa_from` to `psrr.f_stop`: W2 plays 1.2 V + 100 mV. The AD2 fits it on J10 pin 1 (16 captures) and the 8591E reads it on J9 with psrr's exact settings. Gain = analyzer ÷ AD2.
+  4. **Linearity:** at the first, middle and last frequency, the same with 10 mV and 1 mV tones (psrr's tones are far smaller). The gain must hold within 0.5 dB, else a setup issue.
+  5. W2 to 0 V, rails down; the shutdown also holds W2 at 0 V until the rails are off.
+- **Not valid:** either reading under 20 dB above its floor, or the linearity check failing. psrr won't use an `_INVALID` or `_SIM` run.
+- **Saves:** `data.csv` (`kind` = cal / linearity, both readings and margins, `gain_db`), `summary.json`, `plot.png` (gain vs frequency).
+- **Not run on the board yet.**
+
 ### `psrr`: power-supply rejection vs frequency
 - **Wiring** (single-rail buffer; JAFWAK with `[buffer]`: see [Split-supply U2](#split-supply-u2-jafwak-buffer)):
   - PSU OUT1 -> buffer rail VS_BUFF / VDD_BUF and GND. NOT on VIN: the rail goes above the LDO's VIN limit
@@ -360,17 +373,15 @@ Talks to the analyzer only: no board, PSU or AD2. Run it before anything relies 
   - a note if VOUT follows VIN at low frequency (dropout, or scope 1 on VIN)
 - **Plot:** PSRR vs frequency, and the VIN / VOUT amplitudes with the VOUT floor.
 - **No scope on VREF:** the BGR's own PSRR (`--measure vref`, a scope on TP3 through a 10x probe) was removed on 2026-11-14. A scope on VREF loads the BGR and pulls VREF, and VOUT with it, down (seen in enable-startup). VREF is read only with the DMM at 10 GOhm (vref-line, temp).
-- **Spectrum analyzer (`--meter sa`, added 2026-11-20, simulator only):** VIN still comes from the AD2; from `sa_from` (10 kHz) up, VOUT comes from the HP 8591E.
-  - **Path:** VOUT → J10 → U4 (on ±5 V; V− by jumper wires, JP3 open: low-quiescent mode) → R14 47 Ω → J9 → DC block → coax → 8591E INPUT. The DC block must pass 10 kHz: many SMA blocks are only rated from about 10 MHz.
-  - **Each point:** RBW = f/10 within 300 Hz–3 kHz, span 20 RBWs, reference level −20 dBm. Marker to the peak (or at f, if the peak isn't within 2 RBWs). The floor is the louder of the readings 6 RBWs either side, + 6 dB.
-  - **Path gain, measured, never assumed:** from `sa_from` to `sa_cal_to` (50 kHz) the AD2 also measures VOUT, with `sa_cal_averages` (128) captures there, not `averages` (4). On 2026-11-20 VOUT was only 80–150 µV at 10–50 kHz: 13 dB or less above the AD2's 4-capture floor, and with 32 captures 20.0, 15.5 and 17.4 dB. If no point qualifies, the issue lists both margins at each overlap point. Where both readings are `sa_cal_margin_db` (20 dB) above their floors, their ratio is a path-gain point. The median converts every analyzer reading to VOUT.
-    - **No such point:** the analyzer's points are invalid and keep the AD2's VOUT.
-    - **Points disagreeing by more than `sa_path_tolerance_db` (1 dB):** the path isn't flat (a DC block rolling off?) and the run is invalid.
-    - **More than 3 dB from U4 into 47 Ω + 50 Ω (−5.8 dB):** a note.
-  - **Saved either way:** `data.csv` has the analyzer's raw reading at every point it read (`sa_dbm`, `sa_vpeak_v`, `sa_floor_vpeak_v`, `sa_margin_db`, `sa_rbw_hz`, `sa_peak_frequency_hz`), at its input, before the path gain, whether or not the gain was measured.
-  - **Below `sa_from`** VOUT is the AD2's, as before. Analyzer points have no phase. The report shows which meter measured VOUT, and the AD2's own reading next to the analyzer's. The plot marks the AD2's as ×.
-  - **Assumed:** the path gain is flat from 50 kHz to 1 MHz (U4's bandwidth is far above it; the DC block, coax and analyzer aren't checked there).
+- **Spectrum analyzer (`--meter sa`, added 2026-11-20, simulator only):** VIN still comes from the AD2; from `sa_from` (30 kHz) up, VOUT comes from the HP 8591E.
+  - **Path:** VOUT → J10 → U4 (on ±5 V; V− by jumper wires, JP3 open) → R14 47 Ω → J9 → DC block → coax → 8591E INPUT.
+  - **Each point:** RBW = f/30 within 300 Hz–3 kHz, span 20 RBWs, reference −20 dBm. Marker to the peak (or at f, if the peak isn't within 2 RBWs). The floor is read 6 RBWs **above** the tone, + 6 dB; below it sits the analyzer's LO feedthrough near 0 Hz, which swamped the floor on 2026-11-20.
+  - **Path gain from `sa-path-cal`** (below), never assumed: `--sa-cal <run folder>`, by default the newest valid one under `--out`. Interpolated in dB on a log-frequency axis; a sweep reaching outside the curve is refused before anything powers up. `summary.json` records the curve's folder and age.
+  - **Checked in the run:** from `sa_from` to `sa_cal_to` (100 kHz) the AD2 also measures VOUT, with `sa_cal_averages` (128) captures. Where both meters read VOUT `sa_cal_margin_db` (20 dB) above their floors, they must agree within `sa_path_tolerance_db` (1 dB). If not, the curve doesn't describe today's path (coax, DC block or U4 changed) and the analyzer's points are invalid. With no such point there is a note.
+  - **Saved either way:** `data.csv` has the analyzer's raw reading at every point it read (`sa_dbm`, `sa_vpeak_v`, `sa_floor_vpeak_v`, `sa_margin_db`, `sa_rbw_hz`, `sa_peak_frequency_hz`), at its input, before the path gain.
+  - **Below `sa_from`** VOUT is the AD2's. Analyzer points have no phase. The report shows which meter measured VOUT, and the AD2's own reading next to the analyzer's; the plot marks the AD2's as ×.
   - **−5 V rail:** U2 (wide-BW, 8.5–12 mA) plus U4 (low-quiescent, 1.5–2.3 mA), against `buffer.current_limit` (20 mA).
+  - **Not explained yet (2026-11-20):** above ~200 kHz the analyzer read about 20 × the AD2's VOUT. Possibly pickup of W1's tone; the pickup check (planned) will tell.
 - **Options:**
   - `--fstart`, `--fstop`, `--ppd`
   - `--amp-mv 20`
@@ -378,6 +389,7 @@ Talks to the analyzer only: no board, PSU or AD2. Run it before anything relies 
   - `--load`
   - `--avg`
   - `--meter sa` (or `psrr.meter = "sa"`): VOUT from the 8591E from `sa_from` up
+  - `--sa-cal <folder>`: the `sa-path-cal` run whose curve converts the analyzer's readings (default: the newest valid one)
 - **Config:** `[psrr]` (`meter`, `sa_from`, `sa_cal_to`, `sa_cal_averages`, `sa_cal_margin_db`, `sa_path_tolerance_db`), `[sa]`.
 
 ---

@@ -36,6 +36,10 @@ from ldo_bench.loadbank import LoadBank
 log = logging.getLogger(__name__)
 
 SETPOINT_TOLERANCE = 1e-3  # V: the supply's setpoint readback must match what was programmed
+U4_INPUT_MAX = 1.4  # V: highest level W2 may put on U4's input (sa-path-cal: 1.2 V + 100 mV)
+U4_PROOF_MAX = 0.6  # V: W2 stays at or below this until prove_j10_open() has shown J10 is out
+J10_PROOF_LEVELS = (0.3, 0.6)  # V: W2 levels for that proof
+J10_FOLLOW = 0.5  # VOUT moving this fraction of W2's step means J10 is still joining them
 VIN_SET_REL, VIN_SET_ABS = 0.02, 0.020  # measured VIN may be off its setpoint by 2 % + 20 mV
 # AD2 VOUT may differ from the DMM's by 2 % + 50 mV: well above the AD2's DC error and a few mm of
 # probe separation (1-8 mV on the bench), well below a probe that has come off VOUT (~1 V)
@@ -222,6 +226,8 @@ class Bench:
         self._vref_on = False  # driving vref.external_v (not held at 0 V)
         self.vref_proof: dict | None = None  # what reference_on() measured, for the run's records
         self.vref_end: float | None = None  # --vref ad2: VREF_IN on the DMM at the end of the run (V)
+        self._u4_drive = False  # W2 is driving U4's input (sa-path-cal)
+        self._j10_proven = False  # prove_j10_open() passed: W2 may go above U4_PROOF_MAX
         # what VIN is now (V) and what drives it, so the reference never sits above it
         self._vin_level: float | None = None
         self._w1_limit: float | None = None  # line_tran.w1_max while line-tran runs (allow_line_tran_w1)
@@ -280,6 +286,7 @@ class Bench:
         ch1_probe: Literal["vout", "en_out"] = "vout",
         ldo_on_en_out: bool = False,
         aux_to: Literal["vref", "rails"] = "vref",
+        u4_rig: bool = False,
         en_pin: int | None = None,
         chip_powered: bool = True,
     ) -> None:
@@ -309,6 +316,9 @@ class Bench:
             self.sim_model.ldo_on_en_out = ldo_on_en_out
             self.sim_model.aux_to = aux_to
             self.sim_model.en_pin = en_pin
+        if u4_rig and self.sim_model is not None:  # sa-path-cal: the simulated operator took J10 out
+            self.sim_model.u4_rig = True
+            self.sim_model.j10_fitted = False
         if (ohm := self.cfg.loadbank.external_ohm) is not None:
             lines = [*lines, wiring.ext_load(self.cfg, ohm)]
         if self.vref_external:
@@ -694,6 +704,67 @@ class Bench:
         )
         self._awg_on = True
         self._vin_level, self._vin_from = low, "wavegen"
+
+    @property
+    def u4_channel(self) -> int:
+        """The AD2 wavegen on U4's input (sa-path-cal): the one not on U2's input (ad2.wavegen_channel)."""
+        return 2 if self.cfg.ad2.wavegen_channel == 1 else 1
+
+    def u4_input_from_wavegen(
+        self, dc: float, amplitude: float = 0.0, frequency: float | None = None
+    ) -> None:
+        """W2 on U4's input (J10 pin 1, J10 removed): DC `dc` (V), plus a sine of `amplitude` (V peak) at
+        `frequency` (Hz) if given. Between 0 and U4_INPUT_MAX (1.4 V), and at most U4_PROOF_MAX (0.6 V)
+        until prove_j10_open() has shown J10 is out: with J10 fitted W2 would drive the LDO's output."""
+        lo, hi = dc - amplitude, dc + amplitude
+        if amplitude < 0 or lo < -1e-9 or hi > U4_INPUT_MAX + 1e-9:
+            raise InstrumentError(f"refusing {lo:.3f}..{hi:.3f} V on U4's input (limit 0..{U4_INPUT_MAX} V)")
+        if hi > U4_PROOF_MAX + 1e-9 and not self._j10_proven:
+            raise InstrumentError(
+                f"refusing {hi:.3f} V on U4's input before J10 is proven out (prove_j10_open): with J10 fitted "
+                "W2 drives the LDO's output"
+            )
+        ch = self.u4_channel
+        if amplitude > 0:
+            if frequency is None or frequency <= 0:
+                raise InstrumentError("a tone on U4's input needs a positive frequency")
+            self.awg.set_wave(ch, shape="sine", frequency=frequency, low=lo, high=hi)
+        else:
+            self.awg.set_dc(ch, dc)
+        self._u4_drive = True
+
+    def prove_j10_open(self) -> dict:
+        """Prove W2 reaches U4's input and J10 is out, before W2 goes above U4_PROOF_MAX.
+
+        W2 steps through J10_PROOF_LEVELS (0.3, 0.6 V DC). Scope `ad2.vout_channel` (on J10 pin 1) must
+        follow it; scope `ad2.ref_channel` (on VOUT) must not move by J10_FOLLOW of the step. W2 is
+        then back at 0 V. Raises InstrumentError, with W2 at 0 V, if either fails. Returns the readings.
+        """
+        a, lo, hi = self.cfg.ad2, *J10_PROOF_LEVELS
+        setups = {
+            a.vout_channel: ChannelSetup(self.FINE_RANGE, 0.0),
+            a.ref_channel: ChannelSetup(self.FINE_RANGE, 0.0),
+        }
+        readings = {}
+        for level in (lo, hi):
+            self.u4_input_from_wavegen(level)
+            self.sleep(0.05)
+            r = self.scope.measure_dc(0.05, setups)
+            readings[level] = (r[a.vout_channel].mean, r[a.ref_channel].mean)
+        self.u4_input_from_wavegen(0.0)
+        (u4_lo, vout_lo), (u4_hi, vout_hi) = readings[lo], readings[hi]
+        if abs((u4_hi - u4_lo) - (hi - lo)) > 0.3 * (hi - lo):
+            raise InstrumentError(
+                f"J10 pin 1 moved {(u4_hi - u4_lo) * 1e3:.0f} mV when W2 stepped {(hi - lo) * 1e3:.0f} mV: is "
+                f"W{self.u4_channel} on J10 pin 1 and scope {a.vout_channel} on it too? Stopping"
+            )
+        if abs(vout_hi - vout_lo) > J10_FOLLOW * (hi - lo):
+            raise InstrumentError(
+                f"VOUT moved {(vout_hi - vout_lo) * 1e3:.0f} mV with W2 (stepped {(hi - lo) * 1e3:.0f} mV on J10 "
+                "pin 1): J10 is still fitted, so W2 is driving the LDO's output. Remove J10. Stopping"
+            )
+        self._j10_proven = True
+        return {"u4_v": [u4_lo, u4_hi], "vout_v": [vout_lo, vout_hi], "w2_v": [lo, hi]}
 
     def enable_logic(self, on: bool) -> None:
         """AD2 V+ on V_33 (the enable level shifters' 3.3 V side), if the config says the AD2 supplies it.
@@ -1155,6 +1226,8 @@ class Bench:
                 "buffer input 0 V",
                 lambda: self.awg.set_dc(self.cfg.ad2.wavegen_channel, 0.0) if self._buffer_up else None,
             ),
+            # sa-path-cal: U4's input held at 0 V too until its rails are off (W2 goes off later)
+            ("U4 input 0 V (W2)", lambda: self.awg.set_dc(self.u4_channel, 0.0) if self._u4_drive else None),
             ("PSU outputs off (buffer rails)", lambda: self.psu.output(False) if self._buffer_up else None),
             ("buffer V- 0 V", lambda: self.vminus_out.set_voltage(0.0) if self.vminus_out else None),
             ("wavegen off", lambda: self.awg.off(self.cfg.ad2.wavegen_channel)),
@@ -1181,6 +1254,7 @@ class Bench:
             False
         )
         self._buffer_up = self._rails_on = False
+        self._u4_drive = self._j10_proven = False
         self.vminus_out = None
         self._vin_level, self._vin_from = None, None
 

@@ -8,6 +8,7 @@ Bench automation for characterizing our LDO (the JAFWAK board) and the TPS7A7001
 | Line regulation | `line-reg` | VOUT vs VIN → mV/V and the dropout voltage |
 | VREF vs VIN | `vref-line` | the BGR output (TP3) vs VIN → mV/V and the lowest VIN it works at (JAFWAK) |
 | Load transient | `load-tran` | VOUT after a load step → peak deviation, settling time |
+| Analyzer path calibration | `sa-path-cal` | the gain from U4's input to the 8591E (J10 out, W2 100 mV, LDO off) vs frequency, for `psrr --meter sa` |
 | Spectrum analyzer check | `sa-check` | the HP 8591E on its own CAL OUT: commands, amplitude reading, narrowest RBW, noise floor. Analyzer only |
 | Line transient | `line-tran` | VOUT after a VIN step (W1 a 20 Hz square through the BUF634; `--dc-steps` for DC steps) |
 | PSRR | `psrr` | VIN ripple rejection, 100 Hz – 1 MHz |
@@ -167,7 +168,8 @@ Each run writes a folder under `results/<test>/`, e.g. `results/load-tran/202611
 | `--vref ext` (PSU OUT2 on VREF_IN) and `compare` | simulator only |
 | `line-tran --vref ad2`, `--vref-v` (added 2026-11-20) | simulator only |
 | HP 8591E: `ID?` / `REV?` / `SER?` (2026-11-20) | yes, over the UsbGpib adapter |
-| `psrr --meter sa` (8591E on VOUT through U4, added 2026-11-20) | simulator only |
+| `psrr --meter sa` (8591E on VOUT through U4, added 2026-11-20) | ran 2026-11-20, invalid (in-run path gain); now uses `sa-path-cal`'s curve: simulator only |
+| `sa-path-cal` (added 2026-11-20) | simulator only |
 | `sa-check`, the 8591E driver's other commands (added 2026-11-20) | yes (2026-11-20): every command accepted; calibrator −20.52 dBm at 300.003 MHz (−0.52 dB) |
 | `vref-line`, `temp`, `enable-sine --shape square`, `--enable dio` (added 2026-11-13) | simulator only |
 | `line-tran --enable dio` (added 2026-11-17) | simulator only |

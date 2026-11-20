@@ -240,9 +240,26 @@ class LdoModel:
     # U2's output resistance into VIN's capacitance: a first-order low-pass on the tone (bench 2026-11-20:
     # about 5 ohm x 0.5 uF, ~60 kHz). None = the buffer passes the tone at full size.
     buffer_fc: float | None = None
-    buffer_gain: Callable[[float], float] | None = (
-        None  # any VIN / W1 tone gain vs f (Hz); overrides buffer_fc
-    )
+    # any VIN / W1 tone gain vs f (Hz); overrides buffer_fc
+    buffer_gain: Callable[[float], float] | None = None
+    # sa-path-cal: J10 out, W2 on U4's input (J10 pin 1), scope 1 on J10 pin 1, scope 2 on VOUT (OUTA)
+    u4_rig: bool = False
+    j10_fitted: bool = True  # J10 joins VOUT to U4's input; the rig needs it out (a test can leave it in)
+    u4_channel: int = 2  # the AD2 wavegen on U4's input
+
+    def u4_input(self) -> tuple[float, float, float]:
+        """(DC V, tone amplitude V peak, f Hz) that W2 puts on U4's input; zeros if W2 is off."""
+        ch = self.u4_channel
+        if ch in self.awg_v:
+            return self.awg_v[ch], 0.0, 0.0
+        if ch in self.awg_wave:
+            _, f, lo, hi = self.awg_wave[ch]
+            return (lo + hi) / 2, (hi - lo) / 2, f
+        return 0.0, 0.0, 0.0
+
+    def rig_vout(self) -> float:
+        """VOUT (V) in the sa-path-cal rig: W2's level if J10 is still fitted (it drives the output), else the LDO's."""
+        return self.u4_input()[0] if self.j10_fitted else self.vout_dc()
 
     def vin_tone(self, f: float, w1_amp: float) -> float:
         """VIN's tone amplitude (V peak) for W1 playing `w1_amp` at `f` (Hz), through U2 and buffer_fc."""
@@ -256,6 +273,10 @@ class LdoModel:
         """{f: dBm} at the 8591E input for the sine W1 plays onto VIN (psrr), through U4 and R14; {} otherwise."""
         from ldo_bench.instruments.hp859x import vpeak_to_dbm
 
+        if self.u4_rig:  # sa-path-cal: W2's tone straight into U4
+            _dc, amp, f = self.u4_input()
+            g = self.sa_u4_gain * 50 / 97 * (self.sa_path(f) if self.sa_path else 1.0)
+            return {f: vpeak_to_dbm(amp * g)} if amp > 0 else {}
         if not self.awg_wave or self.psu_to != "rail":
             return {}
         _, f, lo, hi = next(iter(self.awg_wave.values()))
@@ -495,6 +516,8 @@ class SimAnalogDiscovery:
     def measure_dc(self, duration: float, setups: dict[int, ChannelSetup]) -> dict[int, DcReading]:
         n = 8192
         vout, ref = self.m.vout_dc(), self.m.ref_value()
+        if self.m.u4_rig:  # scope 1 (vout channel) on J10 pin 1 = W2's DC; scope 2 (ref) on VOUT
+            vout, ref = self.m.u4_input()[0], self.m.rig_vout()
         out = {}
         for ch in setups:
             x = self._value(ch, vout, ref) + self.m.noise(n)
@@ -527,6 +550,14 @@ class SimAnalogDiscovery:
         on the other side of it.
         """
         m = self.m
+        if m.u4_rig:  # sa-path-cal: W2's tone on J10 pin 1 (vout channel), VOUT on the ref channel
+            stimulus()
+            dc, amp, f = m.u4_input()
+            t = np.arange(n_samples) / sample_rate
+            ph = float(m.rng.uniform(0, 2 * math.pi))
+            u4 = dc + amp * np.sin(2 * math.pi * f * t + ph)
+            vout = u4 if m.j10_fitted else np.full(n_samples, m.vout_dc())
+            return self._put(u4 + m.noise(n_samples), vout + m.noise(n_samples), sample_rate, 0, False)
         if m.awg_wave and m.psu_to == "rail" and next(iter(m.awg_wave.values()))[0] == "square":
             # line-tran's square on VIN through the buffer: the next edge, as a step between its levels
             stimulus()
@@ -913,6 +944,9 @@ class Sim8591Link:
         self.done_reply = "1"
         self.garble: str | None = None
         self.amplitude_override: float | None = None
+        self.scale_error_db: Callable[[float], float] | None = (
+            None  # dB added to a reading of x dBm (log fidelity)
+        )
         self.id_reply = "HP8591E"
         self.err: list[int] = []
         self.sent: list[str] = []
@@ -927,7 +961,8 @@ class Sim8591Link:
     def _level_at(self, f: float) -> float:
         floor = self.noise_dbm_1khz + 10 * math.log10(self.rb / 1e3)
         near = [a for tf, a in self._all_tones().items() if abs(tf - f) <= self.rb / 2]
-        return max([floor, *near])
+        level = max([floor, *near])
+        return level + (self.scale_error_db(level) if self.scale_error_db else 0.0)
 
     def _do(self, part: str) -> None:
         word, _, arg = part.strip().partition(" ")

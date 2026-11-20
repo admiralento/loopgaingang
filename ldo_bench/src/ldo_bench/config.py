@@ -1058,30 +1058,33 @@ class PsrrConfig(BufferProofConfig):
         description="VOUT from the AD2's sine fit, or (sa) from the HP 8591E through U4 / J9 from sa_from up",
     )
     sa_from: float = Field(
-        10e3, ge=9e3, description="meter = sa: the 8591E reads VOUT from here up (Hz; it starts at 9 kHz)"
+        30e3,
+        ge=9e3,
+        description="meter = sa: the 8591E reads VOUT from here up (Hz). Below ~30 kHz its LO feedthrough near "
+        "0 Hz swamps VOUT's tens-of-uV tones (bench 2026-11-20); the AD2 measures VOUT there",
     )
     sa_cal_to: float = Field(
-        50e3,
+        100e3,
         gt=0,
-        description="meter = sa: the path gain (U4, R14, DC block, coax) is measured where both the AD2 and the "
-        "8591E read VOUT, from sa_from up to here (Hz)",
+        description="meter = sa: from sa_from up to here (Hz) the sa-path-cal curve is checked against the AD2's "
+        "VOUT, where both meters read it sa_cal_margin_db above their floors",
     )
     sa_cal_averages: int = Field(
         128,
         ge=1,
-        description="meter = sa: AD2 captures per point from sa_from to sa_cal_to, so its VOUT clears the margin. "
-        "VOUT is only ~80-150 uV there (bench 2026-11-20); 32 left the 10 kHz point at 20.0 dB, 128 is ~6 dB lower",
+        description="meter = sa: AD2 captures per point from sa_from to sa_cal_to, so its VOUT clears the margin "
+        "for the calibration check (VOUT is only ~50-150 uV there, bench 2026-11-20)",
     )
     sa_cal_margin_db: float = Field(
         20.0,
         gt=0,
-        description="meter = sa: a path-gain point needs both readings this far above their floors (dB)",
+        description="meter = sa: a calibration check point needs both readings this far above their floors (dB)",
     )
     sa_path_tolerance_db: float = Field(
         1.0,
         gt=0,
-        description="meter = sa: the path-gain points must agree within this (dB); more means the path isn't flat "
-        "(e.g. a DC block rolling off) and the run is invalid",
+        description="meter = sa: where both meters read VOUT they must agree within this (dB) with the sa-path-cal "
+        "curve applied, else the curve doesn't describe today's path and the analyzer's points are invalid",
     )
 
     @model_validator(mode="after")
