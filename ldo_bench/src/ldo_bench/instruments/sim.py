@@ -237,6 +237,21 @@ class LdoModel:
         None  # extra path gain vs frequency (e.g. a DC block); None = flat
     )
 
+    # U2's output resistance into VIN's capacitance: a first-order low-pass on the tone (bench 2026-11-20:
+    # about 5 ohm x 0.5 uF, ~60 kHz). None = the buffer passes the tone at full size.
+    buffer_fc: float | None = None
+    buffer_gain: Callable[[float], float] | None = (
+        None  # any VIN / W1 tone gain vs f (Hz); overrides buffer_fc
+    )
+
+    def vin_tone(self, f: float, w1_amp: float) -> float:
+        """VIN's tone amplitude (V peak) for W1 playing `w1_amp` at `f` (Hz), through U2 and buffer_fc."""
+        if self.buffer_gain is not None:
+            return w1_amp * self.buffer_gain(f)
+        if self.buffer_fc is None:
+            return w1_amp
+        return w1_amp / math.hypot(1.0, f / self.buffer_fc)
+
     def vout_ripple_at_sa(self) -> dict[float, float]:
         """{f: dBm} at the 8591E input for the sine W1 plays onto VIN (psrr), through U4 and R14; {} otherwise."""
         from ldo_bench.instruments.hp859x import vpeak_to_dbm
@@ -244,7 +259,7 @@ class LdoModel:
         if not self.awg_wave or self.psu_to != "rail":
             return {}
         _, f, lo, hi = next(iter(self.awg_wave.values()))
-        vout = abs(self.psrr_h(f)) * (hi - lo) / 2 if self.vin > 0 else 0.0
+        vout = abs(self.psrr_h(f)) * self.vin_tone(f, (hi - lo) / 2) if self.vin > 0 else 0.0
         gain = self.sa_u4_gain * 50 / 97 * (self.sa_path(f) if self.sa_path else 1.0)
         return {f: vpeak_to_dbm(vout * gain)} if vout > 0 else {}
 
@@ -653,7 +668,7 @@ class SimAnalogDiscovery:
         t = np.arange(n) / rate
         ph = float(m.rng.uniform(0, 2 * math.pi))
         vin_dc = m.vin
-        amp = (hi - lo) / 2 if vin_dc > 0 else 0.0
+        amp = m.vin_tone(f, (hi - lo) / 2) if vin_dc > 0 else 0.0
         vin = vin_dc + amp * np.sin(2 * math.pi * f * t + ph)
         if vin_dc > 0:
             vin = np.minimum(vin, m.psu_v - m.buffer_dropout)

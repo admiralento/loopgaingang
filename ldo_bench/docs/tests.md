@@ -341,7 +341,11 @@ Talks to the analyzer only: no board, PSU or AD2. Run it before anything relies 
   3. **Measurement:** several free-running AD2 captures of VIN and VOUT. Each is sampled at the rate that fits at least `cycles` periods into 8192 samples, up to 100 MS/s.
 - **Analysis:**
   - **Sine fit:** a least-squares fit at the injected frequency on each channel (a lock-in). VOUT/VIN is averaged coherently over the captures, which keeps the phase and averages noise down.
-  - **Levelling:** W1's amplitude is re-levelled if VIN's amplitude is off by more than 15 % (the buffer and board roll off at high frequency).
+  - **Levelling:** if VIN's amplitude at INA is off by more than 15 %, W1's is re-levelled, in up to 6 passes per frequency. Each pass at most 1.5 × the last, and only as far as the VIN peak, predicted from the *measured* VIN (VIN scales with W1), stays under `dut.vin_max` less the AD2 margin. W1's own peak stays within `dut.vin_max`.
+    - **Why:** on 2026-11-20 VIN rolled off above ~50 kHz (43 mV at 100 kHz, 4 mV at 1 MHz), most likely U2's ~5 Ω into the ~0.5 µF left on VIN / INB with R6 lifted (a corner near 60 kHz, the same RC as line-tran's 5–6 µs edge). The old single step stopped W1 at 81 mV, because it limited VIN DC + W1's amplitude as if the buffer passed the tone at full size.
+    - **Carry-over:** the next frequency starts from the last amplitude, limited so that even with the buffer's gain 1.5 × the last measured one, VIN stays under the limit. The measured-peak hard stop backs it up.
+    - **What it can't reach:** 50 mV at ~1 MHz would need W1 near 1 V (over its 1.9 V cap) and ±150 mA from U2, which sinks half of that from the −5 V rail (20 mA limit). So W1 stops at its cap there and VIN carries less.
+  - **Small tones on the analyzer's points:** with `--meter sa`, from `sa_from` up, a VIN tone under 30 % of the target is fine (PSRR is a ratio, and the 8591E's floor is ~1 µV). Only under 2 mV is it an issue. AD2 points keep the 30 % rule.
   - **PSRR:** PSRR (dB) = 20·log10(|VIN| / |VOUT|), positive = rejection.
 - **Floor:** the smallest VOUT ripple the AD2 resolves at that frequency, from the largest of three noise estimates:
   - the fit's leftover noise
@@ -359,7 +363,7 @@ Talks to the analyzer only: no board, PSU or AD2. Run it before anything relies 
 - **Spectrum analyzer (`--meter sa`, added 2026-11-20, simulator only):** VIN still comes from the AD2; from `sa_from` (10 kHz) up, VOUT comes from the HP 8591E.
   - **Path:** VOUT → J10 → U4 (on ±5 V; V− by jumper wires, JP3 open: low-quiescent mode) → R14 47 Ω → J9 → DC block → coax → 8591E INPUT. The DC block must pass 10 kHz: many SMA blocks are only rated from about 10 MHz.
   - **Each point:** RBW = f/10 within 300 Hz–3 kHz, span 20 RBWs, reference level −20 dBm. Marker to the peak (or at f, if the peak isn't within 2 RBWs). The floor is the louder of the readings 6 RBWs either side, + 6 dB.
-  - **Path gain, measured, never assumed:** from `sa_from` to `sa_cal_to` (50 kHz) the AD2 also measures VOUT. Where both readings are `sa_cal_margin_db` (20 dB) above their floors, their ratio is a path-gain point. The median converts every analyzer reading to VOUT.
+  - **Path gain, measured, never assumed:** from `sa_from` to `sa_cal_to` (50 kHz) the AD2 also measures VOUT, with `sa_cal_averages` (32) captures there, not `averages` (4). On 2026-11-20 VOUT was only 64–100 µV at 10–50 kHz, 13 dB or less above the AD2's 4-capture floor. Where both readings are `sa_cal_margin_db` (20 dB) above their floors, their ratio is a path-gain point. The median converts every analyzer reading to VOUT.
     - **No such point:** the analyzer's points are invalid and keep the AD2's VOUT.
     - **Points disagreeing by more than `sa_path_tolerance_db` (1 dB):** the path isn't flat (a DC block rolling off?) and the run is invalid.
     - **More than 3 dB from U4 into 47 Ω + 50 Ω (−5.8 dB):** a note.
@@ -373,7 +377,7 @@ Talks to the analyzer only: no board, PSU or AD2. Run it before anything relies 
   - `--load`
   - `--avg`
   - `--meter sa` (or `psrr.meter = "sa"`): VOUT from the 8591E from `sa_from` up
-- **Config:** `[psrr]` (`meter`, `sa_from`, `sa_cal_to`, `sa_cal_margin_db`, `sa_path_tolerance_db`), `[sa]`.
+- **Config:** `[psrr]` (`meter`, `sa_from`, `sa_cal_to`, `sa_cal_averages`, `sa_cal_margin_db`, `sa_path_tolerance_db`), `[sa]`.
 
 ---
 

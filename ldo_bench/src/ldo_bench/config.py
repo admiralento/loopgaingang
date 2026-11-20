@@ -1066,6 +1066,12 @@ class PsrrConfig(BufferProofConfig):
         description="meter = sa: the path gain (U4, R14, DC block, coax) is measured where both the AD2 and the "
         "8591E read VOUT, from sa_from up to here (Hz)",
     )
+    sa_cal_averages: int = Field(
+        32,
+        ge=1,
+        description="meter = sa: AD2 captures per point from sa_from to sa_cal_to, so its VOUT clears the margin "
+        "(VOUT is only ~100 uV there; 32 lowers the AD2's floor ~9 dB against 4)",
+    )
     sa_cal_margin_db: float = Field(
         20.0,
         gt=0,

@@ -64,6 +64,12 @@ FLOOR_SIGMA = 4.0  # a VOUT phasor smaller than this many noise sigmas counts as
 # (4 sigma: pure noise passes as "measured" with p = exp(-8) ~ 0.03 % per point; 3 sigma was 1.1 %)
 OFF_BINS = 3  # off-frequency noise fits this many frequency steps (1 / capture length) either side
 MIN_INJECTION = 0.3  # VIN amplitude below this fraction of the target: the sine isn't reaching VIN
+SA_MIN_VIN = (
+    2e-3  # V peak: on the 8591E's points a smaller tone is still fine (PSRR is a ratio), down to this
+)
+LEVEL_STEPS = 6  # levelling passes per frequency
+LEVEL_MAX_STEP = 1.5  # W1's amplitude grows at most this much per pass (and per new frequency, see run())
+LEVEL_MIN_VIN = 1e-3  # V peak: below this VIN reading the gain is too uncertain to level from
 SUMMARY_FREQS = (100.0, 1e3, 10e3, 100e3, 1e6)  # Hz, reported in summary.json when measured nearby
 # --- meter = sa (HP 8591E on VOUT through U4 -> R14 47 ohm -> J9 -> DC block -> coax) -------------------
 SA_RBW_RANGE = (300.0, 3e3)  # Hz: RBW = f / 10, within this (300 Hz is the bench unit's narrowest)
@@ -133,14 +139,16 @@ class Ad2SineFit:
             a.ref_channel: ChannelSetup(vin_range, 0.0),
         }
 
-    def measure(self, frequency: float) -> Tone:
-        """Take ps.averages free-running captures and fit the sine at `frequency` on both channels."""
+    def measure(self, frequency: float, averages: int | None = None) -> Tone:
+        """Take `averages` (default ps.averages) free-running captures and fit the sine at `frequency`
+        on both channels."""
         b, ps, a = self.bench, self.ps, self.bench.cfg.ad2
+        averages = averages or ps.averages
         # ps.cycles periods per capture, unless that needs more than max_sample_rate (then more cycles)
         rate = min(ps.max_sample_rate, ps.n_samples * frequency / ps.cycles)
         h, vin_amp, sig_in, sig_out, off, dc = [], [], [], [], [], []
         cap = None
-        for _ in range(ps.averages):
+        for _ in range(averages):
             cap = b.scope.capture(
                 sample_rate=rate,
                 n_samples=ps.n_samples,
@@ -218,7 +226,9 @@ class SaPsrrMeter:
 
     def measure(self, frequency: float) -> Tone:
         """The AD2's tone (VIN, and VOUT as it sees it); from sa_from up also the analyzer's reading."""
-        tone = self.ad2.measure(frequency)
+        overlap = self.ps.sa_from <= frequency <= self.ps.sa_cal_to
+        # where the path gain is measured the AD2's VOUT must clear its floor: more captures there
+        tone = self.ad2.measure(frequency, self.ps.sa_cal_averages if overlap else None)
         if frequency >= self.ps.sa_from:
             self.readings[frequency] = self._read(frequency)
         return tone
@@ -512,28 +522,45 @@ def run(bench: Bench, ps: PsrrConfig, meter: PsrrMeter | None = None) -> PsrrRes
     # error margin. The second matters when the buffer's offset puts VIN above W1.
     w_limit = min(min(cfg.dut.vin_max, AD2_WAVEGEN_MAX_V) - w_dc, vin_limit(bench) - v_dc)
 
-    amp = min(ps.amplitude, w_limit)
+    amp = min(ps.amplitude, w_limit)  # the first tone as if the buffer passed it at full size
+    w1_cap = min(cfg.dut.vin_max, AD2_WAVEGEN_MAX_V) - w_dc  # W1's own peak within its limit
+    sa_from = ps.sa_from if isinstance(meter, SaPsrrMeter) else math.inf
+    gain = 1.0  # VIN amplitude / W1 amplitude at the last point (the buffer and board roll off)
     points = []
     freqs = ps.frequencies()
     for n, f in enumerate(freqs, 1):
+        # carry the amplitude over, but so that even a gain LEVEL_MAX_STEP x the last one keeps VIN in bounds
+        amp = min(amp, w1_cap, max(vin_limit(bench) - v_dc, 0.0) / (LEVEL_MAX_STEP * gain))
         bench.vin_sine_from_wavegen(dc=w_dc, amplitude=amp, frequency=f)
         bench.sleep(max(0.05, ps.settle_cycles / f))  # let the LDO reach steady state at this tone
         tone = meter.measure(f)
         _check_peak(bench, tone, f)
+        # level W1 so VIN carries the target amplitude, one bounded pass at a time
+        for _ in range(LEVEL_STEPS):
+            got = abs(tone.vin)
+            if got < LEVEL_MIN_VIN or abs(got - ps.amplitude) <= ps.level_tolerance * ps.amplitude:
+                break
+            room = max(vin_limit(bench) - tone.vin_dc, 0.0)  # VIN peak headroom, from the measured DC
+            # the next VIN amplitude, predicted from this one (linear: VIN scales with W1), stays in room
+            new = min(amp * ps.amplitude / got, amp * LEVEL_MAX_STEP, amp * room / got, w1_cap)
+            if abs(new - amp) <= 1e-4:  # at a limit, or a change under 0.1 mV: stop here
+                break
+            amp = new
+            bench.vin_sine_from_wavegen(dc=w_dc, amplitude=amp, frequency=f)
+            bench.sleep(max(0.05, ps.settle_cycles / f))
+            tone = meter.measure(f)
+            _check_peak(bench, tone, f)
         got = abs(tone.vin)
-        # level W1 so VIN keeps the target amplitude (the buffer / board roll off at high f)
-        if got > MIN_INJECTION * ps.amplitude and abs(got - ps.amplitude) > ps.level_tolerance * ps.amplitude:
-            # scale by target / measured; capped at 2 x target so a bad reading can't push it far
-            new = min(amp * ps.amplitude / got, 2 * ps.amplitude, w_limit)
-            if abs(new - amp) > 1e-4:  # skip re-measuring for a change under 0.1 mV
-                amp = new
-                bench.vin_sine_from_wavegen(dc=w_dc, amplitude=amp, frequency=f)
-                bench.sleep(max(0.05, ps.settle_cycles / f))
-                tone = meter.measure(f)
-                _check_peak(bench, tone, f)
-                got = abs(tone.vin)
+        if got > 0 and amp > 0:
+            gain = got / amp
         issues = []
-        if got < MIN_INJECTION * ps.amplitude:
+        if f >= sa_from:  # the analyzer resolves a small tone: a ratio needs no 50 mV, only a real one
+            if got < SA_MIN_VIN:
+                issues.append(
+                    f"VIN only carries {got * 1e3:.2f} mV at {f:g} Hz (W1 {amp * 1e3:.0f} mV, at its limit), under "
+                    f"{SA_MIN_VIN * 1e3:g} mV: the buffer can't drive VIN's capacitance this fast"
+                )
+        elif got < MIN_INJECTION * ps.amplitude:
             issues.append(
                 f"VIN only carries {got * 1e3:.1f} mV of the {ps.amplitude * 1e3:.0f} mV sine: is the buffer "
                 f"driving VIN (JP4 to the buffer, W{a.wavegen_channel} on the buffer input SMA) and scope "
