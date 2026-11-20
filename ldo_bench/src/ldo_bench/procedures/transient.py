@@ -398,13 +398,14 @@ def xcheck_report(e) -> list[str]:
     return [line]
 
 
-def edge_report(e, extra: list[str] | None = None) -> list[str]:
+def edge_report(e, extra: list[str] | None = None, settling: list[str] | None = None) -> list[str]:
     """Report lines for one edge. Invalid edges list their setup issues and no metrics.
 
     `e` is a test's EdgeResult (needs .title, .metrics, .issues, optionally .xcheck). `extra` lines
     (e.g. line-tran's mV per V) go between the peak and the settling time. Also warns when, with
     settle_reference "pre", VOUT ends outside the band around the pre-step level (a DC shift
     bigger than the band, e.g. load regulation on a large step), since it can then never settle.
+    `settling`: lines that replace the settling time and that warning (line-tran's long capture).
     """
     lines = [f"  {e.title}"]
     issues = list(getattr(e, "issues", []))
@@ -418,12 +419,15 @@ def edge_report(e, extra: list[str] | None = None) -> list[str]:
         f"    nominal   {m.nominal:.5f} V",
         f"    peak      {m.deviation * 1e3:+.2f} mV  (band ±{m.band * 1e3:.2f} mV)",
         *(extra or []),
-        f"    settling  {ts}  (to the {'pre-step' if m.reference == 'pre' else 'final'} level)",
+        *(
+            settling
+            or [f"    settling  {ts}  (to the {'pre-step' if m.reference == 'pre' else 'final'} level)"]
+        ),
         f"    noise     {m.noise * 1e3:.3f} mV rms"
-        + ("" if m.trustworthy else "  ! above band/3: settling time limited by noise"),
+        + ("" if (m.trustworthy or settling) else "  ! above band/3: settling time limited by noise"),
     ]
     shift = m.final - m.nominal
-    if m.reference == "pre" and np.isfinite(shift) and abs(shift) > m.band:
+    if settling is None and m.reference == "pre" and np.isfinite(shift) and abs(shift) > m.band:
         lines.append(
             f"    ! VOUT ends {shift * 1e3:+.2f} mV from the pre-step level, outside the "
             f"±{m.band * 1e3:.2f} mV band, so it can never settle back to it. "

@@ -131,10 +131,11 @@ def test_edges_share_one_time_span(cfg):
         assert hi == pytest.approx(100, abs=0.2) and lo == pytest.approx(-15, abs=0.2)
 
 
-@pytest.mark.parametrize("proc", ["load_tran", "line_tran"])
+@pytest.mark.parametrize("proc", ["load_tran"])
 def test_zoom_plot_gives_each_edge_its_own_span(jafwak, proc):
     """plot.png shares one span (the slowest edge); plot_zoom.png sizes each edge to its own
-    settling time, so a 20 us edge isn't squeezed next to a 200 us one (bench, 2026-11-10)."""
+    settling time, so a 20 us edge isn't squeezed next to a 200 us one (bench, 2026-11-10).
+    line-tran's plot.png is a fixed zoom on the kick instead (test_line_tran)."""
     from dataclasses import replace
 
     import matplotlib.pyplot as plt

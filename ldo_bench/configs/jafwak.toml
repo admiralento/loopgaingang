@@ -151,6 +151,7 @@ pre_trigger = 0.2
 averages = 16
 edges = ["rising", "falling"]
 w1_max = 1.95                # V: W1 may go this high in line-tran only (U2 ~5 ohm under load); VIN still stops at vin_max (approved 2026-11-19)
+settle_window = 20e-3        # s: each edge's second, long capture, until VOUT is flat at its new level (plot_full.png)
 square_hz = 20               # W1 a square between the two levels (the AD2's DC level moves with tau ~2 ms); --dc-steps for DC
 
 [board]                      # every wiring line names these: silkscreen label + connector pin (PCB file, 2026-11-13)

@@ -1070,6 +1070,15 @@ class LineTranConfig(TransientCaptureConfig, BufferProofConfig):
             "still stopped at dut.vin_max less the AD2 margin on every reading. dut.vin_max .. +0.2 V"
         ),
     )
+    settle_window: float | None = Field(
+        20e-3,
+        gt=0,
+        description=(
+            "Length (s) of each edge's second, long capture, for how long VOUT takes to flatten at its new "
+            "level (plot_full.png). None = no long capture. Same n_samples, so the sample rate is "
+            "n_samples / settle_window"
+        ),
+    )
     square_hz: float | None = Field(
         20.0,
         gt=0,
@@ -1086,6 +1095,15 @@ class LineTranConfig(TransientCaptureConfig, BufferProofConfig):
         if self.vin_high <= self.vin_low:
             raise ValueError("line_tran.vin_high must be above vin_low")
         window = self.n_samples / self.sample_rate
+        if (
+            self.square_hz is not None
+            and self.settle_window is not None
+            and 1 / (2 * self.square_hz) <= self.settle_window
+        ):
+            raise ValueError(
+                f"line_tran.settle_window ({self.settle_window * 1e3:.1f} ms) must be shorter than half a period "
+                f"of square_hz ({1e3 / (2 * self.square_hz):.1f} ms), or the long capture sees the next edge too"
+            )
         if self.square_hz is not None and 1 / (2 * self.square_hz) <= window:
             raise ValueError(
                 f"line_tran.square_hz ({self.square_hz:g} Hz): half a period "

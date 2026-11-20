@@ -350,3 +350,88 @@ def test_vin_hard_stop_still_holds_with_w1_above_vin_max(jafwak):
         b.awg.set_dc = swing
         line_tran.run(b, cfg.line_tran.model_copy(update={"averages": 2}), cfg.analysis)
     assert not m.psu_on
+
+
+# --- two captures per edge: the kick (fast) and the new level (long) ---------------------------
+def _approach(tau, window=20e-3, n=8192, shift=6e-3, pre=0.05):
+    """VOUT stepping at t = 0 and creeping exponentially (time constant tau, s) to +shift (V)."""
+    i0 = round(pre * n)
+    t = (np.arange(n) - i0) * (window / n)
+    v = 1.19 + np.where(t >= 0, shift * (1 - np.exp(-np.maximum(t, 0) / tau)), 0.0)
+    return t, v, i0
+
+
+def test_settle_to_new_level_times_the_approach():
+    """Band = settle_fraction x the whole shift; settled when VOUT stays inside it around its final level."""
+    t, v, i0 = _approach(0.5e-3)
+    r = line_tran.settle_to_new_level(t, v, i0, 0.1)
+    assert r.final - r.nominal == pytest.approx(6e-3, rel=1e-3)
+    assert r.band == pytest.approx(0.6e-3, rel=1e-3)
+    assert r.settling_time == pytest.approx(0.5e-3 * np.log(10), rel=0.02)  # exp reaches 10 % at tau ln 10
+    assert r.flat
+
+
+def test_still_drifting_at_the_end_reports_no_settling_time():
+    """VOUT still creeping by more than the band over the last 20 % of the window: no settling time."""
+    t, v, i0 = _approach(15e-3)
+    r = line_tran.settle_to_new_level(t, v, i0, 0.1)
+    assert not r.flat and np.isnan(r.settling_time)
+
+
+def test_each_edge_has_a_fast_and_a_long_capture(jafwak):
+    lt = jafwak.line_tran
+    rates: list[float] = []
+
+    def spy(b):
+        real = b.scope.capture
+        b.scope.capture = lambda **kw: rates.append(kw["sample_rate"]) or real(**kw)
+
+    res, _ = run(jafwak, setup=spy)
+    assert not res.issues, res.issues
+    fast, slow = lt.sample_rate, lt.n_samples / lt.settle_window
+    assert rates.count(fast) == 4 * len(lt.edges) and rates.count(slow) == 4 * len(
+        lt.edges
+    )  # 4 averages each
+    for e in res.edges:
+        assert e.long is not None and e.long.flat
+        # the sim settles in µs: one noisy sample late in the window must not set the time (it gave
+        # 18.8 ms before the long capture was smoothed)
+        assert e.long.settling_time < 1e-3
+        assert e.long.t[-1] > 0.9 * (1 - 0.05) * lt.settle_window
+    s = res.summary()["edges"]["rising"]
+    assert {"new_level_v", "level_shift_v", "settle_to_new_level_s", "drift_v"} <= set(s)
+    assert {"waveform_long_rising.csv", "waveform_long_falling.csv"} <= set(res.extra_csvs())
+    assert "flat after" in res.report()
+
+
+def test_zoom_plot_shows_the_kick_and_full_plot_the_long_capture(jafwak):
+    from ldo_bench import plotting
+
+    res, _ = run(jafwak)
+    zoom = line_tran.plot(res, "JAFWAK")
+    full = line_tran.extra_plots(res, "JAFWAK")["plot_full.png"]
+    assert "plot_zoom.png" not in line_tran.extra_plots(res, "JAFWAK")
+    zoom_end = max(ax.get_xlim()[1] for ax in zoom.axes)
+    assert zoom_end == pytest.approx(line_tran.ZOOM_WINDOW * 1e6, rel=0.2)  # µs
+    full_end = max(ax.get_xlim()[1] for ax in full.axes)  # ms on the long capture
+    assert full_end == pytest.approx(0.95 * jafwak.line_tran.settle_window * 1e3, rel=0.1)
+    for f in (zoom, full):
+        plotting.close(f)
+
+
+def test_settle_window_must_fit_in_half_a_period(jafwak):
+    d = jafwak.line_tran.model_dump()
+    with pytest.raises(ValueError, match="settle_window"):
+        type(jafwak.line_tran).model_validate(d | {"square_hz": 20, "settle_window": 30e-3})
+    type(jafwak.line_tran).model_validate(d | {"square_hz": 10, "settle_window": 30e-3})
+
+
+def test_without_the_long_capture_the_old_extra_plots_remain(jafwak):
+    """settle_window = None: no long capture, so plot_full.png is the fast capture and plot_zoom.png stays."""
+    import matplotlib.pyplot as plt
+
+    res, _ = run(jafwak, settle_window=None)
+    assert all(e.long is None for e in res.edges)
+    assert set(line_tran.extra_plots(res, "x")) == {"plot_full.png", "plot_zoom.png"}
+    assert "flat after" not in res.report()
+    plt.close("all")

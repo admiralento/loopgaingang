@@ -242,6 +242,13 @@ def _amps(spec: str | None) -> float | None:
         _fail(str(e))
 
 
+def _positive_ms(option: str, ms: float) -> float:
+    """`ms` (ms) as seconds; exit 2 unless it's positive."""
+    if ms <= 0:
+        _fail(f"{option} must be positive")
+    return ms * 1e-3
+
+
 def _rate_for_window(window_ms: float | None, n_samples: int) -> float | None:
     """The sample rate (Hz) that fits `n_samples` into --window-ms; exit 2 unless it's positive."""
     if window_ms is None:
@@ -1012,6 +1019,14 @@ def line_tran(
             "--raw", help="One capture per edge, no averaging; plots show only the measured samples"
         ),
     ] = False,
+    settle_ms: Annotated[
+        float | None,
+        typer.Option(
+            "--settle-ms",
+            help="Long capture per edge (ms; default line_tran.settle_window, 20): how long VOUT takes to "
+            "flatten at its new level (plot_full.png). Must fit in half a square period",
+        ),
+    ] = None,
     out: OutOpt = Path("results"),
     sim: SimOpt = False,
     save_sim: SaveSimOpt = False,
@@ -1047,6 +1062,7 @@ def line_tran(
         sample_rate=_rate_for_window(window_ms, n),
         plot_window=None if plot_us is None else plot_us * 1e-6,
         square_hz=square_hz,
+        settle_window=None if settle_ms is None else _positive_ms("--settle-ms", settle_ms),
     )
     _run(
         cfg,

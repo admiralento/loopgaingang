@@ -71,3 +71,15 @@ def test_line_tran_raw_is_one_capture():
     assert "1 averages per edge" in r.output
     r = invoke("line-tran", "-c", config_path("jafwak"), "--sim", "--yes", "--raw", "--avg", "4")
     assert r.exit_code == 2 and "--raw" in r.output, r.output
+
+
+def test_line_tran_settle_ms():
+    r = invoke("line-tran", "-c", config_path("jafwak"), "--sim", "--yes", "--settle-ms", "10")
+    assert r.exit_code == 0, r.output
+    assert "after 10 ms" in r.output
+    r = invoke("line-tran", "-c", config_path("jafwak"), "--sim", "--yes", "--settle-ms", "30")
+    assert r.exit_code == 2 and "settle_window" in r.output, r.output  # 30 ms > half of 20 Hz
+    r = invoke(
+        "line-tran", "-c", config_path("jafwak"), "--sim", "--yes", "--settle-ms", "30", "--square-hz", "10"
+    )
+    assert r.exit_code == 0, r.output
