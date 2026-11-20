@@ -193,6 +193,7 @@ class LineTranResult:
     square_hz: float | None = None  # Hz: W1 ran as a free-running square; None = one DC step per capture
     raw: bool = False  # --raw: plots show only the measured samples (no smoothed trace)
     settle_window: float | None = None  # s, length of each edge's long capture (None = none taken)
+    vref_note: str | None = None  # the external reference and its DMM readings, for the report
 
     @property
     def issues(self) -> list[str]:
@@ -289,10 +290,26 @@ class LineTranResult:
             f"buffer rail {self.rail:.2f} V, {self.averages} averages per edge, "
             + (f"W1 a {self.square_hz:g} Hz square:" if self.square_hz else "W1 DC steps:")
         ]
+        if self.vref_note:
+            lines.append(f"  {self.vref_note}")
         for e in self.edges:
             extra = [f"    per VIN   {e.rejection * 1e3:.1f} mV of VOUT per V of VIN step (the kick)"]
             lines += edge_report(e, extra, _level_lines(e, self.settle_window))
         return "\n".join(lines)
+
+
+def _vref_note(bench: Bench) -> str | None:
+    """'VREF ...' for the report with an external reference: its driver, setpoint and DMM readings."""
+    if not bench.vref_external:
+        return None
+    info = bench.vref_info()
+    note = f"VREF from {info['driver']}: {info['external_v']:.3f} V set"
+    dmm = (info.get("proof") or {}).get("dmm_v")
+    if dmm is not None:
+        note += f"; DMM on VREF_IN {dmm:.4f} V at the start"
+    if (end := info.get("dmm_end_v")) is not None:
+        note += f", {end:.4f} V at the end"
+    return note
 
 
 def _level_lines(e: EdgeResult, window: float | None) -> list[str] | None:
@@ -645,7 +662,13 @@ def run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig, raw: bool = False)
 def _run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig, raw: bool) -> LineTranResult:
     """run() without the W1 limit reset."""
     a = bench.cfg.ad2
-    bench.confirm_wiring("line transient", wiring(bench, lt), ref_probe=("vin", 0), psu_to="rail")
+    bench.confirm_wiring(
+        "line transient",
+        wiring(bench, lt),
+        ref_probe=("vin", 0),
+        psu_to="rail",
+        dmm_probe="vref_in" if bench.vref_source == "ad2" else "vout",  # --vref ad2: the DMM reads VREF_IN
+    )
     # VIN on the fine range when it fits (0.3 mV a count, not 3 mV), for both the trigger and the record
     setups = bench.vin_fine_setups()
     bench.loadbank.set(lt.load_code)
@@ -683,7 +706,7 @@ def _run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig, raw: bool) -> Lin
             raw,
         )
     bench.vin_from_wavegen(w_lo)
-    bench.reference_on()  # --vref ext only: after the interlock and calibration, with VIN up
+    bench.reference_on()  # --vref ext / ad2 only: after the interlock and calibration, with VIN up
     vout_dc, _ = bench.measure_dc(0.05)
     setup_issues = [
         i for i in (cal_lo, cal_hi, bench.vout_issue(vout_dc.mean, source=f"scope {a.vout_channel}")) if i
@@ -769,6 +792,10 @@ def _run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig, raw: bool) -> Lin
 
     if square:
         bench.vin_from_wavegen(w_lo)  # W1 back on DC before EN and the rails come down
+    if bench.vref_on:  # the reference off while VIN is still up (--vref ad2: read it once more first)
+        if bench.vref_source == "ad2":
+            bench.vref_end = bench.measure_vref()
+        bench.reference_off()
     bench.ldo_enable(False)  # --enable dio only: EN low before the rails come down
     buffer_down(bench)
     bench.loadbank.off()
@@ -786,6 +813,7 @@ def _run(bench: Bench, lt: LineTranConfig, an: AnalysisConfig, raw: bool) -> Lin
         square,
         raw,
         lt.settle_window,
+        _vref_note(bench),
     )
 
 

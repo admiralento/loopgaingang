@@ -57,7 +57,7 @@ def _choices(name: str, model, field: str) -> type[StrEnum]:
     return StrEnum(name, {v: v for v in values})
 
 
-Vref = StrEnum("Vref", {"bgr": "bgr", "ext": "ext"})
+Vref = StrEnum("Vref", {"bgr": "bgr", "ext": "ext", "ad2": "ad2"})
 Enable = StrEnum("Enable", {"static": "static", "dio": "dio"})
 Shape = _choices("Shape", EnSineConfig, "shape")
 Method = _choices("Method", IqConfig, "method")
@@ -108,8 +108,9 @@ NoXScopeOpt = Annotated[
 VrefOpt = Annotated[
     Vref,
     typer.Option(
-        help="Reference on VREF_IN: bgr (the on-chip BGR, JP2 fitted) or ext ([vref]: PSU output on "
-        "VREF_IN, JP2 removed; asks you to confirm JP2 every run)",
+        help="Reference on VREF_IN: bgr (the on-chip BGR, JP2 fitted), ext ([vref]: PSU output on "
+        "VREF_IN, JP2 removed; asks you to confirm JP2 every run) or ad2 (line-tran only: AD2 V+ on "
+        "VREF_IN once VIN is up, read on the DMM; JP2 removed)",
     ),
 ]
 EnableOpt = Annotated[
@@ -259,13 +260,27 @@ def _rate_for_window(window_ms: float | None, n_samples: int) -> float | None:
 
 
 def _modes(
-    cfg: BenchConfig, vref: Vref = Vref.bgr, enable: Enable = Enable.static, *, split_buffer: bool = False
+    cfg: BenchConfig,
+    vref: Vref = Vref.bgr,
+    enable: Enable = Enable.static,
+    *,
+    split_buffer: bool = False,
+    allow_ad2: bool = False,
 ) -> dict:
     """Check --vref / --enable against the config (exit 2) and return them as _bench keywords.
 
     split_buffer: the test powers U2's split supply (line-tran, psrr), whose negative rail is the
-    PSU output the external reference also needs. The Bench refuses the same combinations.
+    PSU output the external reference also needs. allow_ad2: the test takes --vref ad2 (line-tran
+    only for now). The Bench refuses the same combinations.
     """
+    if vref == Vref.ad2:
+        if not allow_ad2:
+            _fail("--vref ad2 is only for line-tran (for now)")
+        if cfg.vref is None:
+            _fail("--vref ad2 needs a [vref] section in the config")
+        if enable == Enable.dio:
+            _fail("--vref ad2 can't run with --enable dio: AD2 V+ is the enable logic rail (V_33)")
+        _need_dmm(cfg, "--vref ad2 (VREF_IN read back)")
     if vref == Vref.ext:
         if cfg.vref is None:
             _fail("--vref ext needs a [vref] section in the config")
@@ -322,7 +337,8 @@ def _bench(
             confirm=typer.confirm,
             use_dmm=use_dmm,
             use_xscope=use_xscope,
-            vref_external=vref == "ext",
+            vref_external=vref in ("ext", "ad2"),
+            vref_source="ad2" if vref == "ad2" else "psu",
             enable_dio=enable == "dio",
         ) as bench:
             yield bench
@@ -1027,6 +1043,14 @@ def line_tran(
             "flatten at its new level (plot_full.png). Must fit in half a square period",
         ),
     ] = None,
+    vref_v: Annotated[
+        float | None,
+        typer.Option(
+            "--vref-v",
+            help="With --vref ad2 / ext: the reference on VREF_IN (V; default vref.external_v, 1.204), "
+            "at most vref.v_max",
+        ),
+    ] = None,
     out: OutOpt = Path("results"),
     sim: SimOpt = False,
     save_sim: SaveSimOpt = False,
@@ -1042,6 +1066,10 @@ def line_tran(
     from ldo_bench.procedures import line_tran as proc
 
     cfg = _load(config, verbose)
+    if vref_v is not None:
+        if vref == Vref.bgr:
+            _fail("--vref-v sets an external reference: use it with --vref ad2 (or ext)")
+        cfg, _ = _override(cfg, "vref", external_v=vref_v)  # the same checks as [vref] external_v
     if raw:
         if averages not in (None, 1):
             _fail("--raw is one capture per edge: leave out --avg")
@@ -1075,9 +1103,9 @@ def line_tran(
         psu=psu,
         ad=ad_serial,
         yes=yes,
-        use_dmm=False,
+        use_dmm=vref == Vref.ad2,  # --vref ad2 reads VREF_IN on it
         use_xscope=not no_xscope,
-        **_modes(cfg, vref, enable, split_buffer=True),
+        **_modes(cfg, vref, enable, split_buffer=True, allow_ad2=True),
     )
 
 

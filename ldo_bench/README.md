@@ -129,6 +129,7 @@ Command-line options go through the same checks.
   - **Prompt:** it asks every run whether JP2 is removed, even with `--yes`, since the BGR mustn't be back-driven.
   - **Turn-on:** the reference comes on only after VIN, then the run proves VOUT follows a 20 mV step (it stops if not: JP2 is still in).
   - **Limits:** it's never more than 0.3 V above VIN, and it goes to 0 V before VIN does.
+  - **line-tran `--vref ad2`:** the AD2's V+ in place of PSU OUT2 (which is U2's −5 V), read back on the DMM on VREF_IN; `--vref-v` sets the level (default 1.204 V). V+ comes on only once VIN is up and measured, and goes off before VIN and U2's rails come down.
 - **Shutdown:** however a run ends (finished, error, Ctrl-C), everything is switched off in order: external reference, LDO enable (with `--enable dio`), wavegen, AD2 V+, load bank, DIO, supply output.
 - **Supply after a run:** the output is off. The setpoint is `psu.idle_voltage` at `psu.current_limit`, so pressing Output On gives the normal VIN (JAFWAK: 1.8 V, 10 mA); without `idle_voltage` it is 0 V (demo board). The idle setpoint is programmed only once the output is confirmed off.
 - **Temperature log:** `temp` runs for at most 2 hours (`temp.duration`); Ctrl-C ends it early, keeps the data and still shuts down.
@@ -163,6 +164,7 @@ Each run writes a folder under `results/<test>/`, e.g. `results/load-tran/202611
 | enable-sine `--shape triangle` (JAFWAK) | yes (2026-11-12), valid; the 1 kHz sine hit an AD2 arm race, fixed but not yet re-run |
 | line-tran, psrr, iq, enable-startup (input current from the 54621A since 2026-11-14) | simulator only (line-tran / psrr on the split-supply U2 since 2026-11-13); line-tran on JAFWAK: valid runs 2026-11-19 with the trigger fix and the square (1 mA at 1.75-1.85 V; 18.3 mA only at 1.65-1.75 V, U2's drop puts 1.85 V out of reach), on a modified board (R6 lifted, U2 BW to V−); see bench-log |
 | `--vref ext` (PSU OUT2 on VREF_IN) and `compare` | simulator only |
+| `line-tran --vref ad2`, `--vref-v` (added 2026-11-20) | simulator only |
 | `vref-line`, `temp`, `enable-sine --shape square`, `--enable dio` (added 2026-11-13) | simulator only |
 | `line-tran --enable dio` (added 2026-11-17) | simulator only |
 | `enable-current` (added 2026-11-13; replaces `iq --rail en`) | simulator only |

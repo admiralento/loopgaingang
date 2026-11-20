@@ -534,6 +534,26 @@ Even so, the BGR is unprotected from one mistake. With JP2 fitted, OUT2 sits on 
 - `above_vin`
 - `proof_step`
 
+### AD2 V+ as the reference: `line-tran --vref ad2`
+line-tran can't take `--vref ext`: PSU OUT2 is U2's −5 V. `--vref ad2` uses the AD2's V+ supply on VREF_IN instead, and reads it back on the DMM. line-tran only, for now.
+
+```
+uv run ldo-bench line-tran --vref ad2                 # 1.204 V (vref.external_v)
+uv run ldo-bench line-tran --vref ad2 --vref-v 1.15   # another level, at most vref.v_max (1.3 V)
+```
+
+- **Wiring** (added to line-tran's own): JP2 **removed**; AD2 V+ → JP2 pin 1 (VREF_IN); DMM V → JP2 pin 1, COM → GND (TP12). The AD2's ground is already on J13 pin 8. TP3 is on the BGR side of JP2 (per the PCB file), so with JP2 out it reads the BGR, not VREF_IN.
+- **When V+ is on:** only while the LDO is powered.
+  1. After the interlock, U2's rails up, and W1 calibrated with VIN at `vin_low`.
+  2. Then VIN is read on the AD2: below the reference, V+ stays off and the run stops ("the LDO is not powered").
+  3. V+ ramps up (it can't give less than 0.5 V, so it jumps from off to 0.5 V, then steps by `psu.ramp_step`), and the same 20 mV proof as `--vref ext` runs: VOUT must follow, else V+ goes off and the run stops (JP2 still in?).
+  4. The DMM reads VREF_IN: the AD2 has no V+ readback, and its setpoint accuracy isn't known.
+  5. At the end, with VIN still up, the DMM reads VREF_IN again and V+ ramps off. Only then do EN and U2's rails come down. On an error or Ctrl-C, the shutdown turns V+ off first.
+  - U2's rails coming down always turn the reference off first (`buffer_rails_off`), whatever called it.
+- **Refused:** with `--enable dio` (V+ is then the enable logic's 3.3 V rail; `Bench.enable_logic` refuses it too), without a DMM, on any test but line-tran, and `--vref-v` without `--vref ad2` / `ext`.
+- **Records:** `summary.json` / `meta.json` `vref`: `"driver": "AD2 V+"`, `external_v`, the proof readings with `dmm_v` (start), and `dmm_end_v`. The report prints them. The folder name ends in `_extref`.
+- **Not run on the board yet.**
+
 ### `compare`: two runs side by side
 
 ```

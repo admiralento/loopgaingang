@@ -19,7 +19,8 @@ matching field instead:
              ("tmp", 0) the TMP235 output (J13 pin 5), ("en_ain", 0) EN_AIN (TP6, the enable tests)
   ch1_probe  what the VOUT channel probes: "vout" or "en_out" (enable-sine test). In enable-startup the
              ref channel is on ("en_in", 0) and SimXScope reads INA / INB from the AD2's last_shunt
-  dmm_probe  what the DMM is on: "vout", "vref" (TP3, the BGR output), "psu" (supply terminals),
+  dmm_probe  what the DMM is on: "vout", "vref" (TP3, the BGR output), "vref_in" (JP2 pin 1,
+             what the regulator follows), "psu" (supply terminals),
              "shunt" (across R13), "series" (in series with a rail, current mode) or "open"
   en_pin     the AD2 DIO driving the enable path, None if EN is tied on
   vref_wired the PSU's second output is wired to VREF_IN (external reference run)
@@ -149,6 +150,8 @@ class LdoModel:
     vref_out_v: float = 0.0  # V, setpoint of the PSU's second output
     vref_wired: bool = False
     jp2_fitted: bool = True
+    vref_from_vplus: bool = False  # --vref ad2: AD2 V+ (not the PSU's second output) is on VREF_IN
+    vplus_v: float = 0.0  # V, AD2 V+ (0 = off)
     bgr_backdriven: bool = False
     # PSRR: VOUT/VIN = h_dc (1 + j f/fz) / (1 + j f/fp)
     psrr_h_dc: float = 1e-3  # -60 dB at low frequency
@@ -246,6 +249,8 @@ class LdoModel:
     def reference(self) -> float:
         """What the regulator follows (V): the BGR (vout_nominal), or the external reference with JP2 out."""
         if self.vref_wired and not self.jp2_fitted:
+            if self.vref_from_vplus:
+                return self.vplus_v
             return self.vref_out_v if self.psu_on else 0.0
         return self.vout_nominal * (1 + self.bgr_tc * (self.temperature - 25.0))
 
@@ -703,7 +708,10 @@ class SimAnalogDiscovery:
     def set_vplus(self, volts: float | None) -> None:
         if volts is not None and not 0.5 <= volts <= 5.0:
             raise InstrumentError(f"AD2 V+ can't be set to {volts} V (0.5..5 V)")  # as the real driver
-        self.vplus = volts  # recorded only; nothing in the model depends on it
+        self.vplus = volts
+        self.m.vplus_v = volts or 0.0  # VREF_IN with --vref ad2; otherwise nothing in the model uses it
+        if self.m.vref_wired and self.m.vref_from_vplus and self.m.jp2_fitted and volts:
+            self.m.bgr_backdriven = True
 
     def off(self, channel: int) -> None:
         self.m.awg_v.pop(channel, None)
@@ -768,7 +776,7 @@ class SimDmm:
         if m.dmm_probe == "shunt":  # across R13
             v = m.sense_ohm * m.supply_current() + m.dmm_offset_v
             return v + float(m.rng.normal(0.0, m.dmm_noise_v))
-        sources = {"vref": m.bgr_vref, "psu": m.psu_actual}  # anything else: VOUT
+        sources = {"vref": m.bgr_vref, "psu": m.psu_actual, "vref_in": lambda: m.reference}  # else: VOUT
         v = sources.get(m.dmm_probe, m.vout_dc)()
         if m.dmm_probe == "vref" and not self.high_z:  # the 10 MOhm input loads the BGR's output
             v *= DMM_10MEG / (DMM_10MEG + m.bgr_rout)

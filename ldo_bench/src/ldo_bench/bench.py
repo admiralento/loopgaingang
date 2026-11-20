@@ -77,6 +77,34 @@ def _setpoint_issue(out, want: float, name: str) -> str | None:
     return f"the {name} setpoint reads {got:.4f} V after programming {want:.4f} V: it didn't take the command"
 
 
+VrefSource = Literal["psu", "ad2"]
+
+
+class Ad2VplusReference:
+    """The AD2's V+ supply as the reference on VREF_IN (`--vref ad2`), behind the setpoint interface the
+    PSU's second output has. V+ can't go below MIN_V: a setpoint under it turns V+ off (0 V)."""
+
+    MIN_V = 0.5  # V, the lowest V+ the AD2 can give
+    name = "AD2 V+"
+
+    def __init__(self, ad2) -> None:
+        self._ad2 = ad2
+        self._v = 0.0
+
+    def set_voltage(self, volts: float) -> None:
+        """V+ to `volts` (V), or off below MIN_V."""
+        if volts < self.MIN_V:
+            self._ad2.set_vplus(None)
+            self._v = 0.0
+        else:
+            self._ad2.set_vplus(volts)
+            self._v = volts
+
+    def get_voltage_setpoint(self) -> float:
+        """What V+ was last set to (V); 0 when off. The AD2 has no V+ readback: the DMM reads VREF_IN."""
+        return self._v
+
+
 class Bench:
     """The instruments plus the safety layer every procedure goes through.
 
@@ -100,6 +128,11 @@ class Bench:
     vref.above_vin below it, and anything that would take VIN away (`supply_off`, turning off the
     wavegen that drives VIN) ramps the reference to 0 V first. `reference_on()` does nothing in the
     normal (BGR) mode, so procedures call it unconditionally.
+
+    With `vref_source="ad2"` (`--vref ad2`, line-tran only) the AD2's V+ supply drives VREF_IN instead
+    (Ad2VplusReference), and the DMM reads it back on VREF_IN. `reference_on()` then also measures VIN
+    first and refuses unless it is at least the reference (the LDO is powered), and the split buffer's
+    rails coming down turn it off first. V+ can't then also be the enable logic rail (`enable_logic`).
 
     Enable from the AD2 (`enable_dio=True`, `--enable dio`): the DC and transient tests drive the LDO's
     enable through [enable] (DIO -> level shifters -> EN_AIN) instead of having it tied on with jumpers.
@@ -137,9 +170,19 @@ class Bench:
         confirm: ConfirmFn | None = None,
         vref_external: bool = False,
         enable_dio: bool = False,
+        vref_source: VrefSource = "psu",
     ) -> None:
         if vref_external and cfg.vref is None:
             raise InstrumentError("an external reference needs a [vref] section in the config")
+        if vref_external and vref_source == "ad2":
+            if enable_dio:
+                raise InstrumentError(
+                    "--vref ad2 can't run with --enable dio: AD2 V+ is the enable logic rail (V_33)"
+                )
+            if dmm is None:
+                raise InstrumentError(
+                    "--vref ad2 reads VREF_IN on the DMM: open it (enable [dmm], no --no-dmm)"
+                )
         if enable_dio:
             _check_enable_pins(cfg)
         self.cfg = cfg
@@ -163,11 +206,16 @@ class Bench:
         self.shutdown_errors: list[str] = []  # steps of the last shutdown() that failed
         # external reference (see the class docstring)
         self.vref_external = vref_external
-        self.vref_out: SupplyOutput | None = None  # the PSU output on VREF_IN, once set up
+        self.vref_source: VrefSource = vref_source
+        # what drives VREF_IN: the PSU output (set up with the supply), or AD2 V+ (held off until reference_on)
+        self.vref_out: SupplyOutput | Ad2VplusReference | None = (
+            Ad2VplusReference(ad2) if vref_external and vref_source == "ad2" else None
+        )
         self.rails_out: SupplyOutput | None = None  # the PSU output on BGR_VDD / OTA_VDD (split_rails_on)
         self._rails_on = False
         self._vref_on = False  # driving vref.external_v (not held at 0 V)
         self.vref_proof: dict | None = None  # what reference_on() measured, for the run's records
+        self.vref_end: float | None = None  # --vref ad2: VREF_IN on the DMM at the end of the run (V)
         # what VIN is now (V) and what drives it, so the reference never sits above it
         self._vin_level: float | None = None
         self._w1_limit: float | None = None  # line_tran.w1_max while line-tran runs (allow_line_tran_w1)
@@ -219,7 +267,7 @@ class Bench:
         title: str,
         lines: list[str],
         ref_probe: RefProbe,
-        dmm_probe: Literal["vout", "vref", "psu", "shunt", "series"] = "vout",
+        dmm_probe: Literal["vout", "vref", "vref_in", "psu", "shunt", "series"] = "vout",
         dmm_rail: str = "total",
         bank_on_psu: bool = False,
         psu_to: Literal["vin", "rail"] = "vin",
@@ -262,6 +310,7 @@ class Bench:
             if self.sim_model is not None:  # the simulated operator followed the instructions
                 self.sim_model.vref_wired = True
                 self.sim_model.jp2_fitted = False
+                self.sim_model.vref_from_vplus = self.vref_source == "ad2"
         if chip_powered:
             lines = self._with_standard_jumpers(lines)
         self.last_wiring = list(lines)
@@ -291,8 +340,18 @@ class Bench:
         at = next((k + 1 for k, ln in enumerate(lines) if "JP4" in ln), 0)
         return [*lines[:at], *missing, *lines[at:]]
 
+    def _vref_name(self) -> str:
+        """What drives VREF_IN, for messages: 'AD2 V+' or 'PSU OUTn'."""
+        return Ad2VplusReference.name if self.vref_source == "ad2" else f"PSU OUT{self.cfg.vref.psu_channel}"
+
     def vref_wiring(self) -> list[str]:
         """Wiring lines for the external reference."""
+        if self.vref_source == "ad2":
+            return [
+                "Remove JP2 (VREF): VREF_OUT (the BGR) must not be joined to VREF_IN",
+                f"AD2 V+ -> JP2 pin 1 (VREF_IN) ({self.cfg.vref.external_v} V, set by this run once VIN is up)",
+                wiring.dmm("JP2 pin 1 (VREF_IN)", self.cfg.board.dmm_gnd, "reads the reference back"),
+            ]
         n = self.cfg.vref.psu_channel
         return [
             "Remove JP2 (VREF): VREF_OUT (the BGR) must not be joined to VREF_IN",
@@ -302,10 +361,10 @@ class Bench:
 
     def _confirm_jp2(self) -> None:
         """Ask, every run and even with --yes, that JP2 is out: nothing can measure it beforehand."""
-        n = self.cfg.vref.psu_channel
+        n = self._vref_name()
         question = (
-            f"External reference: is JP2 removed, with PSU OUT{n} on VREF_IN? If JP2 is still fitted, "
-            f"OUT{n} back-drives the BGR output. (Asked every run; --yes doesn't skip it.)"
+            f"External reference: is JP2 removed, with {n} on VREF_IN? If JP2 is still fitted, "
+            f"{n} back-drives the BGR output. (Asked every run; --yes doesn't skip it.)"
         )
         if self._confirm is None:
             raise InstrumentError(
@@ -336,7 +395,7 @@ class Bench:
         self._psu_limit = limit
         log.info("PSU OUT%d: current limit %g mA", p.channel, limit * 1e3)
         self.psu.set_voltage(0.0)
-        if self.vref_external:
+        if self.vref_external and self.vref_source == "psu":
             vr = self.cfg.vref
             if not hasattr(self.psu, "aux"):
                 raise InstrumentError(f"the supply ({self.psu.idn}) has no second output for the reference")
@@ -469,7 +528,12 @@ class Bench:
         if bu is None:
             raise InstrumentError("buffer_rails_on needs a [buffer] section")
         self._no_reference("buffer_rails_on")
-        if self.vref_external and self.cfg.vref is not None and self.cfg.vref.psu_channel == bu.channel:
+        if (
+            self.vref_external
+            and self.vref_source == "psu"
+            and self.cfg.vref is not None
+            and self.cfg.vref.psu_channel == bu.channel
+        ):
             raise InstrumentError(
                 f"refusing U2's split supply with --vref ext: both need PSU OUT{bu.channel} "
                 "(the reference would move U2's V-)"
@@ -545,6 +609,7 @@ class Bench:
         """Take U2's rails down: W1 to DC 0 V, both rails ramped to 0 together, outputs off, then W1 off."""
         if self.vminus_out is None and not self._buffer_up:
             return
+        self.reference_off()  # before VIN goes: the reference never drives an unpowered chip
         ch = self.cfg.ad2.wavegen_channel
         self.awg.set_dc(ch, 0.0)
         self._awg_on = True
@@ -630,6 +695,8 @@ class Bench:
         on=True sets V+ to enable.v33; on=False turns V+ off. No-op if enable.v33 is None.
         """
         v = self.cfg.enable.v33
+        if v is not None and self.vref_external and self.vref_source == "ad2":
+            raise InstrumentError("refusing AD2 V+ as the enable logic rail: it drives VREF_IN (--vref ad2)")
         if v is not None and hasattr(self.scope, "set_vplus"):
             self.scope.set_vplus(v if on else None)
         self._v33_on = on
@@ -732,7 +799,7 @@ class Bench:
         while abs(target - v) > 1e-9:
             v = _toward(v, target, self.cfg.psu.ramp_step)
             out.set_voltage(v)
-        if issue := _setpoint_issue(out, target, f"reference output (OUT{out.channel})"):
+        if issue := _setpoint_issue(out, target, f"reference output ({self._vref_name()})"):
             raise InstrumentError(issue)
         self.sleep(vr.settle_time)
 
@@ -752,12 +819,19 @@ class Bench:
             raise InstrumentError(
                 "the external reference needs VIN up first (it would drive an unpowered chip)"
             )
+        if self.vref_source == "ad2":
+            vin = self.measure_vin_fine()
+            if vin < vr.external_v:
+                raise InstrumentError(
+                    f"VIN reads {vin:.3f} V, below the {vr.external_v} V reference: the LDO is not powered, so "
+                    "AD2 V+ stays off VREF_IN"
+                )
         if vr.external_v > self._vin_level + vr.above_vin + 1e-9:
             raise InstrumentError(
                 f"refusing the external reference at {vr.external_v} V with VIN at {self._vin_level:.3f} V "
                 f"(at most vref.above_vin = {vr.above_vin} V above VIN)"
             )
-        log.info("External reference: OUT%d -> %.4f V on VREF_IN ...", self.vref_out.channel, vr.external_v)
+        log.info("External reference: %s -> %.4f V on VREF_IN ...", self._vref_name(), vr.external_v)
         self._vref_ramp(vr.external_v)
         self._vref_on = True
         v_hi = self._vout_now()
@@ -771,12 +845,14 @@ class Bench:
             "step_v": vr.proof_step,
             "vout_moved_v": moved,
         }
+        if self.vref_source == "ad2":  # no V+ readback: the DMM on VREF_IN says what it really is
+            self.vref_proof["dmm_v"] = self.measure_vref()
         if moved < vr.proof_follow * vr.proof_step:
             self.reference_off()
             raise InstrumentError(
                 f"VOUT moved {moved * 1e3:.1f} mV when the external reference stepped {vr.proof_step * 1e3:.0f} mV "
                 f"(needs {vr.proof_follow:.0%}): the reference isn't setting VOUT. Stopping: is JP2 still "
-                f"fitted (then OUT{self.vref_out.channel} is back-driving the BGR), is OUT{self.vref_out.channel} "
+                f"fitted (then {self._vref_name()} is back-driving the BGR), is {self._vref_name()} "
                 "on VREF_IN, and is the LDO enabled?"
             )
         log.info(
@@ -784,6 +860,17 @@ class Bench:
             moved * 1e3,
             vr.proof_step * 1e3,
         )
+
+    @property
+    def vref_on(self) -> bool:
+        """True while the external reference drives VREF_IN (between reference_on and reference_off)."""
+        return self._vref_on
+
+    def measure_vref(self) -> float:
+        """VREF_IN (V) on the DMM (--vref ad2: its leads on JP2 pin 1), the mean of dmm.samples readings."""
+        if self.dmm is None:
+            raise InstrumentError("no DMM to read VREF_IN with")
+        return self.dmm_mean()[0]
 
     def reference_off(self) -> None:
         """Ramp the external reference to 0 V (it stays connected, held at 0 V). Safe in any mode."""
@@ -807,7 +894,12 @@ class Bench:
         sr = self.cfg.split_rails
         if sr is None:
             raise InstrumentError("--split-rails needs a [split_rails] section in the config")
-        if self.vref_external and self.cfg.vref is not None and self.cfg.vref.psu_channel == sr.psu_channel:
+        if (
+            self.vref_external
+            and self.vref_source == "psu"
+            and self.cfg.vref is not None
+            and self.cfg.vref.psu_channel == sr.psu_channel
+        ):
             raise InstrumentError(
                 f"refusing --split-rails with --vref ext: both need PSU OUT{sr.psu_channel}"
             )
@@ -879,7 +971,11 @@ class Bench:
             info["bgr_measured_v"] = vr.bgr_measured
         if self.vref_external:
             info["external_v"] = vr.external_v
-            info["psu_channel"] = vr.psu_channel
+            info["driver"] = self._vref_name()
+            if self.vref_source == "psu":
+                info["psu_channel"] = vr.psu_channel
+            if self.vref_end is not None:
+                info["dmm_end_v"] = self.vref_end
             if self.vref_proof is not None:
                 info["proof"] = self.vref_proof
         return info
@@ -1071,6 +1167,7 @@ def open_bench(
     use_xscope: bool = False,
     vref_external: bool = False,
     enable_dio: bool = False,
+    vref_source: VrefSource = "psu",
 ) -> Bench:
     """Open every instrument the config asks for and return a Bench (use it in a `with` block).
 
@@ -1079,7 +1176,8 @@ def open_bench(
     use_dmm: open the [dmm] if it's enabled (False for --no-dmm and tests that don't use it).
     use_xscope: also open the [xscope] cross-check scope (only the transient tests use it). If it
     can't be opened, the run continues without it and Bench.xscope_issue says why.
-    vref_external: drive VREF_IN from the PSU's other output ([vref]) instead of the BGR.
+    vref_external: drive VREF_IN from an external reference ([vref]) instead of the BGR.
+    vref_source: what drives it: "psu" (the PSU's other output) or "ad2" (AD2 V+; needs the DMM).
     enable_dio: the tests drive the LDO's enable from the AD2 ([enable]) instead of it being tied on.
     If any required instrument fails to open, the ones already opened are closed and the error
     is re-raised.
@@ -1110,6 +1208,7 @@ def open_bench(
             assume_yes=True,
             vref_external=vref_external,
             enable_dio=enable_dio,
+            vref_source=vref_source,
         )
 
     from ldo_bench.instruments import discovery
@@ -1168,6 +1267,7 @@ def open_bench(
         confirm=confirm,
         vref_external=vref_external,
         enable_dio=enable_dio,
+        vref_source=vref_source,
     )
     bench.xscope_issue = xscope_issue
     return bench
