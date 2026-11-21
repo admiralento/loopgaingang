@@ -500,7 +500,7 @@ The LDO stays unpowered. W2 feeds U4's input directly with a known 100 mV tone, 
 ## Temperature (JAFWAK)
 
 ### `temp`: temperature log (cold run and hot run)
-VREF against temperature comes from two runs, each under the same opaque box: a **cold run** (ice, by hand) and a **hot run** (`--heater`: the run ramps a power resistor). `temp-curve` then joins them. The wiring prompt of each run lists its own setup steps.
+Step by step, with timings: [temperature.md](temperature.md). VREF against temperature comes from two runs, each under the same opaque box: a **cold run** (ice, by hand) and a **hot run** (`--heater`: the run ramps a power resistor). `temp-curve` then joins them. The wiring prompt of each run lists its own setup steps.
 
 - **Wiring (both runs):**
   - PSU OUT1 + -> VIN_DC (J7), OUT1 - -> GND (J11); JP4 2-3 "DC"; JP2 closed

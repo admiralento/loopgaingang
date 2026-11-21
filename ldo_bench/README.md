@@ -23,6 +23,7 @@ Bench automation for characterizing our LDO (the JAFWAK board) and the TPS7A7001
 
 **Docs:**
 - [docs/tests.md](docs/tests.md): each test's wiring, what it does, what it computes, its options.
+- [docs/temperature.md](docs/temperature.md): how to run the temperature test (cold run, hot run, temp-curve), how long each takes, and how to get clean data.
 - [docs/instruments.md](docs/instruments.md): setting up the supply, DMM, AD2 and 54621A, and the GPIB / RS-232 connections.
 - [docs/architecture.md](docs/architecture.md): how the code is organised, the safety layer, the simulator, adding a test or an instrument.
 - [docs/bench-log.md](docs/bench-log.md): what we built and measured on 2026-11-06, and the problems we hit.
