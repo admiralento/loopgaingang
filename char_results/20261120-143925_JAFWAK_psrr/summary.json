@@ -1,0 +1,63 @@
+{
+  "valid": true,
+  "issues": [],
+  "notes": [
+    "8591E path from results/sa-path-cal/20261120-143011_JAFWAK_sa-path-cal, measured 0.2 h before this run: -7.69 to -7.45 dB over 30000-1e+06 Hz",
+    "calibration checked against the AD2 in this run: 46400 Hz: +1.65 dB"
+  ],
+  "meter": "AD2 (VIN) + HP 8591E (VOUT)",
+  "sa_cal": {
+    "source": "results/sa-path-cal/20261120-143011_JAFWAK_sa-path-cal",
+    "age_hours": 0.15413929666666668,
+    "checks": [
+      {
+        "frequency_hz": 46400.0,
+        "ad2_vout_v": 0.00014849113387423326,
+        "sa_vout_v": 0.00017954316516741148,
+        "diff_db": 1.649367071447325
+      }
+    ]
+  },
+  "buffer_rail_v": 5.0,
+  "vin_dc_v": 1.8000573773092632,
+  "w1_dc_v": 1.738837132126576,
+  "amplitude_v": 0.05,
+  "load_code": 1,
+  "i_load_a": 0.001,
+  "averages": 4,
+  "psrr_at": {
+    "100": {
+      "frequency": 100.0,
+      "psrr_db": 26.751320011068437,
+      "floor_limited": false
+    },
+    "1000": {
+      "frequency": 1000.0,
+      "psrr_db": 35.44866837658205,
+      "floor_limited": false
+    },
+    "10000": {
+      "frequency": 10000.0,
+      "psrr_db": 53.90943989778055,
+      "floor_limited": false
+    },
+    "100000": {
+      "frequency": 100000.0,
+      "psrr_db": 59.00261249164515,
+      "floor_limited": false
+    },
+    "1e+06": {
+      "frequency": 1000000.0,
+      "psrr_db": 3.7597488028591175,
+      "floor_limited": false
+    }
+  },
+  "worst": {
+    "frequency": 1000000.0,
+    "psrr_db": 3.7597488028591175
+  },
+  "vref": {
+    "source": "bgr",
+    "bgr_measured_v": 1.17
+  }
+}

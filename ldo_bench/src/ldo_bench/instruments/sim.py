@@ -19,7 +19,8 @@ matching field instead:
              ("tmp", 0) the TMP235 output (J13 pin 5), ("en_ain", 0) EN_AIN (TP6, the enable tests)
   ch1_probe  what the VOUT channel probes: "vout" or "en_out" (enable-sine test). In enable-startup the
              ref channel is on ("en_in", 0) and SimXScope reads INA / INB from the AD2's last_shunt
-  dmm_probe  what the DMM is on: "vout", "vref" (TP3, the BGR output), "psu" (supply terminals),
+  dmm_probe  what the DMM is on: "vout", "vref" (TP3, the BGR output), "vref_in" (JP2 pin 1,
+             what the regulator follows), "psu" (supply terminals),
              "shunt" (across R13), "series" (in series with a rail, current mode) or "open"
   en_pin     the AD2 DIO driving the enable path, None if EN is tied on
   vref_wired the PSU's second output is wired to VREF_IN (external reference run)
@@ -41,7 +42,15 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from ldo_bench.instruments.base import Capture, ChannelSetup, DcReading, Edge, InstrumentError, WaveShape
+from ldo_bench.instruments.base import (
+    Capture,
+    ChannelSetup,
+    DcReading,
+    Edge,
+    InstrumentError,
+    WaveShape,
+    default_hysteresis,
+)
 
 # Fraction of the quiescent current drawn by each of the board's J1 supply rails (iq series test).
 # EN_VDD's static share is ~0.3 nA of the 150 uA, as in the PEX (0.28 nA); enable-current adds its
@@ -141,6 +150,8 @@ class LdoModel:
     vref_out_v: float = 0.0  # V, setpoint of the PSU's second output
     vref_wired: bool = False
     jp2_fitted: bool = True
+    vref_from_vplus: bool = False  # --vref ad2: AD2 V+ (not the PSU's second output) is on VREF_IN
+    vplus_v: float = 0.0  # V, AD2 V+ (0 = off)
     bgr_backdriven: bool = False
     # PSRR: VOUT/VIN = h_dc (1 + j f/fz) / (1 + j f/fp)
     psrr_h_dc: float = 1e-3  # -60 dB at low frequency
@@ -220,6 +231,59 @@ class LdoModel:
         crosses = lo < self.en_vt_fall * self.vin and hi > self.en_vt_rise * self.vin
         return self.en_charge * f if crosses else 0.0
 
+    # the 8591E's view of VOUT: through U4 (gain sa_u4_gain) and R14 47 ohm into its 50 ohm input
+    sa_u4_gain: float = 0.98
+    sa_path: Callable[[float], float] | None = (
+        None  # extra path gain vs frequency (e.g. a DC block); None = flat
+    )
+
+    # U2's output resistance into VIN's capacitance: a first-order low-pass on the tone (bench 2026-11-20:
+    # about 5 ohm x 0.5 uF, ~60 kHz). None = the buffer passes the tone at full size.
+    buffer_fc: float | None = None
+    # any VIN / W1 tone gain vs f (Hz); overrides buffer_fc
+    buffer_gain: Callable[[float], float] | None = None
+    # sa-path-cal: J10 out, W2 on U4's input (J10 pin 1), scope 1 on J10 pin 1, scope 2 on VOUT (OUTA)
+    u4_rig: bool = False
+    j10_fitted: bool = True  # J10 joins VOUT to U4's input; the rig needs it out (a test can leave it in)
+    u4_channel: int = 2  # the AD2 wavegen on U4's input
+
+    def u4_input(self) -> tuple[float, float, float]:
+        """(DC V, tone amplitude V peak, f Hz) that W2 puts on U4's input; zeros if W2 is off."""
+        ch = self.u4_channel
+        if ch in self.awg_v:
+            return self.awg_v[ch], 0.0, 0.0
+        if ch in self.awg_wave:
+            _, f, lo, hi = self.awg_wave[ch]
+            return (lo + hi) / 2, (hi - lo) / 2, f
+        return 0.0, 0.0, 0.0
+
+    def rig_vout(self) -> float:
+        """VOUT (V) in the sa-path-cal rig: W2's level if J10 is still fitted (it drives the output), else the LDO's."""
+        return self.u4_input()[0] if self.j10_fitted else self.vout_dc()
+
+    def vin_tone(self, f: float, w1_amp: float) -> float:
+        """VIN's tone amplitude (V peak) for W1 playing `w1_amp` at `f` (Hz), through U2 and buffer_fc."""
+        if self.buffer_gain is not None:
+            return w1_amp * self.buffer_gain(f)
+        if self.buffer_fc is None:
+            return w1_amp
+        return w1_amp / math.hypot(1.0, f / self.buffer_fc)
+
+    def vout_ripple_at_sa(self) -> dict[float, float]:
+        """{f: dBm} at the 8591E input for the sine W1 plays onto VIN (psrr), through U4 and R14; {} otherwise."""
+        from ldo_bench.instruments.hp859x import vpeak_to_dbm
+
+        if self.u4_rig:  # sa-path-cal: W2's tone straight into U4
+            _dc, amp, f = self.u4_input()
+            g = self.sa_u4_gain * 50 / 97 * (self.sa_path(f) if self.sa_path else 1.0)
+            return {f: vpeak_to_dbm(amp * g)} if amp > 0 else {}
+        if not self.awg_wave or self.psu_to != "rail":
+            return {}
+        _, f, lo, hi = next(iter(self.awg_wave.values()))
+        vout = abs(self.psrr_h(f)) * self.vin_tone(f, (hi - lo) / 2) if self.vin > 0 else 0.0
+        gain = self.sa_u4_gain * 50 / 97 * (self.sa_path(f) if self.sa_path else 1.0)
+        return {f: vpeak_to_dbm(vout * gain)} if vout > 0 else {}
+
     def psrr_h(self, f: float) -> complex:
         """VOUT/VIN transfer function at `f` (Hz); 0 when the LDO is off."""
         if not self.enabled or self.vin <= 0:
@@ -238,6 +302,8 @@ class LdoModel:
     def reference(self) -> float:
         """What the regulator follows (V): the BGR (vout_nominal), or the external reference with JP2 out."""
         if self.vref_wired and not self.jp2_fitted:
+            if self.vref_from_vplus:
+                return self.vplus_v
             return self.vref_out_v if self.psu_on else 0.0
         return self.vout_nominal * (1 + self.bgr_tc * (self.temperature - 25.0))
 
@@ -450,6 +516,8 @@ class SimAnalogDiscovery:
     def measure_dc(self, duration: float, setups: dict[int, ChannelSetup]) -> dict[int, DcReading]:
         n = 8192
         vout, ref = self.m.vout_dc(), self.m.ref_value()
+        if self.m.u4_rig:  # scope 1 (vout channel) on J10 pin 1 = W2's DC; scope 2 (ref) on VOUT
+            vout, ref = self.m.u4_input()[0], self.m.rig_vout()
         out = {}
         for ch in setups:
             x = self._value(ch, vout, ref) + self.m.noise(n)
@@ -471,14 +539,51 @@ class SimAnalogDiscovery:
         force: bool = False,
         dio_trigger: tuple[int, Edge] | None = None,
         free_running: bool = False,  # accepted for the protocol; the model has no arm race
+        hysteresis: float | None = None,
     ) -> Capture:
         """Synthesise the capture by evaluating the model before and after stimulus().
 
-        Dispatches to the PSRR, enable-sine or DIO-triggered models when those are set up;
-        otherwise a load / line step with a damped ring. Raises like a trigger timeout if the
-        step doesn't cross trigger_level.
+        Dispatches to the PSRR, enable-sine or DIO-triggered models when those are set up; a square
+        on VIN through the buffer (line-tran) is its next edge, played as a line step between the
+        square's levels; otherwise a load / line step with a damped ring. Raises like a trigger timeout if the
+        step doesn't cross trigger_level, or (like the AD2) doesn't start at least `hysteresis`
+        on the other side of it.
         """
         m = self.m
+        if m.u4_rig:  # sa-path-cal: W2's tone on J10 pin 1 (vout channel), VOUT on the ref channel
+            stimulus()
+            dc, amp, f = m.u4_input()
+            t = np.arange(n_samples) / sample_rate
+            ph = float(m.rng.uniform(0, 2 * math.pi))
+            u4 = dc + amp * np.sin(2 * math.pi * f * t + ph)
+            vout = u4 if m.j10_fitted else np.full(n_samples, m.vout_dc())
+            return self._put(u4 + m.noise(n_samples), vout + m.noise(n_samples), sample_rate, 0, False)
+        if m.awg_wave and m.psu_to == "rail" and next(iter(m.awg_wave.values()))[0] == "square":
+            # line-tran's square on VIN through the buffer: the next edge, as a step between its levels
+            stimulus()
+            ch, wave = next(iter(m.awg_wave.items()))
+            _, _, lo, hi = wave
+            start, end = (lo, hi) if edge == "rising" else (hi, lo)
+            del m.awg_wave[ch]
+            m.awg_v[ch] = start
+            try:  # the class's own capture, not an instance attribute a test may have wrapped
+                return SimAnalogDiscovery.capture(
+                    self,
+                    sample_rate=sample_rate,
+                    n_samples=n_samples,
+                    setups=setups,
+                    trigger_channel=trigger_channel,
+                    trigger_level=trigger_level,
+                    edge=edge,
+                    pre_trigger=pre_trigger,
+                    stimulus=lambda: m.awg_v.__setitem__(ch, end),
+                    timeout=timeout,
+                    force=force,
+                    hysteresis=hysteresis,
+                )
+            finally:
+                m.awg_v.pop(ch, None)
+                m.awg_wave[ch] = wave
         if m.awg_wave and m.psu_to == "rail":
             return self._psrr_capture(sample_rate, n_samples, stimulus)
         if m.awg_wave:
@@ -493,10 +598,11 @@ class SimAnalogDiscovery:
 
         trig_before = self._value(trigger_channel, v0, ref0)
         trig_after = self._value(trigger_channel, v1, ref1)
+        hyst = default_hysteresis(setups[trigger_channel].range) if hysteresis is None else hysteresis
         crossed = (
-            trig_before < trigger_level <= trig_after
+            trig_before <= trigger_level - hyst and trig_after >= trigger_level
             if edge == "rising"
-            else trig_before > trigger_level >= trig_after
+            else trig_before >= trigger_level + hyst and trig_after <= trigger_level
         )
         if not crossed and not force:
             raise InstrumentError(
@@ -593,7 +699,7 @@ class SimAnalogDiscovery:
         t = np.arange(n) / rate
         ph = float(m.rng.uniform(0, 2 * math.pi))
         vin_dc = m.vin
-        amp = (hi - lo) / 2 if vin_dc > 0 else 0.0
+        amp = m.vin_tone(f, (hi - lo) / 2) if vin_dc > 0 else 0.0
         vin = vin_dc + amp * np.sin(2 * math.pi * f * t + ph)
         if vin_dc > 0:
             vin = np.minimum(vin, m.psu_v - m.buffer_dropout)
@@ -665,7 +771,10 @@ class SimAnalogDiscovery:
     def set_vplus(self, volts: float | None) -> None:
         if volts is not None and not 0.5 <= volts <= 5.0:
             raise InstrumentError(f"AD2 V+ can't be set to {volts} V (0.5..5 V)")  # as the real driver
-        self.vplus = volts  # recorded only; nothing in the model depends on it
+        self.vplus = volts
+        self.m.vplus_v = volts or 0.0  # VREF_IN with --vref ad2; otherwise nothing in the model uses it
+        if self.m.vref_wired and self.m.vref_from_vplus and self.m.jp2_fitted and volts:
+            self.m.bgr_backdriven = True
 
     def off(self, channel: int) -> None:
         self.m.awg_v.pop(channel, None)
@@ -730,7 +839,7 @@ class SimDmm:
         if m.dmm_probe == "shunt":  # across R13
             v = m.sense_ohm * m.supply_current() + m.dmm_offset_v
             return v + float(m.rng.normal(0.0, m.dmm_noise_v))
-        sources = {"vref": m.bgr_vref, "psu": m.psu_actual}  # anything else: VOUT
+        sources = {"vref": m.bgr_vref, "psu": m.psu_actual, "vref_in": lambda: m.reference}  # else: VOUT
         v = sources.get(m.dmm_probe, m.vout_dc)()
         if m.dmm_probe == "vref" and not self.high_z:  # the 10 MOhm input loads the BGR's output
             v *= DMM_10MEG / (DMM_10MEG + m.bgr_rout)
@@ -787,3 +896,136 @@ class SimXScope:
 
     def close(self) -> None:
         pass
+
+
+# --- HP 8591E spectrum analyzer ---------------------------------------------------------------
+_RBW_STEPS = (1.0, 3.0)  # the 8590 series sets RBW in a 1-3-10 sequence
+
+
+def _rbw_step(hz: float, narrowest: float) -> float:
+    """The 1-3-10 RBW at or above `hz` (Hz), between `narrowest` and 3 MHz."""
+    hz = min(max(hz, narrowest), 3e6)
+    decade = 10.0 ** math.floor(math.log10(hz) + 1e-9)
+    for m in (*_RBW_STEPS, 10.0):
+        if m * decade >= hz - 1e-9:
+            return m * decade
+    return 10.0 * decade
+
+
+def _hp_number(arg: str) -> float:
+    """'300000000HZ', '1.5MHZ', '-10DBM', '10DB' -> the value in Hz / dBm / dB."""
+    a = arg.strip().upper()
+    for unit, scale in (("GHZ", 1e9), ("MHZ", 1e6), ("KHZ", 1e3), ("HZ", 1.0), ("DBM", 1.0), ("DB", 1.0)):
+        if a.endswith(unit):
+            return float(a[: -len(unit)]) * scale
+    return float(a)
+
+
+class Sim8591Link:
+    """A fake GPIB link that answers like an HP 8591E, so the real driver (HP859x) runs on it.
+
+    `tones` maps frequency (Hz) -> level (dBm) at the input; by default the analyzer's own CAL OUT
+    (300 MHz, -20 dBm) is cabled to it, as for `sa-check`. `tone_source(f)` (optional) gives extra
+    tones live, e.g. VOUT's ripple from the LDO model. The noise floor is noise_dbm_1khz at 1 kHz
+    RBW, scaled by 10 log10(RBW). The narrowest RBW is 300 Hz, as the bench unit (sa-check, 2026-11-20).
+    Test knobs: narrow_rbw (Option 130: 30 Hz RBW), reject (a command
+    word that raises an error code), done_reply, garble (a query that answers garbage),
+    amplitude_override (MKA? reply), err (queued error codes), id_reply.
+    """
+
+    name = "sim-8591E"
+
+    def __init__(self, tones: dict[float, float] | None = None, noise_dbm_1khz: float = -115.0) -> None:
+        self.tones = {300e6: -20.0} if tones is None else dict(tones)
+        self.tone_source: Callable[[], dict[float, float]] | None = None
+        self.noise_dbm_1khz = noise_dbm_1khz
+        self.narrow_rbw = False
+        self.reject: str | None = None
+        self.done_reply = "1"
+        self.garble: str | None = None
+        self.amplitude_override: float | None = None
+        self.scale_error_db: Callable[[float], float] | None = (
+            None  # dB added to a reading of x dBm (log fidelity)
+        )
+        self.id_reply = "HP8591E"
+        self.err: list[int] = []
+        self.sent: list[str] = []
+        self._preset()
+
+    def _preset(self) -> None:
+        self.cf, self.sp, self.rb, self.marker = 900e6, 1.8e9, 3e6, 900e6
+
+    def _all_tones(self) -> dict[float, float]:
+        return {**self.tones, **(self.tone_source() if self.tone_source else {})}
+
+    def _level_at(self, f: float) -> float:
+        floor = self.noise_dbm_1khz + 10 * math.log10(self.rb / 1e3)
+        near = [a for tf, a in self._all_tones().items() if abs(tf - f) <= self.rb / 2]
+        level = max([floor, *near])
+        return level + (self.scale_error_db(level) if self.scale_error_db else 0.0)
+
+    def _do(self, part: str) -> None:
+        word, _, arg = part.strip().partition(" ")
+        word = word.upper()
+        if not word:
+            return
+        if word == self.reject:
+            self.err.append(901)
+            return
+        if word == "IP":
+            self._preset()
+        elif word in ("SNGLS", "TS", "VB", "RL", "AT"):
+            pass
+        elif word == "CF":
+            self.cf = _hp_number(arg)
+        elif word == "SP":
+            self.sp = _hp_number(arg)
+        elif word == "RB":
+            self.rb = _rbw_step(_hp_number(arg), 30.0 if self.narrow_rbw else 300.0)  # 300 Hz: the bench unit
+        elif word == "MKF":
+            self.marker = _hp_number(arg)
+        elif word == "MKPK":
+            lo, hi = self.cf - self.sp / 2, self.cf + self.sp / 2
+            inside = {f: a for f, a in self._all_tones().items() if lo <= f <= hi}
+            self.marker = max(inside, key=inside.get) if inside else self.cf
+        else:
+            self.err.append(113)  # unknown command
+
+    def write(self, cmd: str) -> None:
+        self.sent.append(cmd)
+        for part in cmd.split(";"):
+            self._do(part)
+
+    def query(self, cmd: str) -> str:
+        self.sent.append(cmd)
+        *setup, q = [p for p in cmd.split(";") if p.strip()]
+        for part in setup:
+            self._do(part)
+        q = q.strip().upper()
+        if q == self.garble:
+            return "#garbage"
+        if q == "ERR?":
+            codes, self.err = self.err, []
+            return ",".join(str(c) for c in codes) if codes else "0"
+        replies = {
+            "ID?": lambda: self.id_reply,
+            "REV?": lambda: "940822",
+            "SER?": lambda: "3728",
+            "*IDN?": lambda: "",
+            "RB?": lambda: f"{self.rb:g}",
+            "MKF?": lambda: f"{self.marker:.6E}",
+            "MKA?": lambda: (
+                f"{self.amplitude_override if self.amplitude_override is not None else self._level_at(self.marker):.2f}"
+            ),
+            "DONE?": lambda: self.done_reply,
+        }
+        if q not in replies:
+            self.err.append(113)
+            return ""
+        return replies[q]()
+
+    def set_timeout(self, seconds: float) -> float:
+        return 5.0
+
+    def close(self) -> None:
+        self.sent.append("<close>")

@@ -13,7 +13,7 @@ results/latest.png, results/<test>/latest.png, results/<test>/latest_full.png, l
     copies of the newest run's plots (see RunDir.publish_latest)
 
 <stamp> is the local start time YYYYmmdd-HHMMSS; <dut> is dut.name made filename-safe.
-_extref: run with --vref ext (external reference on VREF_IN, not the BGR).
+_extref: run with --vref ext or ad2 (external reference on VREF_IN, not the BGR).
 _SIM: made with --sim --save-sim. _INVALID: the test found a setup problem. _PARTIAL: saving
 stopped part way (the folder is incomplete).
 results/compare/<stamp>_<dut>_compare_<test>/ holds `ldo-bench compare` output (see compare.py).

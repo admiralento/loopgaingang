@@ -57,7 +57,7 @@ def _choices(name: str, model, field: str) -> type[StrEnum]:
     return StrEnum(name, {v: v for v in values})
 
 
-Vref = StrEnum("Vref", {"bgr": "bgr", "ext": "ext"})
+Vref = StrEnum("Vref", {"bgr": "bgr", "ext": "ext", "ad2": "ad2"})
 Enable = StrEnum("Enable", {"static": "static", "dio": "dio"})
 Shape = _choices("Shape", EnSineConfig, "shape")
 Method = _choices("Method", IqConfig, "method")
@@ -108,8 +108,9 @@ NoXScopeOpt = Annotated[
 VrefOpt = Annotated[
     Vref,
     typer.Option(
-        help="Reference on VREF_IN: bgr (the on-chip BGR, JP2 fitted) or ext ([vref]: PSU output on "
-        "VREF_IN, JP2 removed; asks you to confirm JP2 every run)",
+        help="Reference on VREF_IN: bgr (the on-chip BGR, JP2 fitted), ext ([vref]: PSU output on "
+        "VREF_IN, JP2 removed; asks you to confirm JP2 every run) or ad2 (line-tran only: AD2 V+ on "
+        "VREF_IN once VIN is up, read on the DMM; JP2 removed)",
     ),
 ]
 EnableOpt = Annotated[
@@ -242,6 +243,13 @@ def _amps(spec: str | None) -> float | None:
         _fail(str(e))
 
 
+def _positive_ms(option: str, ms: float) -> float:
+    """`ms` (ms) as seconds; exit 2 unless it's positive."""
+    if ms <= 0:
+        _fail(f"{option} must be positive")
+    return ms * 1e-3
+
+
 def _rate_for_window(window_ms: float | None, n_samples: int) -> float | None:
     """The sample rate (Hz) that fits `n_samples` into --window-ms; exit 2 unless it's positive."""
     if window_ms is None:
@@ -252,13 +260,27 @@ def _rate_for_window(window_ms: float | None, n_samples: int) -> float | None:
 
 
 def _modes(
-    cfg: BenchConfig, vref: Vref = Vref.bgr, enable: Enable = Enable.static, *, split_buffer: bool = False
+    cfg: BenchConfig,
+    vref: Vref = Vref.bgr,
+    enable: Enable = Enable.static,
+    *,
+    split_buffer: bool = False,
+    allow_ad2: bool = False,
 ) -> dict:
     """Check --vref / --enable against the config (exit 2) and return them as _bench keywords.
 
     split_buffer: the test powers U2's split supply (line-tran, psrr), whose negative rail is the
-    PSU output the external reference also needs. The Bench refuses the same combinations.
+    PSU output the external reference also needs. allow_ad2: the test takes --vref ad2 (line-tran
+    only for now). The Bench refuses the same combinations.
     """
+    if vref == Vref.ad2:
+        if not allow_ad2:
+            _fail("--vref ad2 is only for line-tran (for now)")
+        if cfg.vref is None:
+            _fail("--vref ad2 needs a [vref] section in the config")
+        if enable == Enable.dio:
+            _fail("--vref ad2 can't run with --enable dio: AD2 V+ is the enable logic rail (V_33)")
+        _need_dmm(cfg, "--vref ad2 (VREF_IN read back)")
     if vref == Vref.ext:
         if cfg.vref is None:
             _fail("--vref ext needs a [vref] section in the config")
@@ -297,6 +319,7 @@ def _bench(
     use_xscope: bool = False,
     vref: str = "bgr",
     enable: str = "static",
+    use_sa: bool = False,
 ) -> Iterator[Bench]:
     """Open the bench and turn instrument errors and Ctrl-C into clean exits.
 
@@ -315,8 +338,10 @@ def _bench(
             confirm=typer.confirm,
             use_dmm=use_dmm,
             use_xscope=use_xscope,
-            vref_external=vref == "ext",
+            vref_external=vref in ("ext", "ad2"),
+            vref_source="ad2" if vref == "ad2" else "psu",
             enable_dio=enable == "dio",
+            use_sa=use_sa,
         ) as bench:
             yield bench
     except InstrumentError as e:
@@ -533,6 +558,65 @@ def psu_check(
     )
 
 
+@app.command("sa-check")
+def sa_check(
+    config: ConfigOpt = DEFAULT_CONFIG,
+    out: OutOpt = Path("results"),
+    sim: SimOpt = False,
+    save_sim: SaveSimOpt = False,
+    sa: Annotated[
+        str | None, typer.Option("--sa", help="Spectrum analyzer resource (overrides sa.resource)")
+    ] = None,
+    yes: YesOpt = False,
+    verbose: VerboseOpt = False,
+) -> None:
+    """Check the HP 8591E on its own calibrator (CAL OUT cabled to INPUT, nothing else): every command, the
+    amplitude reading, the narrowest RBW and the noise floor. Talks to the analyzer only."""
+    from ldo_bench.instruments.base import InstrumentError as _Err
+    from ldo_bench.procedures import sa_check as proc
+    from ldo_bench.results import RunDir
+
+    cfg = _load(config, verbose)
+    if cfg.sa is None or not cfg.sa.enabled:
+        _fail("sa-check needs an enabled [sa] section in the config")
+    text = "\n".join(["Wiring for sa-check:", *(f"  - {ln}" for ln in proc.wiring())])
+    if sim or yes:
+        typer.echo(text)
+    elif not typer.confirm(f"{text}\nIs the analyzer wired like this? (--yes skips this)"):
+        raise typer.Exit(130)
+    try:
+        if sim:
+            from ldo_bench.instruments.hp859x import HP859x
+            from ldo_bench.instruments.sim import Sim8591Link
+
+            analyzer = HP859x(Sim8591Link())
+        else:
+            from ldo_bench.instruments.discovery import open_sa
+
+            analyzer = open_sa(sa or cfg.sa.resource, timeout=cfg.sa.timeout)
+        try:
+            res = proc.run(analyzer, cfg.sa)
+        finally:
+            analyzer.close()
+    except _Err as e:
+        typer.secho(f"Instrument error: {e}", fg="red", err=True)
+        raise typer.Exit(1) from e
+    except KeyboardInterrupt as e:
+        typer.secho("Aborted.", fg="yellow", err=True)
+        raise typer.Exit(130) from e
+    path = None
+    if not sim or save_sim:
+        run = RunDir(out, proc.NAME, cfg, config_path=config, simulated=sim, invalid=bool(res.issues))
+        run.write_csv("data.csv", res.rows)
+        run.write_json("summary.json", res.summary())
+        run.write_meta(idns={"sa": res.idn}, sim=sim)
+        path = run.path
+    if sim:
+        typer.secho(SIM_BANNER, fg="magenta", bold=True)
+    typer.echo(res.report())
+    _saved(path, fg="green" if not res.issues else "yellow", res=res)
+
+
 @app.command("loadbank-check")
 def loadbank_check(
     config: ConfigOpt = DEFAULT_CONFIG,
@@ -634,38 +718,6 @@ def _smoke(bench: Bench, vin: float) -> None:
         )
     bench.ldo_enable(False)
     bench.loadbank.off()
-
-
-@app.command("buffer-check")
-def buffer_check(
-    config: ConfigOpt = DEFAULT_CONFIG,
-    out: OutOpt = Path("results"),
-    sim: SimOpt = False,
-    save_sim: SaveSimOpt = False,
-    psu: PsuOpt = None,
-    ad_serial: AdOpt = None,
-    yes: YesOpt = False,
-    verbose: VerboseOpt = False,
-) -> None:
-    """U2 buffer on its own, chip disconnected (JP4 open, 100 Ohm dummy): split supply, levels, step, sine."""
-    from ldo_bench.procedures import buffer_check as proc
-
-    cfg = _load(config, verbose)
-    if cfg.buffer is None:
-        _fail("buffer-check needs a [buffer] section (the split-supply U2)")
-    _run(
-        cfg,
-        config,
-        proc,
-        lambda b: proc.run(b, cfg.buffer),
-        out=out,
-        sim=sim,
-        save_sim=save_sim,
-        psu=psu,
-        ad=ad_serial,
-        yes=yes,
-        use_dmm=False,
-    )
 
 
 # --- the supply on its own ------------------------------------------------------
@@ -1024,6 +1076,42 @@ def line_tran(
     averages: AvgOpt = None,
     window_ms: WindowOpt = None,
     plot_us: PlotUsOpt = None,
+    square_hz: Annotated[
+        float | None,
+        typer.Option(
+            "--square-hz",
+            help="W1 square frequency (Hz; default: line_tran.square_hz, 20). Half a period must be "
+            "longer than the capture window",
+        ),
+    ] = None,
+    dc_steps: Annotated[
+        bool,
+        typer.Option(
+            "--dc-steps", help="One W1 DC step per capture instead of the square (the AD2's DC level is slow)"
+        ),
+    ] = False,
+    raw: Annotated[
+        bool,
+        typer.Option(
+            "--raw", help="One capture per edge, no averaging; plots show only the measured samples"
+        ),
+    ] = False,
+    settle_ms: Annotated[
+        float | None,
+        typer.Option(
+            "--settle-ms",
+            help="Long capture per edge (ms; default line_tran.settle_window, 20): how long VOUT takes to "
+            "flatten at its new level (plot_full.png). Must fit in half a square period",
+        ),
+    ] = None,
+    vref_v: Annotated[
+        float | None,
+        typer.Option(
+            "--vref-v",
+            help="With --vref ad2 / ext: the reference on VREF_IN (V; default vref.external_v, 1.204), "
+            "at most vref.v_max",
+        ),
+    ] = None,
     out: OutOpt = Path("results"),
     sim: SimOpt = False,
     save_sim: SaveSimOpt = False,
@@ -1031,6 +1119,7 @@ def line_tran(
     ad_serial: AdOpt = None,
     no_xscope: NoXScopeOpt = False,
     vref: VrefOpt = Vref.bgr,
+    enable: EnableOpt = Enable.static,
     yes: YesOpt = False,
     verbose: VerboseOpt = False,
 ) -> None:
@@ -1038,6 +1127,19 @@ def line_tran(
     from ldo_bench.procedures import line_tran as proc
 
     cfg = _load(config, verbose)
+    if vref_v is not None:
+        if vref == Vref.bgr:
+            _fail("--vref-v sets an external reference: use it with --vref ad2 (or ext)")
+        cfg, _ = _override(cfg, "vref", external_v=vref_v)  # the same checks as [vref] external_v
+    if raw:
+        if averages not in (None, 1):
+            _fail("--raw is one capture per edge: leave out --avg")
+        averages = 1
+    if dc_steps:
+        if square_hz is not None:
+            _fail("--square-hz and --dc-steps can't be used together")
+        # before the other options, so a long --window-ms isn't checked against the square
+        cfg = _load_with(cfg, line_tran=_section(cfg, "line_tran").model_copy(update={"square_hz": None}))
     n = _section(cfg, "line_tran").n_samples
     cfg, lt = _override(
         cfg,
@@ -1048,12 +1150,50 @@ def line_tran(
         averages=averages,
         sample_rate=_rate_for_window(window_ms, n),
         plot_window=None if plot_us is None else plot_us * 1e-6,
+        square_hz=square_hz,
+        settle_window=None if settle_ms is None else _positive_ms("--settle-ms", settle_ms),
     )
     _run(
         cfg,
         config,
         proc,
-        lambda b: proc.run(b, lt, cfg.analysis),
+        lambda b: proc.run(b, lt, cfg.analysis, raw=raw),
+        out=out,
+        sim=sim,
+        save_sim=save_sim,
+        psu=psu,
+        ad=ad_serial,
+        yes=yes,
+        use_dmm=vref == Vref.ad2,  # --vref ad2 reads VREF_IN on it
+        use_xscope=not no_xscope,
+        **_modes(cfg, vref, enable, split_buffer=True, allow_ad2=True),
+    )
+
+
+@app.command("sa-path-cal")
+def sa_path_cal(
+    config: ConfigOpt = DEFAULT_CONFIG,
+    out: OutOpt = Path("results"),
+    sim: SimOpt = False,
+    save_sim: SaveSimOpt = False,
+    psu: PsuOpt = None,
+    ad_serial: AdOpt = None,
+    yes: YesOpt = False,
+    verbose: VerboseOpt = False,
+) -> None:
+    """The 8591E's path gain from U4's input (J10 out, W2 on J10 pin 1, 100 mV) to the analyzer, over psrr's
+    analyzer range, with the LDO unpowered: the curve psrr --meter sa applies."""
+    from ldo_bench.procedures import sa_path_cal as proc
+
+    cfg = _load(config, verbose)
+    for name in ("sa", "buffer", "psrr"):
+        if getattr(cfg, name) is None:
+            _fail(f"sa-path-cal needs a [{name}] section in the config")
+    _run(
+        cfg,
+        config,
+        proc,
+        lambda b: proc.run(b, cfg.psrr),
         out=out,
         sim=sim,
         save_sim=save_sim,
@@ -1061,8 +1201,7 @@ def line_tran(
         ad=ad_serial,
         yes=yes,
         use_dmm=False,
-        use_xscope=not no_xscope,
-        **_modes(cfg, vref, split_buffer=True),
+        use_sa=True,
     )
 
 
@@ -1076,6 +1215,24 @@ def psrr(
     vin: Annotated[float | None, typer.Option(help="DC level on VIN (V)")] = None,
     load: LoadOpt = None,
     averages: Annotated[int | None, typer.Option("--avg", help="Captures per frequency")] = None,
+    meter: Annotated[
+        str | None,
+        typer.Option(
+            "--meter",
+            help="VOUT from: ad2 (sine fit) or sa (the HP 8591E through U4 / J9 from psrr.sa_from up, its path "
+            "gain measured against the AD2); default psrr.meter",
+        ),
+    ] = None,
+    sa_cal: Annotated[
+        Path | None,
+        typer.Option(
+            "--sa-cal",
+            exists=True,
+            file_okay=False,
+            help="With --meter sa: the sa-path-cal run folder whose curve converts the 8591E's readings "
+            "(default: the newest valid one under --out)",
+        ),
+    ] = None,
     out: OutOpt = Path("results"),
     sim: SimOpt = False,
     save_sim: SaveSimOpt = False,
@@ -1085,7 +1242,7 @@ def psrr(
     yes: YesOpt = False,
     verbose: VerboseOpt = False,
 ) -> None:
-    """PSRR vs frequency: a sine on VIN through the buffer, its size on VIN and VOUT (AD2 sine fit)."""
+    """PSRR vs frequency: a sine on VIN through the buffer, its size on VIN and VOUT (AD2 sine fit, or the 8591E)."""
     from ldo_bench.procedures import psrr as proc
 
     cfg = _load(config, verbose)
@@ -1099,12 +1256,29 @@ def psrr(
         amplitude=None if amp_mv is None else amp_mv * 1e-3,
         averages=averages,
         load_code=_load_code(cfg, load),
+        meter=meter,
     )
+    curve = None
+    if sec.meter == "sa":  # the path calibration, loaded before anything opens
+        from ldo_bench.instruments.base import InstrumentError as _Err
+        from ldo_bench.procedures.sa_path_cal import PathGainCurve
+
+        try:
+            if sa_cal is not None:
+                curve = PathGainCurve.load(sa_cal)
+            elif sim:  # the simulator's own path: U4 (0.98) into R14 + 50 ohm, flat
+                import math
+
+                curve = PathGainCurve.flat(20 * math.log10(0.98 * 50 / 97), 9e3, 2e6, "simulator (flat)")
+            else:
+                curve = PathGainCurve.newest(out)
+        except _Err as e:
+            _fail(str(e))
     _run(
         cfg,
         config,
         proc,
-        lambda b: proc.run(b, sec),
+        lambda b: proc.run(b, sec, sa_cal=curve),
         out=out,
         sim=sim,
         save_sim=save_sim,
@@ -1112,6 +1286,7 @@ def psrr(
         ad=ad_serial,
         yes=yes,
         use_dmm=False,
+        use_sa=sec.meter == "sa",
         **_modes(cfg, vref, split_buffer=True),
     )
 

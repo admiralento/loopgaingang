@@ -10,7 +10,6 @@ import pytest
 
 from ldo_bench.bench import open_bench
 from ldo_bench.procedures import (
-    buffer_check,
     en_sine,
     iq,
     line_reg,
@@ -43,7 +42,6 @@ def _all_wiring(cfg, bench):
         ("enable-sine", en_sine, cfg.en_sine),
         ("vref-line", vref_line, cfg.vref_line),
         ("temp", temp, cfg.temp),
-        ("buffer-check", buffer_check, cfg.buffer),
     ):
         if sec is not None:
             out[name] = mod.wiring(bench, sec)
@@ -112,3 +110,37 @@ def test_load_bank_needs_no_vs_buff_but_the_tmp235_does(jafwak):
             assert not any("VS_BUFF" in ln for ln in lines), lines
         t = temp.wiring(b, jafwak.temp)
     assert any("VS_BUFF (J4)" in ln and "TMP235" in ln for ln in t)
+
+
+def test_buffer_tests_list_the_enable_jumpers(jafwak):
+    """line-tran and psrr have the LDO tied on with jumpers (EN_AIN = VIN): the printout must say so."""
+    from ldo_bench.procedures import line_tran, psrr
+
+    with open_bench(jafwak, sim=True) as b:
+        for lines in (line_tran.wiring(b, jafwak.line_tran), psrr.wiring(b, jafwak.psrr)):
+            text = "\n".join(lines)
+            for jumper in jafwak.board.static_enable_jumpers:
+                assert jumper in text, jumper
+
+
+@pytest.mark.parametrize("use_xscope", [True, False])
+def test_transient_printouts_list_the_54621a_when_it_is_used(jafwak, use_xscope):
+    """Bench, 2026-11-19: line-tran used the 54621A but its printout never said where to put it.
+    With the cross-check scope open, line-tran and load-tran list both of its channels, on the
+    same points as the AD2's; without it (--no-xscope, or not found) they don't."""
+    from ldo_bench.procedures import line_tran, load_tran
+    from ldo_bench.procedures.load_tran import trigger_setup
+
+    xc, b_ = jafwak.xscope, jafwak.board
+    with open_bench(jafwak, sim=True, use_xscope=use_xscope) as b:
+        assert (b.xscope is not None) == use_xscope
+        lt_lines = line_tran.wiring(b, jafwak.line_tran)
+        pin, _ = trigger_setup(b, jafwak.load_tran)
+        ld_lines = load_tran.wiring(b, pin)
+    vout = f"54621A ch{xc.vout_channel}+ -> {b_.vout_probe}"
+    vin = f"54621A ch{xc.ref_channel}+ -> {b_.vin_probe}"
+    for lines in (lt_lines, ld_lines):
+        assert any(ln.startswith(vout) for ln in lines) == use_xscope, lines
+    assert any(ln.startswith(vin) for ln in lt_lines) == use_xscope, lt_lines
+    bit = f"54621A ch{xc.ref_channel}+ -> "
+    assert any(ln.startswith(bit) and "(B" in ln for ln in ld_lines) == use_xscope, ld_lines

@@ -30,6 +30,7 @@ from ldo_bench.instruments.agilent546xx import RS232_HINT as SCOPE_HINT
 from ldo_bench.instruments.agilent546xx import Agilent54621A
 from ldo_bench.instruments.base import InstrumentError, Oscilloscope
 from ldo_bench.instruments.e36xx import GPIB_HINT, SUPPORTED, AgilentE36xx, model_of
+from ldo_bench.instruments.hp859x import HP859x, is_hp859x
 from ldo_bench.instruments.hp34401a import HP34401A, RS232_HINT
 from ldo_bench.instruments.hp34401a import MODEL as DMM_MODEL
 from ldo_bench.instruments.transports import (
@@ -50,7 +51,7 @@ SCAN_TIMEOUT = 0.5  # s per probe while scanning
 
 @dataclass(frozen=True)
 class Found:
-    """An instrument that answered *IDN?, and the resource string that reaches it."""
+    """An instrument that answered *IDN? (or, if it predates SCPI, ID?), and the resource that reaches it."""
 
     resource: str
     idn: str
@@ -108,6 +109,28 @@ def _list(rm, query: str) -> tuple[str, ...]:
         return ()
 
 
+SA_HINT = (
+    "On the 8591E, check its HP-IB address (CONFIG > HPIB ADRS) and that the GPIB adapter is on the bus. "
+    "It answers ID?, not *IDN?: `ldo-bench discover` lists it as HP8591E."
+)
+
+
+def _identify(t) -> str:
+    """*IDN? of the instrument on transport `t`; if that gets an empty reply, ID? (HP's pre-SCPI query,
+    which the 8590-series analyzers answer). '' if neither answers."""
+    idn = t.query("*IDN?").strip()
+    if idn:
+        return idn
+    try:
+        return t.query("ID?").strip()
+    except InstrumentError:
+        return ""
+
+
+def _is_sa(f: Found) -> bool:
+    return is_hp859x(f.idn)
+
+
 def _visa_candidates() -> list[Found]:
     """*IDN? of every GPIB / USB VISA instrument, on the installed VISA and on pyvisa-py."""
     found: list[Found] = []
@@ -127,7 +150,7 @@ def _visa_candidates() -> list[Found]:
             try:
                 t = open_transport(name, timeout=SCAN_TIMEOUT * 4)
                 try:
-                    found.append(Found(name, t.query("*IDN?")))
+                    found.append(Found(name, _identify(t)))
                 finally:
                     t.close()
             except InstrumentError as e:
@@ -406,6 +429,32 @@ def open_xscope(
     return Agilent54621A(open_transport(f.resource, serial=f.serial or serial))
 
 
+def open_sa(resource: str = "", *, timeout: float = 5.0, finder: Finder | None = None) -> HP859x:
+    """The HP 8590-series analyzer at `resource`, or the one found on VISA (GPIB / USB) by its ID? reply."""
+    finder = finder or Finder()
+    if resource:
+        finder.claim(resource)
+        with _step(f"Opening the spectrum analyzer at {resource}"):
+            try:
+                return HP859x(open_transport(resource, timeout=timeout))
+            except InstrumentError as e:
+                raise InstrumentError(f"{e}\n{SA_HINT}") from e
+    hits = [f for f in finder.visa() if _is_sa(f)]
+    if not hits:
+        raise InstrumentError(
+            f"no HP 8590-series spectrum analyzer found on VISA (GPIB / USB).\n{SA_HINT}\n"
+            "Run `ldo-bench discover -v` for details."
+        )
+    if len(hits) > 1:
+        listing = "\n  ".join(f"{f.resource}  ({f.idn})" for f in hits)
+        raise InstrumentError(f"more than one spectrum analyzer found; set sa.resource:\n  {listing}")
+    f = hits[0]
+    finder.claim(f)
+    log.info("Using spectrum analyzer %s (%s)", f.resource, f.idn)
+    log.info('  tip: set sa.resource = "%s" in the config to skip this search', f.resource)
+    return HP859x(open_transport(f.resource, timeout=timeout))
+
+
 def open_ad2(serial: str = "") -> Oscilloscope:
     """The Analog Discovery 2 (by serial number, or the only one attached)."""
     from ldo_bench.instruments.ad2 import open_ad2_device
@@ -457,6 +506,8 @@ def discover(gpib_address: int = 5, cfg=None) -> list[str]:
             if _is_dmm(f)
             else "  <- cross-check scope"
             if _is_xscope(f)
+            else "  <- spectrum analyzer"
+            if _is_sa(f)
             else ""
         )
         if f.serial:
@@ -466,6 +517,7 @@ def discover(gpib_address: int = 5, cfg=None) -> list[str]:
         (f"supported power supply ({', '.join(SUPPORTED)})", _is_psu, GPIB_HINT),
         (f"{DMM_MODEL} DMM (optional)", _is_dmm, RS232_HINT),
         ("54621A cross-check scope (optional)", _is_xscope, SCOPE_HINT),
+        ("HP 8590-series spectrum analyzer (optional)", _is_sa, SA_HINT),
     ):
         if not any(test(f) for f in found):
             lines.append(f"No {what} found on GPIB, USB, RS-232 or Prologix.")

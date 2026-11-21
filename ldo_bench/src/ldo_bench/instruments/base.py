@@ -29,6 +29,11 @@ class InstrumentError(RuntimeError):
     """Raised for any instrument communication or configuration problem."""
 
 
+def default_hysteresis(channel_range: float) -> float:
+    """Scope trigger hysteresis (V) when a capture doesn't set one: 1 % of the channel's range (V p-p)."""
+    return 0.01 * channel_range
+
+
 @dataclass(frozen=True)
 class DcReading:
     """Average of one scope channel over a free-running acquisition."""
@@ -177,6 +182,7 @@ class Oscilloscope(Protocol):
         force: bool = False,
         dio_trigger: tuple[int, Edge] | None = None,
         free_running: bool = False,
+        hysteresis: float | None = None,
     ) -> Capture:
         """Arm a single triggered capture, call `stimulus()` once armed, return the data.
 
@@ -195,6 +201,9 @@ class Oscilloscope(Protocol):
         free_running=True: the signal runs on its own (a periodic wavegen wave, stimulus does
         nothing), so the scope may trigger as soon as it's armed. Otherwise a trigger before
         stimulus() is an InstrumentError: the capture would not contain the step.
+        hysteresis (V): before an edge counts, the trigger channel must first be this far on the other
+        side of trigger_level (below it for rising). None = default_hysteresis (1 % of the trigger
+        channel's range), which is 0.5 V on the 50 V range: a smaller step never triggers.
         """
         ...
 

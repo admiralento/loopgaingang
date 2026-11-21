@@ -150,6 +150,9 @@ def averaged_step(
     step: Callable[[], None],
     label: str,
     xscope: XScopeSetup | None = None,
+    hysteresis: float | None = None,
+    free_running: bool = False,
+    check: Callable[[Capture], None] | None = None,
 ) -> StepCapture:
     """`tc.averages` captures of the step start() -> step(), aligned and averaged, plus any issues.
 
@@ -162,6 +165,11 @@ def averaged_step(
 
     setups: AD2 channel range / offset by channel. trigger_channel / trigger_level (V) /
     trigger_edge: the AD2 trigger, on the ref channel. label: name used in log messages.
+    hysteresis (V): the AD2 trigger's, passed to Oscilloscope.capture (None = its default, 1 % of
+    the trigger channel's range). free_running: the stimulus runs on its own (line-tran's square);
+    start / step are then no-ops and each capture takes the next edge (Oscilloscope.capture).
+    check(capture): called on every capture as it arrives (line-tran: VIN against the external
+    reference); it raises to stop the run before the next one.
 
     If the AD2 times out on capture k, the run is not stopped: the issue is recorded, a forced
     capture is taken, and the function returns early with the average of the captures that did
@@ -223,9 +231,11 @@ def averaged_step(
             "pre_trigger": tc.pre_trigger,
             "stimulus": step,
             "timeout": tc.timeout,
+            "hysteresis": hysteresis,
+            "free_running": free_running,
         }
         try:
-            caps.append(bench.scope.capture(**kw))
+            cap = bench.scope.capture(**kw)
         except InstrumentError as e:
             log.warning(
                 "%s: capture %d got no trigger (%s); recording an untriggered capture", label, k + 1, e
@@ -238,8 +248,14 @@ def averaged_step(
             bench.sleep(tc.rest_time)
             # force=True: acquire without waiting for the trigger (the step is still applied)
             forced = bench.scope.capture(**kw, force=True)
+            if check is not None:
+                check(forced)
             collect_x()
             return StepCapture(align_average(caps) if caps else forced, [issue], xs_traces, xs_issue)
+        else:
+            if check is not None:
+                check(cap)
+            caps.append(cap)
     log.info("%s: averaged %d captures at %.3g MS/s", label, len(caps), caps[0].sample_rate / 1e6)
     collect_x()
     return StepCapture(align_average(caps), [], xs_traces, xs_issue)
@@ -391,13 +407,14 @@ def xcheck_report(e) -> list[str]:
     return [line]
 
 
-def edge_report(e, extra: list[str] | None = None) -> list[str]:
+def edge_report(e, extra: list[str] | None = None, settling: list[str] | None = None) -> list[str]:
     """Report lines for one edge. Invalid edges list their setup issues and no metrics.
 
     `e` is a test's EdgeResult (needs .title, .metrics, .issues, optionally .xcheck). `extra` lines
     (e.g. line-tran's mV per V) go between the peak and the settling time. Also warns when, with
     settle_reference "pre", VOUT ends outside the band around the pre-step level (a DC shift
     bigger than the band, e.g. load regulation on a large step), since it can then never settle.
+    `settling`: lines that replace the settling time and that warning (line-tran's long capture).
     """
     lines = [f"  {e.title}"]
     issues = list(getattr(e, "issues", []))
@@ -411,12 +428,15 @@ def edge_report(e, extra: list[str] | None = None) -> list[str]:
         f"    nominal   {m.nominal:.5f} V",
         f"    peak      {m.deviation * 1e3:+.2f} mV  (band ±{m.band * 1e3:.2f} mV)",
         *(extra or []),
-        f"    settling  {ts}  (to the {'pre-step' if m.reference == 'pre' else 'final'} level)",
+        *(
+            settling
+            or [f"    settling  {ts}  (to the {'pre-step' if m.reference == 'pre' else 'final'} level)"]
+        ),
         f"    noise     {m.noise * 1e3:.3f} mV rms"
-        + ("" if m.trustworthy else "  ! above band/3: settling time limited by noise"),
+        + ("" if (m.trustworthy or settling) else "  ! above band/3: settling time limited by noise"),
     ]
     shift = m.final - m.nominal
-    if m.reference == "pre" and np.isfinite(shift) and abs(shift) > m.band:
+    if settling is None and m.reference == "pre" and np.isfinite(shift) and abs(shift) > m.band:
         lines.append(
             f"    ! VOUT ends {shift * 1e3:+.2f} mV from the pre-step level, outside the "
             f"±{m.band * 1e3:.2f} mV band, so it can never settle back to it. "
@@ -433,6 +453,7 @@ def plot_edges(
     full: bool = False,
     window: float | None = None,
     per_edge: bool = False,
+    raw: bool = False,
 ):
     """One column per edge: the trigger channel's trace on a small panel on top, sharing the time
     axis with VOUT below, both in absolute volts.
@@ -448,8 +469,10 @@ def plot_edges(
     ref_label: y label of the top panel. vout_nominal: drawn as the expected VOUT on invalid edges.
     full: show the whole capture instead of zooming on the step (plot_full.png). window: time after
     the step to show (s); None picks it from the settling times. per_edge: size each valid edge's
-    span to its own settling time instead of the slowest edge's (plot_zoom.png; ignores `window`). The cross-check scope's traces,
-    if any, are overlaid in another colour. Returns the matplotlib Figure.
+    span to its own settling time instead of the slowest edge's (plot_zoom.png; ignores `window`).
+    raw: draw only the measured VOUT samples (no averaged-and-smoothed trace); the peak marker sits on a
+    measured sample, and the numbers are still the analysis's. The cross-check scope's traces, if any,
+    are overlaid in another colour. Returns the matplotlib Figure.
     """
     from matplotlib.ticker import FormatStrFormatter
 
@@ -526,8 +549,11 @@ def plot_edges(
         x_offset = _pre_step_offset(e, x) if xok else float("nan")
         if valid:
             ax.axhspan(m.lower, m.upper, color=plotting.GRID, alpha=0.8, lw=0, zorder=0)
-            ax.plot(us[view], v, color=plotting.SERIES[0], lw=0.8, alpha=0.35, zorder=2, label="Averaged")
-            ax.plot(us[view], vs, color=plotting.SERIES[0], lw=1.8, zorder=3, label="Smoothed")
+            if raw:
+                ax.plot(us[view], v, color=plotting.SERIES[0], lw=0.8, zorder=3, label="Measured (raw)")
+            else:
+                ax.plot(us[view], v, color=plotting.SERIES[0], lw=0.8, alpha=0.35, zorder=2, label="Averaged")
+                ax.plot(us[view], vs, color=plotting.SERIES[0], lw=1.8, zorder=3, label="Smoothed")
             if np.isfinite(m.settling_time) and m.settling_time * scale <= us[view][-1]:
                 ax.axvline(m.settling_time * scale, color=plotting.INK_2, lw=1, ls=(0, (3, 2)), zorder=2)
                 ax.annotate(
@@ -552,10 +578,11 @@ def plot_edges(
                 )
             # the sample closest to the peak value (the analysis returns the value, not its index)
             i0 = max(m.step_index, 0)  # the peak is after the step: don't match an equal value before it
-            i_pk = i0 + int(np.argmin(np.abs(e.vout_smoothed[i0:] - m.peak)))
+            shown = e.vout if raw else e.vout_smoothed
+            i_pk = i0 + int(np.argmin(np.abs(shown[i0:] - m.peak)))
             ax.plot(
                 us[i_pk],
-                e.vout_smoothed[i_pk],
+                shown[i_pk],
                 "o",
                 ms=6,
                 color=plotting.SERIES[0],
@@ -565,7 +592,7 @@ def plot_edges(
             )
             ax.annotate(
                 f"{m.deviation * 1e3:+.1f} mV",
-                (us[i_pk], e.vout_smoothed[i_pk]),
+                (us[i_pk], shown[i_pk]),
                 xytext=(8, 0),
                 textcoords="offset points",
                 fontsize=8,
@@ -573,7 +600,8 @@ def plot_edges(
                 va="center",
             )
             # Scale to the response and band; the 1-sample switching glitch would squash it.
-            lo, hi = min(vs.min(), m.lower), max(vs.max(), m.upper)
+            drawn = v if raw else vs
+            lo, hi = min(drawn.min(), m.lower), max(drawn.max(), m.upper)
         else:
             ax.plot(us[view], v, color=plotting.SERIES[0], lw=1.0, zorder=3, label="Measured (averaged)")
             lo, hi = float(np.percentile(v, 0.5)), float(np.percentile(v, 99.5))

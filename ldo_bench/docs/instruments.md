@@ -117,6 +117,12 @@ Optional: configure `[xscope]`, or skip it for a run with `--no-xscope`. If it's
 
 The driver follows the Agilent 54620-Series Programmer's Guide (pub. 54622-97038), but hasn't been run against a real scope yet.
 
-## Spectrum analyzer (coming)
+## HP 8591E spectrum analyzer
 
-The part number isn't known yet. The PSRR test is ready for it: VOUT is measured through a `PsrrMeter` interface in `procedures/psrr.py`, and [architecture.md](architecture.md#recipes) describes what a spectrum analyzer version needs to do.
+- **Interface:** HP-IB (GPIB) through the UsbGpib adapter. On the bench it appears as `USB0::1003::8293::HP8591E::0::INSTR` (`[sa] resource = ""` finds it). LF termination both ways.
+- **Identification:** the 8590 series predates SCPI. It returns an empty reply to `*IDN?` and answers `ID?`. Discovery tries `ID?` whenever `*IDN?` comes back empty, so `ldo-bench discover` lists it as `HP8591E <- spectrum analyzer`. Confirmed on 2026-11-20: `ID?` → `HP8591E`, `REV?` → `940822` (firmware date), `SER?` → `3728`.
+- **Commands** (`instruments/hp859x.py`): `IP`, `SNGLS`, `CF` / `SP` / `RB` / `VB` (Hz), `RL` (dBm), `AT` (dB), `TS;DONE?`, `MKPK HI`, `MKF`, `MKF?` / `MKA?` / `RB?`, `ERR?`. Each command is followed by `ERR?`, and every reply is parsed and range-checked. These come from the 8590 E-series Programmer's Guide (08590-90235) from memory: its PDF copies have no text layer. `sa-check` tests them on the instrument.
+- **Input:** 50 Ω, 9 kHz to 1.8 GHz, 25 V DC maximum (Option 001: 100 V DC). These come from search results for the datasheet, not the datasheet itself. Never put VOUT on it without a DC block or a buffer.
+- **Amplitudes** are read in dBm and converted to V peak into 50 Ω (`dbm_to_vpeak`).
+- **Before using it, run `sa-check`** (see [tests.md](tests.md#sa-check-hp-8591e-on-its-calibrator)).
+- **PSRR:** `psrr --meter sa` (`SaPsrrMeter`): VOUT from the 8591E through U4 / J9 from 30 kHz up, converted with the curve from `sa-path-cal` and checked against the AD2 at 30–100 kHz. Below ~30 kHz its LO feedthrough swamps tens-of-µV tones. See [tests.md](tests.md#psrr-power-supply-rejection-vs-frequency).

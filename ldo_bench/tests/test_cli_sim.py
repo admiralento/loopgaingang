@@ -37,6 +37,49 @@ def test_runs_on_the_simulator(cmd, tmp_path):
 
 
 def test_every_command_is_listed():
-    assert {"load-reg", "line-reg", "load-tran", "line-tran", "psrr", "iq", "temp", "buffer-check"} <= set(
-        TESTS
+    assert {"load-reg", "line-reg", "load-tran", "line-tran", "psrr", "iq", "temp"} <= set(TESTS)
+
+
+@pytest.mark.parametrize(
+    ("args", "expected"),
+    [
+        ([], "W1 a 20 Hz square"),
+        (["--square-hz", "10"], "W1 a 10 Hz square"),
+        (["--dc-steps"], "W1 DC steps"),
+    ],
+)
+def test_line_tran_square_options(args, expected):
+    """The square is line-tran's default; --square-hz changes it and --dc-steps turns it off."""
+    r = invoke("line-tran", "-c", config_path("jafwak"), "--sim", "--yes", *args)
+    assert r.exit_code == 0, r.output
+    assert expected in r.output
+
+
+def test_line_tran_square_must_fit_the_window():
+    """--window-ms 30 with the 20 Hz square: half a period (25 ms) is shorter than the capture."""
+    r = invoke("line-tran", "-c", config_path("jafwak"), "--sim", "--yes", "--window-ms", "30")
+    assert r.exit_code == 2 and "square_hz" in r.output, r.output
+    r = invoke("line-tran", "-c", config_path("jafwak"), "--sim", "--yes", "--window-ms", "30", "--dc-steps")
+    assert r.exit_code == 0, r.output
+    r = invoke("line-tran", "-c", config_path("jafwak"), "--sim", "--yes", "--square-hz", "20", "--dc-steps")
+    assert r.exit_code == 2 and "--dc-steps" in r.output, r.output
+
+
+def test_line_tran_raw_is_one_capture():
+    r = invoke("line-tran", "-c", config_path("jafwak"), "--sim", "--yes", "--raw")
+    assert r.exit_code == 0, r.output
+    assert "1 averages per edge" in r.output
+    r = invoke("line-tran", "-c", config_path("jafwak"), "--sim", "--yes", "--raw", "--avg", "4")
+    assert r.exit_code == 2 and "--raw" in r.output, r.output
+
+
+def test_line_tran_settle_ms():
+    r = invoke("line-tran", "-c", config_path("jafwak"), "--sim", "--yes", "--settle-ms", "10")
+    assert r.exit_code == 0, r.output
+    assert "after 10 ms" in r.output
+    r = invoke("line-tran", "-c", config_path("jafwak"), "--sim", "--yes", "--settle-ms", "30")
+    assert r.exit_code == 2 and "settle_window" in r.output, r.output  # 30 ms > half of 20 Hz
+    r = invoke(
+        "line-tran", "-c", config_path("jafwak"), "--sim", "--yes", "--settle-ms", "30", "--square-hz", "10"
     )
+    assert r.exit_code == 0, r.output

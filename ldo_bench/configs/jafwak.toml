@@ -45,6 +45,11 @@ parity = "even"              # bench meter is set to EVEN: 7 BITS ("none" = NONE
 nplc = 10                    # integration time (power-line cycles): 10 = ~0.2 s/reading, low noise
 samples = 1                  # readings averaged per point
 
+[sa]                         # HP 8591E spectrum analyzer on GPIB (UsbGpib adapter); sa-check: CAL OUT -> INPUT
+enabled = true
+resource = ""                # "" = find it on VISA by ID?. On the bench (2026-11-20): USB0::1003::8293::HP8591E::0::INSTR
+cal_tolerance_db = 1.0       # calibrator within this of -20 dBm (not from the datasheet yet)
+
 [xscope]                     # Agilent 54621A on RS-232: cross-check of every transient edge (optional)
 enabled = true               # false, or --no-xscope, to use the AD2 only
 resource = ""                # "" = search GPIB/USB/RS-232. Or GPIB0::7::INSTR, prologix:COM5:7, serial:COM4
@@ -57,10 +62,10 @@ points = 2000
 
 [loadbank]
 # Binary-weighted load cell (load_cell.kicad_sch), B0 = LSB. Refitted 2026-11-14 for a 1-20 mA sweep
-# (load_cell.kicad_sch still shows the old 250 / 125 / 62.5 / 31.6 / 15.4 ohm).
+# (the schematic shows these values since "New R vals", 71b7ee1).
 # Current per bit at 1.2 V: 1.00, 1.76, 3.64, 8.00, 14.63 mA  (all on: ~29 mA; code 22 = 20.04 mA is the top allowed)
 dio_pins = [0, 1, 2, 3, 4]
-resistors = [1200.0, 680.0, 330.0, 150.0, 82.0]   # B0..B4 (R20, R19, R17/R18, R16, R15 on the schematic)
+resistors = [1200.0, 680.0, 330.0, 150.0, 82.0]   # B0..B4 (R20, R19, R18, R16, R15 on the schematic)
 switch_resistance = 0.0      # FDV305N Rds(on) (ohm), if you want it in the current estimate
 active_high = true
 
@@ -100,7 +105,7 @@ high_current = true          # up to 20.04 mA: psu.high_current_limit
 [line_reg]
 vin_start = 1.25
 vin_stop = 1.9               # = dut.vin_max
-vin_step = 0.05
+vin_step = 0.01
 load_code = 22               # 20.04 mA (B1 + B2 + B4)
 high_current = true          # psu.high_current_limit
 
@@ -134,11 +139,10 @@ edges = ["rising", "falling"]
 [buffer]                     # U2 reworked (2026-11-13): V- on -5 V, so the buffer tests run on a split supply
 v_minus = 5.0                # PSU OUT2 wired reversed: OUT2 + -> GND, OUT2 - -> U2 pin 4 (-5 V)
 channel = 2
-current_limit = 0.02         # A on the -5 V rail (BUF634 low-Iq mode: ~1.5-2.3 mA)
+current_limit = 0.02         # A on the -5 V rail; U2 in wide-BW mode since 2026-11-19 (BW to V-): IQ 8.5 mA typ, 12 mA max
 rail_current_limit = 0.1     # A on VS_BUFF (OUT1) while the buffer runs (approved 2026-11-13)
 ramp_step = 0.1              # V: the two rails ramp together in these steps, VIN read after each
 vin_window = [-0.1, 0.3]     # V on VIN while the rails ramp with W1 at 0 V; outside it everything comes down
-v_plus = 5.0                 # V on VS_BUFF for buffer-check
 
 [line_tran]                  # W1 -> VIN_FG SMA -> BUF634 -> VIN (JP4 to the buffer), PSU on VS_BUFF
 psu_voltage = 5.0            # on VS_BUFF (not VIN!); >= vin_high + buffer_headroom
@@ -151,6 +155,9 @@ n_samples = 8192
 pre_trigger = 0.2
 averages = 16
 edges = ["rising", "falling"]
+w1_max = 1.95                # V: W1 may go this high in line-tran only (U2 ~5 ohm under load); VIN still stops at vin_max (approved 2026-11-19)
+settle_window = 20e-3        # s: each edge's second, long capture, until VOUT is flat at its new level (plot_full.png)
+square_hz = 20               # W1 a square between the two levels (the AD2's DC level moves with tau ~2 ms); --dc-steps for DC
 
 [board]                      # every wiring line names these: silkscreen label + connector pin (PCB file, 2026-11-13)
 vin_dc = "VIN_DC (J7)"
@@ -255,6 +262,9 @@ points_per_decade = 3
 load_code = 22               # 20.04 mA (B1 + B2 + B4)
 averages = 4                 # captures per frequency, averaged coherently
 cycles = 20                  # min sine cycles per capture (8192 samples, up to 100 MS/s)
+meter = "ad2"                # or "sa" (--meter sa): VOUT from the 8591E through U4 / J9 / DC block from sa_from up
+sa_from = 30e3               # Hz: below it the 8591E's LO feedthrough swamps VOUT; the sa-path-cal curve is checked to 100 kHz
+sa_path_tolerance_db = 2.0   # dB, AD2 vs 8591E where both read VOUT (default 1). Set 2026-11-20 (Alek): 46 kHz disagreed by 1.66 dB, cause not known
 
 [split_rails]                # line-reg --split-rails: dropout "Method B", BGR_VDD / OTA_VDD on PSU OUT2
 psu_channel = 2              # OUT2 + -> J1 pin 1 (BGR_VDD) and J1 pin 13 (OTA_VDD), OUT2 - -> GND; jumpers 1-3 / 13-15 out

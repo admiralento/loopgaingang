@@ -13,7 +13,7 @@ Every command also takes:
 - `-o <folder>`: results folder (default `results/`).
 - `--psu` / `--ad-serial`: pick an instrument when there are several.
 - `--vref bgr|ext`: the reference VOUT follows. `ext` uses the supply's second output in place of the BGR (JAFWAK, JP2 removed). Not on the enable or bench-check tests; see [External reference](#external-reference-bgr-vs---vref-ext-jafwak).
-- `--enable static|dio` (smoke, load-reg, line-reg, load-tran, vref-line, temp): how the LDO is enabled. `static` (default): tied on with jumpers. `dio`: driven from the AD2; see [Enable from the AD2](#enable-from-the-ad2---enable-dio-jafwak).
+- `--enable static|dio` (smoke, load-reg, line-reg, load-tran, line-tran, vref-line, temp): how the LDO is enabled. `static` (default): tied on with jumpers. `dio`: driven from the AD2; see [Enable from the AD2](#enable-from-the-ad2---enable-dio-jafwak).
 
 Before powering anything up, each command prints the wiring it expects and asks you to confirm it: one connection per line, scope 1+ and 1− on one line, scope 2 on its own, named by the board's silkscreen label and connector pin (`[board]` in the config). The lists below summarise it; run a command with `--sim` to see exactly what it prints. Option values in the examples are just examples; defaults come from the board's config section, which is named under each test.
 
@@ -27,7 +27,7 @@ How a run decides it measured the board, and what `_INVALID` means, is covered i
   - `line-reg`
   - `load-tran`
 - **JAFWAK:** no valid run yet. Its load-transient runs had the scope off VOUT (see [bench-log.md](bench-log.md)).
-- **Simulator only so far:** `line-tran`, `enable-startup`, `iq` and `psrr` (on the split-supply U2 too); `buffer-check`; `vref-line`, `temp`, `enable-sine --shape square`, `enable-current` and `--enable dio` (added 2026-11-13); `enable-sine --output vout`, `line-reg --split-rails`, `--ext-load-ohm` and vref-line's DMM loading check (added 2026-11-14). `enable-sine --shape triangle` ran on JAFWAK on 2026-11-12.
+- **Simulator only so far:** `line-tran`, `enable-startup`, `iq` and `psrr` (on the split-supply U2 too); `vref-line`, `temp`, `enable-sine --shape square`, `enable-current` and `--enable dio` (added 2026-11-13); `enable-sine --output vout`, `line-reg --split-rails`, `--ext-load-ohm` and vref-line's DMM loading check (added 2026-11-14). `enable-sine --shape triangle` ran on JAFWAK on 2026-11-12.
 
 Suggested order for a first session on a board:
 1. `discover`
@@ -99,27 +99,7 @@ uv run ldo-bench psu-sweep --start 0 --stop 1.8 --step 0.05      # --updown, --d
 ### Supply current limit
 - **Every run** sets `psu.current_limit` before the output first turns on (10 mA on JAFWAK). The limit is printed at the start of the run and saved in `meta.json` as `psu_current_limit_a`.
 - **Higher limit:** a test whose section has `high_current = true` uses `psu.high_current_limit` instead (60 mA on JAFWAK, approved 2026-11-13). The tests that can opt in are `load-reg`, `line-reg`, `load-tran`, `smoke` and `loadbank-check`; on JAFWAK all five do, since they switch in up to 19.3 mA (loadbank-check: 14.6 mA for B4 alone).
-- **Config check:** no test may be configured to draw at or above the limit it runs with: its heaviest load-bank code at `vout_nominal` (loadbank-check: `voltage` over the smallest resistor). This estimate leaves out the LDO's own few hundred µA. `line-tran`, `psrr` and `buffer-check` are separate: they power the buffer rail with `buffer.rail_current_limit`.
-
-### `buffer-check`: the reworked U2 on its own (JAFWAK)
-First bring-up plan, steps I.1–I.5. **Run it before `line-tran` or `psrr`, with the chip disconnected.** Needs `[buffer]`.
-- **Wiring:**
-  - CHIP DISCONNECTED: JP4 open (no jumper); nothing on VIN_DC (J7)
-  - 100 Ohm dummy load from JP4 pin 1 (U2 output) to GND (TP8): ~18 mA at 1.8 V, about what the chip draws at 20 mA
-  - PSU OUT1 + -> VS_BUFF (J4), OUT1 - -> GND (J11)
-  - PSU OUT2 REVERSED: OUT2 + -> GND, OUT2 - -> U2 pin 4 (-5 V)
-  - AD2 W1 -> VIN_FG (J3); Scope 2+ -> JP4 pin 1, 2- -> GND (TP8)
-- **Does:**
-  1. W1 to DC 0 V, then the split supply up ([below](#split-supply-u2-jafwak-buffer)), with JP4 pin 1 read after every step.
-  2. The output at W1 = 0 V: U2's offset (up to ~65 mV, first plan).
-  3. Calibrates W1 for each of `check_levels` (1.70, 1.80, 1.85 V). The hard stop is `check_peak_max` (1.95 V) since the chip is off; W1 itself stays within `dut.vin_max`. That's why 1.90 V isn't a default: with a negative offset it needs W1 above 1.9 V.
-  4. DC gain across the levels (the first plan expects 0.93–0.99; outside that is a note).
-  5. A step between the lowest and highest levels, both ways: peak and 10–90 % time (C9 and U2's ~7 Ohm give tens of µs; within two samples, 2 µs, it's reported as "under 2 µs").
-  6. A sine, 1.80 V ± 50 mV at 10 kHz: output amplitude against W1's, and its peak.
-  7. Rails down with W1 at 0 V, W1 off last.
-- **Not ready (exit 3)** if a level isn't reached, anything on JP4 pin 1 goes above 1.95 V, or the output doesn't follow W1 (probe not on JP4 pin 1). The report prints the W1 setting for each level, a cross-check for line-tran's and psrr's own calibration.
-- **Not tested:** the first plan's I.4 (what W1 does when stopped). The scripts never stop W1 while U2's rails are up.
-- **Config:** `[buffer]` (`check_levels`, `check_peak_max`, `check_sine_*`, `v_plus`).
+- **Config check:** no test may be configured to draw at or above the limit it runs with: its heaviest load-bank code at `vout_nominal` (loadbank-check: `voltage` over the smallest resistor). This estimate leaves out the LDO's own few hundred µA. `line-tran` and `psrr` are separate: they power the buffer rail with `buffer.rail_current_limit`.
 
 ---
 
@@ -266,7 +246,7 @@ On JAFWAK every wiring printout with the chip powered also lists the J1 ON jumpe
     - **Smoothed** (thick): the averaged trace with the switching glitch (±`blank_time` around the step) bridged by a straight line, then a `smooth_time` (1 µs) moving average. The peak, settling band and settling time are all measured on it, as in the WaveForms script.
     - **54621A:** the cross-check scope's own averaged trace.
 - **Longer window:** `--window-ms 5` lowers the sample rate to fit 5 ms into the same 8192 samples. Fast details get coarser at lower rates.
-- **54621A cross-check:** optional `[xscope]`. Every edge is also captured on the 54621A, overlaid as "54621A", and its peak and settling time are compared. `--no-xscope` skips it. See [instruments.md](instruments.md#agilent-54621a-cross-check-scope).
+- **54621A cross-check:** optional `[xscope]`. Every edge is also captured on the 54621A, overlaid as "54621A", and its peak and settling time are compared. `--no-xscope` skips it. When the run finds it, the wiring printout lists both of its channels (on the same points as the AD2's); when it isn't found, it isn't listed and the run goes on without it. See [instruments.md](instruments.md#agilent-54621a-cross-check-scope).
 - **Extra files:** `waveform_rising.csv` / `waveform_falling.csv`.
 
 ### `load-tran`: load transient
@@ -286,7 +266,7 @@ On JAFWAK every wiring printout with the chip powered also lists the J1 ON jumpe
 - **Config:** `[load_tran]`, `[analysis]`.
 
 ### Split-supply U2 (JAFWAK, `[buffer]`)
-After the rework, U2's V− (pin 4) is on −5 V, so it can drive VIN down to 0 V and across 1.7–1.9 V. With a `[buffer]` section in the config, `line-tran`, `psrr` and `buffer-check` run it on a split supply:
+After the rework, U2's V− (pin 4) is on −5 V, so it can drive VIN down to 0 V and across 1.7–1.9 V. With a `[buffer]` section in the config, `line-tran` and `psrr` run it on a split supply:
 - **Supplies:** PSU OUT1 -> VS_BUFF (J4), `line_tran.psu_voltage` / `psrr.psu_voltage` (5.0 V), limit `buffer.rail_current_limit` (100 mA). PSU OUT2 wired reversed (OUT2 + -> GND, OUT2 - -> U2 pin 4), `buffer.v_minus` (5.0 V), limit `buffer.current_limit` (20 mA).
 - **W1 first, and always:** W1 holds U2's input (VIN_FG, J3) at DC 0 V before either rail comes up, and is never turned off while they are up. A floating input sends U2's output to a rail (up to ~3.4 V on VIN, first plan). Where the single-rail path turned W1 off, the split path sets it to 0 V.
 - **Ramp:** VS_BUFF and V− ramp together, `buffer.ramp_step` (0.1 V) at a time, and VIN is read after each step. If it leaves `buffer.vin_window` (−0.1 to +0.3 V), both rails come down and the run stops, saying which case it looks like:
@@ -306,21 +286,59 @@ Without `[buffer]` (the demo board) line-tran and psrr use the single-rail path 
   - AD2 W1 -> buffer input SMA (VIN_FG / V_SIG); buffer output onto VIN (JP4)
   - Scope 1+ -> VOUT at the output pins, 1- -> GND
   - Scope 2+ -> VIN at the LDO input (trigger + VIN level), 2- -> GND
+  - LDO enabled with jumpers (JAFWAK: J6 1-2 "HI", J8 1-2 and 9-10 "LDO"). EN_AIN = VIN, so EN steps with VIN; `--enable dio` holds it from the AD2 instead
   - DIO [0, 1, 2, 3, 4] -> load bank bits B0..B4, AD2 GND -> board GND
 - **Does:**
   1. **Interlock, stage 1:** powers the rail at only 1.0 V with W1 off, and checks that VIN stays low. If VIN follows the supply, the leads are on VIN: stop.
   2. **Interlock, stage 2:** stage 1 can't tell a correct bench from a VIN probe that's off VIN (both read ~0 V). So the rail goes to `dut.vin_max` (safe even if the supply were on VIN) and W1 steps between the two `proof_levels` (0.1 and 0.3 V). VIN must follow W1. If it doesn't (supply on VIN, probe off, buffer not driving), the test stops before the rail goes above `dut.vin_max`.
      - **Not yet tried on hardware:** the BUF634 must be able to drive the proof levels with its rail at 1.9 V. If the first real run stops here with the wiring right, change `proof_levels`.
   3. **Calibration:** raises the rail to `psu_voltage` and calibrates out the buffer's offset from VIN measured at the board (on the AD2's 5 V range). The steps land on `vin_low` / `vin_high` within 5 mV. The W1 correction is capped at 250 mV.
+     - **From below:** W1 starts 250 mV under each target and comes up to it, so a buffer that reads high can't overshoot. On 2026-11-17 W1 started at the target, U2 was +65 mV high with no load, and VIN reached 1.915 V (over `dut.vin_max`) before the hard stop.
      - **Hard stop:** any VIN reading above `dut.vin_max` less the AD2's error margin (about 20 mV at 1.9 V).
-  4. **Steps:** steps W1 between the two levels, triggering on VIN itself.
-- **Computes:** everything from the transient analysis, plus the peak VOUT deviation per volt of VIN step (mV/V).
+     - **W1's cap:** `dut.vin_max`, or `line_tran.w1_max` (JAFWAK: 1.95 V, approved 2026-11-19) once the interlock has passed and until the run ends. U2 sits about 5 Ω × the LDO's input current below W1 (58 mV at 18.3 mA), so 1.85 V at 18-20 mA needs W1 above 1.9 V. VIN keeps the hard stop above; psrr and EN_AIN keep `dut.vin_max`. Bounds: `dut.vin_max` to `dut.vin_max` + 0.2 V.
+     - **Out of reach:** a level calibration can't reach is a setup issue, and the run stops there: rails down, nothing captured, an `_INVALID` folder with the issue (exit 3).
+  4. **Square (the default, `square_hz` = 20 Hz):** W1 runs as a free-running square between the two calibrated setpoints. The AD2's DC level moves slowly (τ ≈ 2 ms on 2026-11-18 and 2026-11-19: a 10–90 % edge of about 4 ms); its square switches in about 0.2–0.35 ms (Joseph's raw capture, 2026-11-18). After a few periods, one untriggered capture over 1.5 periods checks VIN's highest sample against the same hard stop as calibration, before any edge is captured; over it, W1 goes to idle and the run stops. If the two setpoints come out equal (a buffer that can't reach the levels, already an issue), the run uses DC steps instead and says so. W1 goes back to DC before the rails come down. `--dc-steps` gives one DC step per capture, as before.
+  5. **Steps:** each capture takes the square's next edge (or one DC step), triggering on VIN itself. Each edge is captured twice, each averaged: the fast capture (`sample_rate`, 0.8 ms at 10 MS/s) for the kick, and a long one over `settle_window` (20 ms; same 8192 samples, so about 0.4 MS/s) for VOUT reaching its new level. Half a square period must be longer than both. VIN is recorded on the AD2's fine 5 V range, and the trigger hysteresis is a quarter of the step (25 mV). The scope's default (1 % of range) is 0.5 V on the 50 V range of `[ad2] ref`, which a 100 mV step never clears: that's why line-tran never triggered on 2026-11-17 and 2026-11-19.
+- **Computes:** from the fast capture, the peak (the kick) and its mV per V of VIN step. From the long capture, VOUT's new level (VOUT doesn't come back: line regulation), and how long it takes to stay within a band around it. The band is `analysis.settle_fraction` (10 %) of the level shift, but never tighter than 5 × the pre-step noise of the long capture, which is first smoothed over 1/200 of its window (100 µs at 20 ms; this delays the settling time by about half that). **Flat:** VOUT's change over about the last 20 % of the window (mean of the last 5 % against 75–80 %) is within the band. If it isn't, there is no settling time and the report says to lengthen `--settle-ms`; that's a note, not a setup problem.
+- **Plots:** `plot.png` is the fast capture, 50 µs after the step (`--plot-us` changes it): the kick. `plot_full.png` is the long capture, with the band around the new level and the time VOUT stays in it. Without a long capture (`settle_window` unset) the plots are as in load-tran.
 - **Setup check:** a buffer that can't reach a level (headroom, JP4, W1 wiring).
 - **Options:**
   - `--low 1.75 --high 1.85`
   - `--load 19mA`
+  - `--enable dio`: EN from the AD2 (DIO 5 / 6, AD2 V+ on VIO) instead of tied to VIN, so EN doesn't step with VIN. EN stays low through the interlock; W1 goes to `vin_low`, then EN goes high before calibration (so the buffer is calibrated with the LDO's load on it), and low again before the rails come down
+  - `--square-hz 20`: the square's frequency. Half a period must be longer than the capture window (`--window-ms`), so the capture sees one edge: 20 Hz allows up to 25 ms
+  - `--dc-steps`: one W1 DC step per capture instead of the square (slow: the AD2's DC level)
+  - `--settle-ms 20`: the long capture's length. It must fit in half a square period: up to 25 ms at 20 Hz, 50 ms with `--square-hz 10`
+  - `--raw`: one capture per edge, no averaging (`--avg` refused with it); the plots show only the measured VOUT samples, no smoothed trace. The reported numbers still come from the analysis (which smooths), so they match a normal run's
   - `--avg`, `--window-ms`, `--plot-us`, `--no-xscope`
 - **Config:** `[line_tran]`.
+
+### `sa-check`: HP 8591E on its calibrator
+Talks to the analyzer only: no board, PSU or AD2. Run it before anything relies on the analyzer.
+- **Wiring:** the 8591E's CAL OUT → its INPUT (50 Ω), with a short cable and nothing else on the input.
+- **Does:**
+  1. Preset, single-sweep mode.
+  2. **Calibrator:** 300 MHz, 1 MHz span, 3 kHz RBW, one sweep, marker to the peak. It must be CAL OUT (within 1/100 of the span), at −20 dBm ± `sa.cal_tolerance_db` (1 dB; not from the datasheet yet).
+  3. **Narrowest RBW:** asks for 30 Hz and reads back what was set: 30 Hz means Option 130. The bench unit gives 300 Hz (2026-11-20).
+  4. **Noise floor:** the marker level at 1 MHz (no tone there) with that RBW, in dBm and µV.
+  5. Preset (continuous sweep), leaving the front panel normal.
+- **Not valid (exit 3):** no calibrator tone (CAL OUT not cabled), wrong frequency, or the level outside the tolerance.
+- **Stops (exit 1):** any command the analyzer rejects (`ERR?`), or a reply that isn't a reading.
+- **Saves:** `data.csv` (calibrator and floor), `summary.json` (with `option_130`), `meta.json`. No plot.
+- **Config:** `[sa]`; `--sa` overrides the resource.
+
+### `sa-path-cal`: the 8591E's path gain, for `psrr --meter sa`
+The LDO stays unpowered. W2 feeds U4's input directly with a known 100 mV tone, so the path from U4's input to the analyzer (U4, R14, J9, DC block, coax) is measured with plenty of signal, at each frequency.
+- **Wiring:** U2 and U4 on the split rails as for psrr; W1 → VIN_FG (holds U2's input at 0 V, so VIN stays off). **J10 removed.** W2 → J10 pin 1 (U4's input). Scope 1 → J10 pin 1; scope 2 → OUTA (VOUT). J9 → DC block → coax → 8591E (the same cable and block as psrr will use). Nothing on VIN_DC.
+- **Does:**
+  1. Rails up with W1 at 0 V. Scope 2 is on VOUT here, so the rails' ramp check reads VOUT, not VIN. If the PSU were on VIN, the LDO would start regulating and VOUT would leave the window by VIN ≈ 1.3 V, under `dut.vin_max`. A weaker guard than usual. VOUT must then read under 0.15 V, else stop.
+  2. **J10 proof** (`Bench.prove_j10_open`): W2 at 0.3 then 0.6 V DC. J10 pin 1 must follow; VOUT must not, or J10 is still in and W2 would be driving the LDO's output, so stop. W2 can't go above 0.6 V before this passes (the Bench refuses), nor ever above 1.4 V or below 0 V.
+  3. At 6 frequencies per decade from `psrr.sa_from` to `psrr.f_stop`: W2 plays 1.2 V + 100 mV. The AD2 fits it on J10 pin 1 (16 captures) and the 8591E reads it on J9 with psrr's exact settings. Gain = analyzer ÷ AD2.
+  4. **Linearity:** at the first, middle and last frequency, the same with 10 mV and 1 mV tones (psrr's tones are far smaller). The gain must hold within 0.5 dB, else a setup issue.
+  5. W2 to 0 V, rails down; the shutdown also holds W2 at 0 V until the rails are off.
+- **Not valid:** either reading under 20 dB above its floor, or the linearity check failing. psrr won't use an `_INVALID` or `_SIM` run.
+- **Saves:** `data.csv` (`kind` = cal / linearity, both readings and margins, `gain_db`), `summary.json`, `plot.png` (gain vs frequency).
+- **Not run on the board yet.**
 
 ### `psrr`: power-supply rejection vs frequency
 - **Wiring** (single-rail buffer; JAFWAK with `[buffer]`: see [Split-supply U2](#split-supply-u2-jafwak-buffer)):
@@ -328,6 +346,7 @@ Without `[buffer]` (the demo board) line-tran and psrr use the single-rail path 
   - AD2 W1 -> buffer input SMA (VIN_FG / V_SIG); buffer output onto VIN (JP4)
   - Scope 1+ -> VOUT at the output pins, 1- -> GND (short ground lead)
   - Scope 2+ -> VIN at the LDO input pins, 2- -> GND
+  - LDO enabled with jumpers (JAFWAK: J6 1-2 "HI", J8 1-2 and 9-10 "LDO"). EN_AIN = VIN, so EN moves with the tone
   - DIO [0, 1, 2, 3, 4] -> load bank bits B0..B4, AD2 GND -> board GND
 - **Does:**
   1. **Setup:** the same two-stage interlock and DC calibration as line-tran, at `vin`.
@@ -335,7 +354,11 @@ Without `[buffer]` (the demo board) line-tran and psrr use the single-rail path 
   3. **Measurement:** several free-running AD2 captures of VIN and VOUT. Each is sampled at the rate that fits at least `cycles` periods into 8192 samples, up to 100 MS/s.
 - **Analysis:**
   - **Sine fit:** a least-squares fit at the injected frequency on each channel (a lock-in). VOUT/VIN is averaged coherently over the captures, which keeps the phase and averages noise down.
-  - **Levelling:** W1's amplitude is re-levelled if VIN's amplitude is off by more than 15 % (the buffer and board roll off at high frequency).
+  - **Levelling:** if VIN's amplitude at INA is off by more than 15 %, W1's is re-levelled, in up to 6 passes per frequency. Each pass at most 1.5 × the last, and only as far as the VIN peak, predicted from the *measured* VIN (VIN scales with W1), stays under `dut.vin_max` less the AD2 margin. W1's own peak stays within `dut.vin_max`.
+    - **Why:** on 2026-11-20 VIN rolled off above ~50 kHz (43 mV at 100 kHz, 4 mV at 1 MHz), most likely U2's ~5 Ω into the ~0.5 µF left on VIN / INB with R6 lifted (a corner near 60 kHz, the same RC as line-tran's 5–6 µs edge). The old single step stopped W1 at 81 mV, because it limited VIN DC + W1's amplitude as if the buffer passed the tone at full size.
+    - **Carry-over:** the next frequency starts from the last amplitude, limited so that even with the buffer's gain 1.5 × the last measured one, VIN stays under the limit. The measured-peak hard stop backs it up.
+    - **What it can't reach:** 50 mV at ~1 MHz would need W1 near 1 V (over its 1.9 V cap) and ±150 mA from U2, which sinks half of that from the −5 V rail (20 mA limit). So W1 stops at its cap there and VIN carries less.
+  - **Small tones on the analyzer's points:** with `--meter sa`, from `sa_from` up, a VIN tone under 30 % of the target is fine (PSRR is a ratio, and the 8591E's floor is ~1 µV). Only under 2 mV is it an issue. AD2 points keep the 30 % rule.
   - **PSRR:** PSRR (dB) = 20·log10(|VIN| / |VOUT|), positive = rejection.
 - **Floor:** the smallest VOUT ripple the AD2 resolves at that frequency, from the largest of three noise estimates:
   - the fit's leftover noise
@@ -350,14 +373,24 @@ Without `[buffer]` (the demo board) line-tran and psrr use the single-rail path 
   - a note if VOUT follows VIN at low frequency (dropout, or scope 1 on VIN)
 - **Plot:** PSRR vs frequency, and the VIN / VOUT amplitudes with the VOUT floor.
 - **No scope on VREF:** the BGR's own PSRR (`--measure vref`, a scope on TP3 through a 10x probe) was removed on 2026-11-14. A scope on VREF loads the BGR and pulls VREF, and VOUT with it, down (seen in enable-startup). VREF is read only with the DMM at 10 GOhm (vref-line, temp).
-- **Spectrum analyzer:** dropped for now (2026-11-14). The AD2 resolves PSRR to about 70 dB at 50 mV, against a 40 dB spec at 10 kHz and 55 dB from PEX. Floor-limited points say "≥"; a spectrum-analyzer `PsrrMeter` would replace them once its driver exists.
+- **Spectrum analyzer (`--meter sa`, added 2026-11-20, simulator only):** VIN still comes from the AD2; from `sa_from` (30 kHz) up, VOUT comes from the HP 8591E.
+  - **Path:** VOUT → J10 → U4 (on ±5 V; V− by jumper wires, JP3 open) → R14 47 Ω → J9 → DC block → coax → 8591E INPUT.
+  - **Each point:** RBW = f/30 within 300 Hz–3 kHz, span 20 RBWs, reference −20 dBm. Marker to the peak (or at f, if the peak isn't within 2 RBWs). The floor is read 6 RBWs **above** the tone, + 6 dB; below it sits the analyzer's LO feedthrough near 0 Hz, which swamped the floor on 2026-11-20.
+  - **Path gain from `sa-path-cal`** (below), never assumed: `--sa-cal <run folder>`, by default the newest valid one under `--out`. Interpolated in dB on a log-frequency axis; a sweep reaching outside the curve is refused before anything powers up. `summary.json` records the curve's folder and age.
+  - **Checked in the run:** from `sa_from` to `sa_cal_to` (100 kHz) the AD2 also measures VOUT, with `sa_cal_averages` (128) captures. Where both meters read VOUT `sa_cal_margin_db` (20 dB) above their floors, they must agree within `sa_path_tolerance_db` (1 dB). If not, the curve doesn't describe today's path (coax, DC block or U4 changed) and the analyzer's points are invalid. With no such point there is a note.
+  - **Saved either way:** `data.csv` has the analyzer's raw reading at every point it read (`sa_dbm`, `sa_vpeak_v`, `sa_floor_vpeak_v`, `sa_margin_db`, `sa_rbw_hz`, `sa_peak_frequency_hz`), at its input, before the path gain.
+  - **Below `sa_from`** VOUT is the AD2's. Analyzer points have no phase. The report shows which meter measured VOUT, and the AD2's own reading next to the analyzer's; the plot marks the AD2's as ×.
+  - **−5 V rail:** U2 (wide-BW, 8.5–12 mA) plus U4 (low-quiescent, 1.5–2.3 mA), against `buffer.current_limit` (20 mA).
+  - **Not explained yet (2026-11-20):** above ~200 kHz the analyzer read about 20 × the AD2's VOUT. Possibly pickup of W1's tone; the pickup check (planned) will tell.
 - **Options:**
   - `--fstart`, `--fstop`, `--ppd`
   - `--amp-mv 20`
   - `--vin`
   - `--load`
   - `--avg`
-- **Config:** `[psrr]`.
+  - `--meter sa` (or `psrr.meter = "sa"`): VOUT from the 8591E from `sa_from` up
+  - `--sa-cal <folder>`: the `sa-path-cal` run whose curve converts the analyzer's readings (default: the newest valid one)
+- **Config:** `[psrr]` (`meter`, `sa_from`, `sa_cal_to`, `sa_cal_averages`, `sa_cal_margin_db`, `sa_path_tolerance_db`), `[sa]`.
 
 ---
 
@@ -495,7 +528,7 @@ resistor, or none). `load-reg`'s default sweep ("every code within dut.i_max") l
 
 ## Enable from the AD2: `--enable dio` (JAFWAK)
 
-`smoke`, `load-reg`, `line-reg`, `load-tran`, `vref-line` and `temp` don't need the enable line: by default the LDO is tied on with jumpers (J6 1-2 "HI", EN_AIN = VIN, with J8 1-2 and 9-10 "LDO"), so it turns on as VIN rises. With `--enable dio` the run drives it from the AD2 through `[enable]` instead, the same path `iq` and `enable-startup` use.
+`smoke`, `load-reg`, `line-reg`, `load-tran`, `line-tran`, `vref-line` and `temp` don't need the enable line: by default the LDO is tied on with jumpers (J6 1-2 "HI", EN_AIN = VIN, with J8 1-2 and 9-10 "LDO"), so it turns on as VIN rises. With `--enable dio` the run drives it from the AD2 through `[enable]` instead, the same path `iq` and `enable-startup` use.
 
 - **Wiring** (added to the test's own; the run prints it): AD2 DIO 5 -> J13 pin 12 (EN), DIO 6 -> J13 pin 10 (~EN), AD2 V+ -> J13 pin 14 (VIO); J6 7-8 "EN" and nothing else on J6; J8 1-2 and 9-10 "LDO".
 - **Order:** EN is driven low before VIN comes up (V_33 on first), high once VIN is up, then the run waits `enable.settle_time` (0.2 s) before measuring. It goes low again when the test ends and, if the run stops for any reason, as the first step of the shutdown after the external reference.
@@ -541,6 +574,29 @@ Even so, the BGR is unprotected from one mistake. With JP2 fitted, OUT2 sits on 
 - `current_limit`, `ovp`
 - `above_vin`
 - `proof_step`
+
+### AD2 V+ as the reference: `line-tran --vref ad2`
+line-tran can't take `--vref ext`: PSU OUT2 is U2's −5 V. `--vref ad2` uses the AD2's V+ supply on VREF_IN instead, and reads it back on the DMM. line-tran only, for now.
+
+```
+uv run ldo-bench line-tran --vref ad2                 # 1.204 V (vref.external_v)
+uv run ldo-bench line-tran --vref ad2 --vref-v 1.15   # another level, at most vref.v_max (1.3 V)
+```
+
+- **Wiring** (added to line-tran's own): JP2 **removed**; AD2 V+ → JP2 pin 1 (VREF_IN); DMM V → JP2 pin 1, COM → GND (TP12). The AD2's ground is already on J13 pin 8. TP3 is on the BGR side of JP2 (per the PCB file), so with JP2 out it reads the BGR, not VREF_IN.
+- **When V+ is on:** only while the LDO is powered.
+  1. After the interlock, U2's rails up, and W1 calibrated with VIN at `vin_low`.
+  2. Then VIN is read on the AD2: below the reference, V+ stays off and the run stops ("the LDO is not powered").
+  3. V+ ramps up (it can't give less than 0.5 V, so it jumps from off to 0.5 V, then steps by `psu.ramp_step`), and the same 20 mV proof as `--vref ext` runs: VOUT must follow, else V+ goes off and the run stops (JP2 still in?).
+  4. The DMM reads VREF_IN: the AD2 has no V+ readback, and its setpoint accuracy isn't known.
+  5. At the end, with VIN still up, the DMM reads VREF_IN again and V+ ramps off. Only then do EN and U2's rails come down. On an error or Ctrl-C, the shutdown turns V+ off first.
+  - U2's rails coming down always turn the reference off first (`buffer_rails_off`), whatever called it.
+  - **V+ off at the start:** when the bench opens, V+ is turned off before anything else, in case an earlier run was killed before its shutdown (or the WaveForms app left it on).
+  - **VIN watched while V+ is on:** every capture (fast, long, and the square check) checks VIN's lowest sample against VREF − `vref.above_vin`. If VIN has gone (U2's rails lost, a lead off), V+ goes off at once and the run stops: within one capture, not instantly.
+  - **If V+ won't turn off** in the shutdown (the AD2 not responding), the shutdown carries on, since VIN must still come down, and the failure says in red to unplug the V+ lead from JP2 pin 1.
+- **Refused:** with `--enable dio` (V+ is then the enable logic's 3.3 V rail; `Bench.enable_logic` refuses it too), without a DMM, on any test but line-tran, and `--vref-v` without `--vref ad2` / `ext`.
+- **Records:** `summary.json` / `meta.json` `vref`: `"driver": "AD2 V+"`, `external_v`, the proof readings with `dmm_v` (start), and `dmm_end_v`. The report prints them. The folder name ends in `_extref`.
+- **Not run on the board yet.**
 
 ### `compare`: two runs side by side
 

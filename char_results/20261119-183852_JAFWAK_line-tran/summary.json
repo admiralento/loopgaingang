@@ -1,0 +1,86 @@
+{
+  "xcheck": {
+    "rising": {
+      "xcheck_model": "54621A",
+      "xcheck_valid": false,
+      "xcheck_issues": "54621A never finished its averaged acquisition (32 extra steps, 60 s): is its ch2 on the trigger signal? The scope is now waiting for triggers; press Run/Stop on it to free it",
+      "xcheck_averages": 0,
+      "xcheck_deviation_v": NaN,
+      "xcheck_settling_time_s": NaN,
+      "xcheck_noise_v": NaN
+    },
+    "falling": {
+      "xcheck_model": "54621A",
+      "xcheck_valid": false,
+      "xcheck_issues": "skipped: the 54621A is still busy from an earlier edge (press Run/Stop)",
+      "xcheck_averages": 0,
+      "xcheck_deviation_v": NaN,
+      "xcheck_settling_time_s": NaN,
+      "xcheck_noise_v": NaN
+    }
+  },
+  "valid": true,
+  "issues": [],
+  "buffer_rail_v": 5.0,
+  "load_code": 20,
+  "i_load_a": 0.018270509977827053,
+  "w1_low_v": 1.80826291999307,
+  "w1_high_v": 1.9049613598397799,
+  "averages": 16,
+  "square_hz": 20.0,
+  "raw": false,
+  "edges": {
+    "rising": {
+      "nominal": 1.1887498324250054,
+      "peak": 1.1891912274720033,
+      "band": 4.413950469979167e-05,
+      "settle_level": 1.1887498324250054,
+      "settling_time": NaN,
+      "noise": 7.437247323721913e-05,
+      "final": 1.1922066788277284,
+      "sample_rate": 10000000.0,
+      "step_index": 1621,
+      "reference": "pre",
+      "deviation": 0.00044139504699791665,
+      "upper": 1.1887939719297052,
+      "lower": 1.1887056929203057,
+      "trustworthy": false,
+      "vin_from": 1.7501207694425198,
+      "vin_to": 1.846281421818119,
+      "rejection": 0.004590183573982503,
+      "new_level_v": 1.1932924832147045,
+      "level_shift_v": 0.004471349006327063,
+      "settle_to_new_level_s": 0.00097112,
+      "new_level_band_v": 0.00044713490063270634,
+      "drift_v": 2.106189016193305e-05
+    },
+    "falling": {
+      "nominal": 1.1932603769783923,
+      "peak": 1.1927690964674762,
+      "band": 4.912805109160701e-05,
+      "settle_level": 1.1932603769783923,
+      "settling_time": NaN,
+      "noise": 7.166389780861659e-05,
+      "final": 1.1897993806803093,
+      "sample_rate": 10000000.0,
+      "step_index": 1624,
+      "reference": "pre",
+      "deviation": -0.0004912805109160701,
+      "upper": 1.193309505029484,
+      "lower": 1.1932112489273006,
+      "trustworthy": false,
+      "vin_from": 1.846281421818119,
+      "vin_to": 1.7501207694425198,
+      "rejection": 0.005108955677600343,
+      "new_level_v": 1.18873700741907,
+      "level_shift_v": -0.004485294765824044,
+      "settle_to_new_level_s": 0.0009735599999999999,
+      "new_level_band_v": 0.00044852947658240443,
+      "drift_v": -1.638118100433239e-05
+    }
+  },
+  "vref": {
+    "source": "bgr",
+    "bgr_measured_v": 1.17
+  }
+}

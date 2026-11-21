@@ -1,0 +1,29 @@
+{
+  "valid": true,
+  "issues": [],
+  "notes": [
+    "the DMM autoranged inside the fit (1 V / 10 V ranges, switching near VIN 1.89 V): a range-to-range offset may bend the slope. Fixing dmm.range avoids it, at the cost of resolution",
+    "is the knee the pass device or the BGR? Compare it with vref-line's BGR minimum VIN (bring-up plan Test 3): a knee at or above it means the BGR sets the dropout"
+  ],
+  "vin_source": "ad2",
+  "split_rails_v": null,
+  "load_code": 1,
+  "i_load_a": 0.001,
+  "points": 66,
+  "vout_source": "dmm",
+  "v_ref": 1.2007065,
+  "slope": 0.04772474313429108,
+  "intercept": 1.1103724831550856,
+  "r2": 0.9969888392733082,
+  "fit_vin_min": 1.6892025302444882,
+  "fit_vin_max": 1.899681869612989,
+  "delta_v": 0.010045072406436976,
+  "percent_per_v": 3.974721810391722,
+  "dropout_vin": 1.6581510713540761,
+  "dropout_voltage": 0.46945163635407616,
+  "dropout_fraction": 0.01,
+  "vref": {
+    "source": "bgr",
+    "bgr_measured_v": 1.17
+  }
+}

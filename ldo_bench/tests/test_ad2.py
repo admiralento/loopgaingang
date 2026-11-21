@@ -146,3 +146,45 @@ def test_stepped_capture_that_triggers_before_the_stimulus_is_an_error():
 
     with pytest.raises(InstrumentError, match="before the stimulus"):
         fast_capture(["Prefill", "Done"])
+
+
+def test_capture_passes_the_trigger_hysteresis():
+    """None keeps the 1 % of range default; a value is sent to the AD2 as given (V)."""
+
+    class Recording(FakeScopeIn):
+        def triggerHysteresisSet(self, v):
+            self.hysteresis = v
+
+    from ldo_bench.instruments.base import ChannelSetup
+
+    for given, expected in ((None, 0.5), (0.025, 0.025)):
+        ad = AnalogDiscovery2(FakeDevice(), "TEST")
+        s = ad._p.DwfState
+        ad.dev.analogIn = scope = Recording([s.Prefill, s.Armed, s.Done])
+        ad.capture(
+            sample_rate=2e6,
+            n_samples=1000,
+            setups={1: ChannelSetup(5.0, 0.0), 2: ChannelSetup(50.0, 0.0)},
+            trigger_channel=2,
+            trigger_level=0.9,
+            edge="rising",
+            pre_trigger=0.1,
+            stimulus=lambda: None,
+            timeout=0.2,
+            hysteresis=given,
+        )
+        assert scope.hysteresis == expected
+
+
+def test_set_dc_after_a_square_is_dc_again():
+    """line-tran's square ends with vin_from_wavegen, and shutdown sets W1 to DC 0 V: neither may
+    leave the square running with only its offset changed."""
+    ad = AnalogDiscovery2(FakeDevice(), "TEST")
+    ad.dev.analogOut = ao = FakeAnalogOut()
+    p = ad._p
+    ad.set_dc(1, 1.75)
+    ad.set_wave(1, shape="square", frequency=20.0, low=1.75, high=1.85)
+    assert ao.calls["nodeFunctionSet"][2] == p.DwfAnalogOutFunction.Square
+    ad.set_dc(1, 0.0)
+    assert ao.calls["nodeFunctionSet"][2] == p.DwfAnalogOutFunction.DC
+    assert ao.calls["nodeOffsetSet"][2] == 0.0

@@ -130,3 +130,42 @@ def test_error_mid_run_leaves_en_low_in_the_shutdown(jafwak, which):
         b.set_enable = real
         last = [w for w in writes if en in w]
     assert last[-1][en] is False  # the shutdown drove EN low (before the DIO were released)
+
+
+def test_line_tran_enable_dio(jafwak):
+    """line-tran --enable dio: EN low while the buffer rails and VIN come up, high for the steps
+    (VOUT valid), low again before the rails come down. EN_AIN no longer follows VIN."""
+    from ldo_bench.procedures import line_tran
+
+    lt = jafwak.line_tran.model_copy(update={"averages": 2})
+    with open_bench(jafwak, sim=True, enable_dio=True) as b:
+        m, en = b.sim_model, jafwak.enable.dio_pin
+        seen: list[tuple[float, bool]] = []  # (W1 level, EN) at every W1 change
+        real_vin, real_down = b.vin_from_wavegen, b.buffer_rails_off
+
+        def vin_from_wavegen(v):
+            real_vin(v)
+            seen.append((v, bool(m.dio.get(en, False))))
+
+        def buffer_rails_off():
+            seen.append((-1.0, bool(m.dio.get(en, False))))  # -1: the rails come down
+            real_down()
+
+        b.vin_from_wavegen, b.buffer_rails_off = vin_from_wavegen, buffer_rails_off
+        lines: list[str] = []
+        real_confirm = b.confirm_wiring
+
+        def confirm(title, ls, **k):
+            real_confirm(title, ls, **k)
+            lines.extend(b.last_wiring)
+
+        b.confirm_wiring = confirm
+        res = line_tran.run(b, lt, jafwak.analysis)
+    assert not res.issues, res.issues
+    first_up = next(en_ for v, en_ in seen if v >= 1.0)
+    assert first_up is False, "EN was already high when VIN first came up"
+    assert any(en_ for v, en_ in seen if v >= 1.0), "EN never went high for the steps"
+    downs = [en_ for v, en_ in seen if v == -1.0]
+    assert downs and not any(downs), "EN was still high when the rails came down"
+    text = "\n".join(lines)
+    assert "J6 7-8" in text and 'J6 1-2 "HI"' not in text  # the DIO path, not EN_AIN = VIN

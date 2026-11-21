@@ -1,0 +1,22 @@
+{
+  "valid": true,
+  "issues": [],
+  "notes": [],
+  "vin_set": 1.8,
+  "points": 23,
+  "vout_source": "dmm",
+  "i_min": 0.0,
+  "i_max": 0.019905177291639493,
+  "v_at_i_min": 1.197385,
+  "v_at_i_max": 1.1922114,
+  "delta_v": 0.0051736,
+  "percent": 0.43207489654538855,
+  "slope": -0.2232025157993287,
+  "intercept": 1.1965662322045414,
+  "r2": 0.9793929619937929,
+  "r_out": 0.2232025157993287,
+  "vref": {
+    "source": "bgr",
+    "bgr_measured_v": 1.17
+  }
+}

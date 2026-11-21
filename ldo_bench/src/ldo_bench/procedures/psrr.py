@@ -56,6 +56,7 @@ from ldo_bench.procedures.line_tran import (
     interlock,
     vin_limit,
 )
+from ldo_bench.procedures.sa_path_cal import PathGainCurve, SaReading, read_tone
 
 log = logging.getLogger(__name__)
 
@@ -64,6 +65,12 @@ FLOOR_SIGMA = 4.0  # a VOUT phasor smaller than this many noise sigmas counts as
 # (4 sigma: pure noise passes as "measured" with p = exp(-8) ~ 0.03 % per point; 3 sigma was 1.1 %)
 OFF_BINS = 3  # off-frequency noise fits this many frequency steps (1 / capture length) either side
 MIN_INJECTION = 0.3  # VIN amplitude below this fraction of the target: the sine isn't reaching VIN
+SA_MIN_VIN = (
+    2e-3  # V peak: on the 8591E's points a smaller tone is still fine (PSRR is a ratio), down to this
+)
+LEVEL_STEPS = 6  # levelling passes per frequency
+LEVEL_MAX_STEP = 1.5  # W1's amplitude grows at most this much per pass (and per new frequency, see run())
+LEVEL_MIN_VIN = 1e-3  # V peak: below this VIN reading the gain is too uncertain to level from
 SUMMARY_FREQS = (100.0, 1e3, 10e3, 100e3, 1e6)  # Hz, reported in summary.json when measured nearby
 
 
@@ -78,6 +85,8 @@ class Tone:
     vin_dc: float  # V, VIN's DC level during the measurement
     sample_rate: float = float("nan")  # Hz, of the captures (if the meter has one)
     cycles: float = float("nan")  # sine periods per capture
+    phase_known: bool = True  # False when VOUT's amplitude came from a meter with no phase (the 8591E)
+    vout_meter: str = "AD2"  # what measured VOUT
 
 
 class PsrrMeter(Protocol):
@@ -122,14 +131,16 @@ class Ad2SineFit:
             a.ref_channel: ChannelSetup(vin_range, 0.0),
         }
 
-    def measure(self, frequency: float) -> Tone:
-        """Take ps.averages free-running captures and fit the sine at `frequency` on both channels."""
+    def measure(self, frequency: float, averages: int | None = None) -> Tone:
+        """Take `averages` (default ps.averages) free-running captures and fit the sine at `frequency`
+        on both channels."""
         b, ps, a = self.bench, self.ps, self.bench.cfg.ad2
+        averages = averages or ps.averages
         # ps.cycles periods per capture, unless that needs more than max_sample_rate (then more cycles)
         rate = min(ps.max_sample_rate, ps.n_samples * frequency / ps.cycles)
         h, vin_amp, sig_in, sig_out, off, dc = [], [], [], [], [], []
         cap = None
-        for _ in range(ps.averages):
+        for _ in range(averages):
             cap = b.scope.capture(
                 sample_rate=rate,
                 n_samples=ps.n_samples,
@@ -173,6 +184,103 @@ class Ad2SineFit:
         )
 
 
+class SaPsrrMeter:
+    """VIN from the AD2 (sine fit, as Ad2SineFit); VOUT from the HP 8591E from psrr.sa_from up.
+
+    The analyzer sees VOUT through U4, R14 (47 ohm), J9, the DC block and the coax: its reading is VOUT x
+    that path's gain, taken from an sa-path-cal run (`curve`, measured with a 100 mV tone and the LDO off).
+    finish() converts every analyzer reading with it and checks it against this run: where both meters read
+    VOUT sa_cal_margin_db above their floors (sa_from to sa_cal_to, with sa_cal_averages AD2 captures), they
+    must agree within sa_path_tolerance_db, else the calibration doesn't describe today's path (the coax or
+    DC block changed) and the analyzer's points are invalid. Below sa_from VOUT is the AD2's. No phase.
+    """
+
+    def __init__(self, bench: Bench, ps: PsrrConfig, curve: PathGainCurve) -> None:
+        if bench.sa is None:
+            raise InstrumentError("psrr --meter sa needs the HP 8591E open ([sa], found on GPIB)")
+        self.bench, self.ps, self.sa, self.curve = bench, ps, bench.sa, curve
+        for f in ps.frequencies():  # refuse before anything powers up: no extrapolating the curve
+            if f >= ps.sa_from:
+                curve.gain(f)
+        self.ad2 = Ad2SineFit(bench, ps)
+        self.name = "AD2 (VIN) + HP 8591E (VOUT)"
+        self.readings: dict[float, SaReading] = {}  # by frequency; a re-levelled point overwrites its first
+        self.checks: list[dict] = []  # where both meters read VOUT: how far apart (dB)
+        self.sa.preset()
+
+    def measure(self, frequency: float) -> Tone:
+        """The AD2's tone (VIN, and VOUT as it sees it); from sa_from up also the analyzer's reading."""
+        check_band = self.ps.sa_from <= frequency <= self.ps.sa_cal_to
+        # where the calibration is checked the AD2's VOUT must clear its floor: more captures there
+        tone = self.ad2.measure(frequency, self.ps.sa_cal_averages if check_band else None)
+        if frequency >= self.ps.sa_from:
+            self.readings[frequency] = read_tone(self.sa, frequency)
+        return tone
+
+    def finish(self, points: list[PsrrPoint]) -> tuple[list[str], list[str]]:
+        """Convert the analyzer's readings with the curve, check it against the AD2. (issues, notes)."""
+        ps, margin = self.ps, 10 ** (self.ps.sa_cal_margin_db / 20)
+        sa_points = [p for p in points if p.frequency in self.readings]
+        for p in sa_points:  # the analyzer's own readings are kept on every point it read
+            p.sa = self.readings[p.frequency]
+        c = self.curve
+        notes = [
+            f"8591E path from {c.source}"
+            + (f", measured {c.age_hours:.1f} h before this run" if math.isfinite(c.age_hours) else "")
+            + f": {min(c.gain_db):+.2f} to {max(c.gain_db):+.2f} dB over {c.frequencies[0]:g}-{c.frequencies[-1]:g} Hz"
+        ]
+        for p in sa_points:
+            r, t, g = p.sa, p.tone, c.gain(p.frequency)
+            vout = r.vpeak / g
+            if (
+                not p.issues
+                and p.frequency <= ps.sa_cal_to
+                and t.vout_floor > 0
+                and abs(t.vout) >= margin * t.vout_floor
+                and r.vpeak >= margin * r.floor_vpeak
+            ):
+                self.checks.append(
+                    {
+                        "frequency_hz": p.frequency,
+                        "ad2_vout_v": abs(t.vout),
+                        "sa_vout_v": vout,
+                        "diff_db": 20 * math.log10(vout / abs(t.vout)),
+                    }
+                )
+            p.ad2_vout = abs(t.vout)
+            p.tone = Tone(
+                vin=t.vin,
+                vout=complex(vout, 0.0),
+                vin_floor=t.vin_floor,
+                vout_floor=r.floor_vpeak / g,
+                vin_dc=t.vin_dc,
+                sample_rate=t.sample_rate,
+                cycles=t.cycles,
+                phase_known=False,
+                vout_meter="8591E",
+            )
+        issues = []
+        if not self.checks:
+            notes.append(
+                f"the calibration couldn't be checked in this run: no point from {ps.sa_from:g} to {ps.sa_cal_to:g} Hz "
+                f"had both meters' VOUT {ps.sa_cal_margin_db:g} dB above their floors"
+            )
+        else:
+            worst = max(self.checks, key=lambda k: abs(k["diff_db"]))
+            listing = ", ".join(f"{k['frequency_hz']:g} Hz: {k['diff_db']:+.2f} dB" for k in self.checks)
+            if abs(worst["diff_db"]) > ps.sa_path_tolerance_db:
+                issues.append(
+                    f"the 8591E path calibration doesn't match this run: its VOUT differs from the AD2's by "
+                    f"{listing} (tolerance ±{ps.sa_path_tolerance_db:g} dB). Re-run sa-path-cal if the coax, DC "
+                    "block or U4 changed"
+                )
+                for p in sa_points:
+                    p.issues.append(issues[0])
+            else:
+                notes.append(f"calibration checked against the AD2 in this run: {listing}")
+        return issues, notes
+
+
 @dataclass
 class PsrrPoint:
     """One frequency's result. Amplitudes in V peak, PSRR in dB."""
@@ -181,6 +289,8 @@ class PsrrPoint:
     tone: Tone
     w1_amplitude: float  # what W1 played (after levelling)
     issues: list[str] = field(default_factory=list)  # setup problems at this frequency
+    ad2_vout: float | None = None  # V peak: the AD2's own VOUT reading where the 8591E measured (cross-check)
+    sa: SaReading | None = None  # the 8591E's raw reading at this frequency (meter = sa, from sa_from up)
 
     @property
     def vin_amp(self) -> float:
@@ -216,7 +326,12 @@ class PsrrPoint:
     @property
     def phase_deg(self) -> float:
         """Phase of VOUT relative to VIN (nan when floor-limited or the meter has no phase)."""
-        if self.limited or self.vin_amp <= 0 or not np.isfinite(self.tone.vout.real):
+        if (
+            self.limited
+            or self.vin_amp <= 0
+            or not self.tone.phase_known
+            or not np.isfinite(self.tone.vout.real)
+        ):
             return float("nan")
         return math.degrees(np.angle(self.tone.vout / self.tone.vin))
 
@@ -237,6 +352,7 @@ class PsrrResult:
     vout_nominal: float  # V
     setup_issues: list[str] = field(default_factory=list)  # calibration / VOUT problems
     notes: list[str] = field(default_factory=list)  # findings that don't invalidate the run
+    sa_cal: dict | None = None  # meter = sa: the calibration used (folder, age) and its checks in this run
 
     @property
     def issues(self) -> list[str]:
@@ -259,6 +375,15 @@ class PsrrResult:
                 "vout_floor_v": p.tone.vout_floor,
                 "vin_dc_v": p.tone.vin_dc,
                 "w1_amp_v": p.w1_amplitude,
+                "vout_meter": p.tone.vout_meter,
+                "ad2_vout_amp_v": p.ad2_vout if p.ad2_vout is not None else float("nan"),
+                # the 8591E's raw reading at its input (before the path gain), saved whatever the path gain did
+                "sa_dbm": p.sa.dbm if p.sa else float("nan"),
+                "sa_vpeak_v": p.sa.vpeak if p.sa else float("nan"),
+                "sa_floor_vpeak_v": p.sa.floor_vpeak if p.sa else float("nan"),
+                "sa_margin_db": p.sa.margin_db if p.sa else float("nan"),
+                "sa_rbw_hz": p.sa.rbw if p.sa else float("nan"),
+                "sa_peak_frequency_hz": p.sa.peak_frequency if p.sa else float("nan"),
                 "sample_rate_hz": p.tone.sample_rate,
                 "cycles": p.tone.cycles,
                 "load_code": self.load_code,
@@ -288,6 +413,7 @@ class PsrrResult:
             "issues": self.issues,
             "notes": self.notes,
             "meter": self.meter,
+            "sa_cal": self.sa_cal,
             "buffer_rail_v": self.rail,
             "vin_dc_v": self.vin_dc,
             "w1_dc_v": self.w1_dc,
@@ -306,20 +432,30 @@ class PsrrResult:
         ]
         if self.issues:
             lines.append(f"  {INVALID}")
-        lines.append("      f (Hz)     PSRR (dB)   phase    VIN (mV pk)   VOUT (uV pk)")
+        lines.append("      f (Hz)     PSRR (dB)   phase    VIN (mV pk)   VOUT (uV pk)   VOUT from")
         for p in self.points:
             db = f">= {p.psrr_db:5.1f}" if p.limited else f"   {p.psrr_db:5.1f}"
             ph = f"{p.phase_deg:6.0f}" if np.isfinite(p.phase_deg) else "     -"
             lines.append(
                 f"  {p.frequency:10.4g}   {db:>9s}   {ph}   {p.vin_amp * 1e3:9.2f}    {p.vout_amp * 1e6:10.1f}"
+                f"   {p.tone.vout_meter}"
+                + (f" (AD2 {p.ad2_vout * 1e6:.1f})" if p.ad2_vout is not None else "")
             )
         lines += [f"  note: {n}" for n in self.notes]
         return "\n".join(lines)
 
 
 def wiring(bench: Bench, ps: PsrrConfig) -> list[str]:
-    """Wiring lines shown before the run."""
-    return buffer_wiring(bench, ps.load_code, "short ground lead")
+    """Wiring lines shown before the run (with meter = sa, the 8591E's path from VOUT too)."""
+    lines = buffer_wiring(bench, ps.load_code, "short ground lead")
+    if ps.meter == "sa":
+        lines += [
+            "U4 (VOUT buffer) on the split supply: V+ on VS_BUFF, V- (pin 4) on -5 V (jumper wires), JP3 open "
+            "(BW: low-quiescent mode, keeps the -5 V rail under buffer.current_limit)",
+            'Fit J10 "LOAD" (VOUT -> load cell and U4\'s input)',
+            "J9 (VOUT_BUFF) -> DC block -> coax -> 8591E INPUT 50 Ω (check the DC block is rated down to 10 kHz)",
+        ]
+    return lines
 
 
 def _check_peak(bench: Bench, tone: Tone, f: float) -> None:
@@ -337,12 +473,21 @@ def _check_peak(bench: Bench, tone: Tone, f: float) -> None:
         )
 
 
-def run(bench: Bench, ps: PsrrConfig, meter: PsrrMeter | None = None) -> PsrrResult:
+def run(
+    bench: Bench, ps: PsrrConfig, meter: PsrrMeter | None = None, sa_cal: PathGainCurve | None = None
+) -> PsrrResult:
     """Measure PSRR at each of ps.frequencies() (see the module docstring for steps and checks).
 
-    ps: the [psrr] section. meter: how the tones are measured (default Ad2SineFit). The interlock,
-    dut.vin_max and the wavegen limit raise InstrumentError; other problems are recorded as issues.
+    ps: the [psrr] section. meter: how the tones are measured (default Ad2SineFit, or SaPsrrMeter with
+    psrr.meter = "sa", which needs `sa_cal`, an sa-path-cal curve covering sa_from up to f_stop). The
+    interlock, dut.vin_max and the wavegen limit raise InstrumentError; other problems are recorded as issues.
     """
+    if meter is None and ps.meter == "sa":  # before anything powers up: a curve that covers the sweep
+        if sa_cal is None:
+            raise InstrumentError("psrr --meter sa needs an sa-path-cal curve (run sa-path-cal, or --sa-cal)")
+        for f in ps.frequencies():
+            if f >= ps.sa_from:
+                sa_cal.gain(f)
     cfg = bench.cfg
     a = cfg.ad2
     bench.confirm_wiring("PSRR", wiring(bench, ps), ref_probe=("vin", 0), psu_to="rail")
@@ -358,34 +503,53 @@ def run(bench: Bench, ps: PsrrConfig, meter: PsrrMeter | None = None) -> PsrrRes
     for i in setup_issues:
         log.warning("psrr: %s (running anyway; the data will show it)", i)
     i_load = bench.loadbank.current(ps.load_code, cfg.dut.vout_nominal)
+    if meter is None and ps.meter == "sa":
+        meter = SaPsrrMeter(bench, ps, sa_cal)
     meter = meter or Ad2SineFit(bench, ps)
     # Largest amplitude W1 may play: the W1 peak within the bench's wavegen limit, and the VIN peak
     # (the measured DC level + amplitude, the buffer being unity gain) within vin_max less the AD2's
     # error margin. The second matters when the buffer's offset puts VIN above W1.
     w_limit = min(min(cfg.dut.vin_max, AD2_WAVEGEN_MAX_V) - w_dc, vin_limit(bench) - v_dc)
 
-    amp = min(ps.amplitude, w_limit)
+    amp = min(ps.amplitude, w_limit)  # the first tone as if the buffer passed it at full size
+    w1_cap = min(cfg.dut.vin_max, AD2_WAVEGEN_MAX_V) - w_dc  # W1's own peak within its limit
+    sa_from = ps.sa_from if isinstance(meter, SaPsrrMeter) else math.inf
+    gain = 1.0  # VIN amplitude / W1 amplitude at the last point (the buffer and board roll off)
     points = []
     freqs = ps.frequencies()
     for n, f in enumerate(freqs, 1):
+        # carry the amplitude over, but so that even a gain LEVEL_MAX_STEP x the last one keeps VIN in bounds
+        amp = min(amp, w1_cap, max(vin_limit(bench) - v_dc, 0.0) / (LEVEL_MAX_STEP * gain))
         bench.vin_sine_from_wavegen(dc=w_dc, amplitude=amp, frequency=f)
         bench.sleep(max(0.05, ps.settle_cycles / f))  # let the LDO reach steady state at this tone
         tone = meter.measure(f)
         _check_peak(bench, tone, f)
+        # level W1 so VIN carries the target amplitude, one bounded pass at a time
+        for _ in range(LEVEL_STEPS):
+            got = abs(tone.vin)
+            if got < LEVEL_MIN_VIN or abs(got - ps.amplitude) <= ps.level_tolerance * ps.amplitude:
+                break
+            room = max(vin_limit(bench) - tone.vin_dc, 0.0)  # VIN peak headroom, from the measured DC
+            # the next VIN amplitude, predicted from this one (linear: VIN scales with W1), stays in room
+            new = min(amp * ps.amplitude / got, amp * LEVEL_MAX_STEP, amp * room / got, w1_cap)
+            if abs(new - amp) <= 1e-4:  # at a limit, or a change under 0.1 mV: stop here
+                break
+            amp = new
+            bench.vin_sine_from_wavegen(dc=w_dc, amplitude=amp, frequency=f)
+            bench.sleep(max(0.05, ps.settle_cycles / f))
+            tone = meter.measure(f)
+            _check_peak(bench, tone, f)
         got = abs(tone.vin)
-        # level W1 so VIN keeps the target amplitude (the buffer / board roll off at high f)
-        if got > MIN_INJECTION * ps.amplitude and abs(got - ps.amplitude) > ps.level_tolerance * ps.amplitude:
-            # scale by target / measured; capped at 2 x target so a bad reading can't push it far
-            new = min(amp * ps.amplitude / got, 2 * ps.amplitude, w_limit)
-            if abs(new - amp) > 1e-4:  # skip re-measuring for a change under 0.1 mV
-                amp = new
-                bench.vin_sine_from_wavegen(dc=w_dc, amplitude=amp, frequency=f)
-                bench.sleep(max(0.05, ps.settle_cycles / f))
-                tone = meter.measure(f)
-                _check_peak(bench, tone, f)
-                got = abs(tone.vin)
+        if got > 0 and amp > 0:
+            gain = got / amp
         issues = []
-        if got < MIN_INJECTION * ps.amplitude:
+        if f >= sa_from:  # the analyzer resolves a small tone: a ratio needs no 50 mV, only a real one
+            if got < SA_MIN_VIN:
+                issues.append(
+                    f"VIN only carries {got * 1e3:.2f} mV at {f:g} Hz (W1 {amp * 1e3:.0f} mV, at its limit), under "
+                    f"{SA_MIN_VIN * 1e3:g} mV: the buffer can't drive VIN's capacitance this fast"
+                )
+        elif got < MIN_INJECTION * ps.amplitude:
             issues.append(
                 f"VIN only carries {got * 1e3:.1f} mV of the {ps.amplitude * 1e3:.0f} mV sine: is the buffer "
                 f"driving VIN (JP4 to the buffer, W{a.wavegen_channel} on the buffer input SMA) and scope "
@@ -399,13 +563,23 @@ def run(bench: Bench, ps: PsrrConfig, meter: PsrrMeter | None = None) -> PsrrRes
     bench.loadbank.off()
 
     notes = []
+    sa_cal = None
+    if isinstance(meter, SaPsrrMeter):  # the analyzer's points to VOUT with the calibration, checked
+        sa_issues, sa_notes = meter.finish(points)
+        setup_issues += sa_issues
+        notes += sa_notes
+        sa_cal = {
+            "source": meter.curve.source,
+            "age_hours": meter.curve.age_hours,
+            "checks": meter.checks,
+        }
     good = [p for p in points if not p.issues]
     if good and not good[0].limited and good[0].psrr_db < 3:
         notes.append(
             f"VOUT follows VIN at {good[0].frequency:g} Hz ({good[0].psrr_db:.1f} dB): the LDO may be in dropout "
             f"at this VIN / load, or scope {bench.cfg.ad2.vout_channel} is on VIN"
         )
-    if any(p.limited for p in good):
+    if any(p.limited for p in good) and not isinstance(meter, SaPsrrMeter):
         notes.append(
             "hollow points: VOUT's ripple is under what the AD2 resolves, so the PSRR is at least that value; "
             "a spectrum analyzer on VOUT will measure them"
@@ -423,6 +597,7 @@ def run(bench: Bench, ps: PsrrConfig, meter: PsrrMeter | None = None) -> PsrrRes
         cfg.dut.vout_nominal,
         list(dict.fromkeys(setup_issues)),
         notes,
+        sa_cal,
     )
 
 
@@ -471,6 +646,11 @@ def plot(res: PsrrResult, dut: str):
     ax_a.plot(f, vin, "o-", ms=4, lw=1.2, color=plotting.SERIES[1], label="VIN (AD2)")
     ax_a.plot(f, vout, "o-", ms=4, lw=1.2, color=c, label="VOUT")
     ax_a.plot(f, vfl, color=plotting.MUTED, lw=1.0, ls=(0, (4, 3)), label="VOUT floor")
+    cross = [(p.frequency, p.ad2_vout * 1e3) for p in res.points if p.ad2_vout is not None]
+    if cross:  # meter = sa: the AD2's own VOUT reading next to the analyzer's
+        ax_a.plot(
+            *zip(*cross, strict=True), "x", ms=5, color=plotting.SERIES[2], label="VOUT (AD2, cross-check)"
+        )
     ax_a.set_yscale("log")
     ax_a.set_ylabel("Amplitude (mV peak)")
     ax_a.set_xlabel("Frequency (Hz)")

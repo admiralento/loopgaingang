@@ -24,6 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 # AD2 limits
 AD2_DIO_PINS = 16  # DIO 0..15
 AD2_WAVEGEN_MAX_V = 5.0  # highest wavegen output used for VIN (V)
+W1_MAX_ABOVE_VIN_MAX = 0.2  # V: line_tran.w1_max may sit at most this far above dut.vin_max
 AD2_MAX_SAMPLE_RATE = 100e6  # scope sample rate ceiling (Hz)
 
 
@@ -114,7 +115,7 @@ class PsuConfig(_Instrument):
         gt=0,
         description=(
             "The PSU is never programmed above this (V). Usually equals dut.vin_max; it is higher only "
-            "when the PSU powers the buffer rail (line-tran, psrr, buffer-check)."
+            "when the PSU powers the buffer rail (line-tran, psrr)."
         ),
     )
     idle_voltage: float | None = Field(
@@ -197,6 +198,37 @@ class DmmConfig(_Instrument):
     nplc: Literal[0.02, 0.2, 1, 10, 100] = Field(10, description="Integration time in power-line cycles")
     range: float | None = Field(None, gt=0, description="Fixed DCV range (V); None = auto range")
     samples: int = Field(1, ge=1, description="Readings averaged per point")
+
+
+class SaConfig(_Model):
+    """[sa]: the HP 8591E spectrum analyzer (8590 E-series) on GPIB, and what `sa-check` expects of it.
+
+    `sa-check` measures the analyzer's own calibrator: CAL OUT cabled to the INPUT, nothing else. It
+    exercises every command the driver uses and checks the amplitude reading before PSRR relies on it.
+    """
+
+    enabled: bool = Field(True, description="false = don't use the spectrum analyzer")
+    resource: str = Field(
+        "",
+        description="'' = find it on VISA (GPIB / USB: it answers ID?, not *IDN?). Or 'USB0::...::INSTR', "
+        "'GPIB0::18::INSTR', 'prologix:COM5:18'",
+    )
+    timeout: float = Field(
+        5.0, gt=0, description="Reply timeout for ordinary commands (s); sweeps get longer"
+    )
+    cal_frequency: float = Field(300e6, gt=0, description="CAL OUT frequency (Hz)")
+    cal_level: float = Field(-20.0, description="CAL OUT level (dBm)")
+    cal_tolerance_db: float = Field(
+        1.0,
+        gt=0,
+        description="sa-check: the calibrator must read within this of cal_level (dB). Not from the "
+        "datasheet (not read yet): tighten it once its CAL OUT accuracy is known",
+    )
+    cal_span: float = Field(1e6, gt=0, description="sa-check: span around CAL OUT (Hz)")
+    cal_rbw: float = Field(3e3, gt=0, description="sa-check: RBW for the calibrator (Hz)")
+    floor_frequency: float = Field(
+        1e6, gt=0, description="sa-check: where the noise floor is read, no tone there (Hz)"
+    )
 
 
 class XScopeConfig(_Instrument):
@@ -934,7 +966,7 @@ class IqConfig(_Model):
 
 
 class BufferConfig(_Model):
-    """[buffer]: the reworked injection buffer (JAFWAK U2) on a split supply, for line-tran, psrr and buffer-check.
+    """[buffer]: the reworked injection buffer (JAFWAK U2) on a split supply, for line-tran and psrr.
 
     After the rework U2's V- (pin 4) is on a negative rail, so its output can reach 0 V and the
     1.7-1.9 V VIN range. The PSU's other output, wired reversed (OUT+ to GND, OUT- to U2 pin 4),
@@ -967,21 +999,6 @@ class BufferConfig(_Model):
             "first bring-up plan). Outside it the rails come down and the run stops"
         ),
     )
-    v_plus: float = Field(5.0, gt=0, description="VS_BUFF for buffer-check (V)")
-    check_levels: list[float] = Field(
-        [1.7, 1.8, 1.85],
-        min_length=2,
-        description=(
-            "buffer-check: DC levels to reach on JP4 pin 1 (V). W1 is capped at dut.vin_max, so 1.90 V is only "
-            "reachable if U2's offset is positive; line-tran and psrr go up to 1.85 V"
-        ),
-    )
-    check_peak_max: float = Field(
-        1.95, gt=0, description="buffer-check: nothing on JP4 pin 1 may exceed this (V)"
-    )
-    check_sine_frequency: float = Field(1e4, gt=0, description="buffer-check: sine frequency (Hz)")
-    check_sine_dc: float = Field(1.8, gt=0, description="buffer-check: sine centre on JP4 pin 1 (V)")
-    check_sine_amplitude: float = Field(0.05, gt=0, description="buffer-check: sine amplitude (V peak)")
 
     @model_validator(mode="after")
     def _check(self) -> BufferConfig:
@@ -1036,9 +1053,44 @@ class PsrrConfig(BufferProofConfig):
         2.0, ge=0, description="Required psu_voltage - VIN peak margin for the BUF634 (V)"
     )
     timeout: float = Field(10.0, gt=0, description="Max wait for one AD2 trigger (s)")
+    meter: Literal["ad2", "sa"] = Field(
+        "ad2",
+        description="VOUT from the AD2's sine fit, or (sa) from the HP 8591E through U4 / J9 from sa_from up",
+    )
+    sa_from: float = Field(
+        30e3,
+        ge=9e3,
+        description="meter = sa: the 8591E reads VOUT from here up (Hz). Below ~30 kHz its LO feedthrough near "
+        "0 Hz swamps VOUT's tens-of-uV tones (bench 2026-11-20); the AD2 measures VOUT there",
+    )
+    sa_cal_to: float = Field(
+        100e3,
+        gt=0,
+        description="meter = sa: from sa_from up to here (Hz) the sa-path-cal curve is checked against the AD2's "
+        "VOUT, where both meters read it sa_cal_margin_db above their floors",
+    )
+    sa_cal_averages: int = Field(
+        128,
+        ge=1,
+        description="meter = sa: AD2 captures per point from sa_from to sa_cal_to, so its VOUT clears the margin "
+        "for the calibration check (VOUT is only ~50-150 uV there, bench 2026-11-20)",
+    )
+    sa_cal_margin_db: float = Field(
+        20.0,
+        gt=0,
+        description="meter = sa: a calibration check point needs both readings this far above their floors (dB)",
+    )
+    sa_path_tolerance_db: float = Field(
+        1.0,
+        gt=0,
+        description="meter = sa: where both meters read VOUT they must agree within this (dB) with the sa-path-cal "
+        "curve applied, else the curve doesn't describe today's path and the analyzer's points are invalid",
+    )
 
     @model_validator(mode="after")
     def _check(self) -> PsrrConfig:
+        if self.meter == "sa" and self.sa_cal_to <= self.sa_from:
+            raise ValueError("psrr.sa_cal_to must be above sa_from (the path gain needs an overlap band)")
         # The sine must stay positive, inside the wavegen's range, and below the buffer rail minus
         # the BUF634's headroom (else the buffer clips the peaks).
         if self.f_stop <= self.f_start:
@@ -1075,11 +1127,55 @@ class LineTranConfig(TransientCaptureConfig, BufferProofConfig):
     vin_high: float = Field(gt=0, description="W1 high level -> VIN through the BUF634 (V)")
     load_code: int = Field(0, ge=0, description="Load bank code during the steps")
     buffer_headroom: float = Field(2.0, ge=0, description="Required VS_BUFF - Vin margin for the BUF634 (V)")
+    w1_max: float | None = Field(
+        None,
+        gt=0,
+        description=(
+            "Highest W1 setpoint (V) into the buffer during line-tran only; None = dut.vin_max. For a buffer "
+            "whose output sits below W1 under load (U2: ~5 ohm x the LDO's input current). VIN itself is "
+            "still stopped at dut.vin_max less the AD2 margin on every reading. dut.vin_max .. +0.2 V"
+        ),
+    )
+    settle_window: float | None = Field(
+        20e-3,
+        gt=0,
+        description=(
+            "Length (s) of each edge's second, long capture, for how long VOUT takes to flatten at its new "
+            "level (plot_full.png). None = no long capture. Same n_samples, so the sample rate is "
+            "n_samples / settle_window"
+        ),
+    )
+    square_hz: float | None = Field(
+        20.0,
+        gt=0,
+        description=(
+            "W1 runs as a free-running square (Hz) between the two calibrated setpoints, and each capture "
+            "takes its next edge. None = one DC step per capture: the AD2's DC level moves with tau ~2 ms "
+            "(bench, 2026-11-18/19), its square in ~0.2-0.35 ms. Half a period must be longer than the "
+            "capture window (n_samples / sample_rate)"
+        ),
+    )
 
     @model_validator(mode="after")
     def _check(self) -> LineTranConfig:
         if self.vin_high <= self.vin_low:
             raise ValueError("line_tran.vin_high must be above vin_low")
+        window = self.n_samples / self.sample_rate
+        if (
+            self.square_hz is not None
+            and self.settle_window is not None
+            and 1 / (2 * self.square_hz) <= self.settle_window
+        ):
+            raise ValueError(
+                f"line_tran.settle_window ({self.settle_window * 1e3:.1f} ms) must be shorter than half a period "
+                f"of square_hz ({1e3 / (2 * self.square_hz):.1f} ms), or the long capture sees the next edge too"
+            )
+        if self.square_hz is not None and 1 / (2 * self.square_hz) <= window:
+            raise ValueError(
+                f"line_tran.square_hz ({self.square_hz:g} Hz): half a period "
+                f"({1e3 / (2 * self.square_hz):.1f} ms) must be longer than the capture window "
+                f"({window * 1e3:.1f} ms), or a capture sees the next edge too. Lower square_hz or the window"
+            )
         if self.vin_high > AD2_WAVEGEN_MAX_V:
             raise ValueError(f"line_tran.vin_high exceeds the AD2 wavegen limit ({AD2_WAVEGEN_MAX_V} V)")
         if self.psu_voltage < self.vin_high + self.buffer_headroom:
@@ -1187,6 +1283,7 @@ class BenchConfig(_Model):
     ad2: Ad2Config = Ad2Config()
     dmm: DmmConfig | None = None
     xscope: XScopeConfig | None = None
+    sa: SaConfig | None = None
     loadbank: LoadBankConfig
     analysis: AnalysisConfig = AnalysisConfig()
     psu_check: PsuCheckConfig = PsuCheckConfig()
@@ -1241,8 +1338,8 @@ class BenchConfig(_Model):
         """The heaviest load (A) each configured test puts on psu.channel, with that test's section.
 
         Estimated from the load bank's resistors (at vout_nominal, or at loadbank_check.voltage for the
-        bank straight on the supply); the LDO's own few hundred uA aren't included. line-tran, psrr and
-        buffer-check aren't here: they power the buffer rail with buffer.rail_current_limit.
+        bank straight on the supply); the LDO's own few hundred uA aren't included. line-tran and psrr
+        aren't here: they power the buffer rail with buffer.rail_current_limit.
         """
         out: dict[str, tuple[object, float]] = {}
         lc = self.loadbank_check
@@ -1398,6 +1495,8 @@ class BenchConfig(_Model):
             code_ok("iq.check_code", self.iq.check_code)
         if self.psrr:
             ps = self.psrr
+            if ps.meter == "sa" and (self.sa is None or not self.sa.enabled):
+                raise ValueError("psrr.meter = 'sa' needs an enabled [sa] section (the HP 8591E)")
             # As in line_tran: the PSU feeds the buffer rail; VIN (dc + sine) comes from the wavegen.
             if ps.psu_voltage > self.psu.v_max:
                 raise ValueError(f"psrr.psu_voltage exceeds psu.v_max ({self.psu.v_max} V)")
@@ -1415,6 +1514,15 @@ class BenchConfig(_Model):
             code_ok("psrr.load_code", ps.load_code)
         if self.line_tran:
             lt = self.line_tran
+            if lt.w1_max is not None and not (
+                self.dut.vin_max
+                <= lt.w1_max
+                <= min(self.dut.vin_max + W1_MAX_ABOVE_VIN_MAX, AD2_WAVEGEN_MAX_V)
+            ):
+                raise ValueError(
+                    f"line_tran.w1_max ({lt.w1_max} V) must be between dut.vin_max ({self.dut.vin_max} V) and "
+                    f"dut.vin_max + {W1_MAX_ABOVE_VIN_MAX} V (and within the AD2's {AD2_WAVEGEN_MAX_V} V)"
+                )
             # Here the PSU feeds the buffer rail; VIN comes from the wavegen through the buffer.
             if lt.psu_voltage > self.psu.v_max:
                 raise ValueError(f"line_tran.psu_voltage exceeds psu.v_max ({self.psu.v_max} V)")
@@ -1432,20 +1540,12 @@ class BenchConfig(_Model):
                 raise ValueError(
                     f"buffer.channel ({bu.channel}) is psu.channel: U2's negative rail needs the other output"
                 )
-            if bu.v_plus > self.psu.v_max:
-                raise ValueError(f"buffer.v_plus exceeds psu.v_max ({self.psu.v_max} V)")
             for name, sec in (("line_tran", self.line_tran), ("psrr", self.psrr)):
                 if sec is not None and bu.v_minus < sec.buffer_headroom:
                     raise ValueError(
                         f"buffer.v_minus ({bu.v_minus} V) is less than {name}.buffer_headroom "
                         f"({sec.buffer_headroom} V): U2 couldn't drive VIN down to 0 V"
                     )
-            if max(bu.check_levels) > self.dut.vin_max:
-                raise ValueError(f"buffer.check_levels exceed dut.vin_max ({self.dut.vin_max} V)")
-            if bu.check_sine_dc + bu.check_sine_amplitude > self.dut.vin_max:
-                raise ValueError(
-                    f"buffer.check_sine_dc + check_sine_amplitude exceed dut.vin_max ({self.dut.vin_max} V)"
-                )
         if self.psu.idle_voltage is not None and self.psu.idle_voltage > vin_ceiling:
             raise ValueError(
                 f"psu.idle_voltage ({self.psu.idle_voltage} V) exceeds dut.vin_max / psu.v_max ({vin_ceiling} V): "

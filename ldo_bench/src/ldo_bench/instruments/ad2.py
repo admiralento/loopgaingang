@@ -28,7 +28,15 @@ from collections.abc import Callable
 
 import numpy as np
 
-from ldo_bench.instruments.base import Capture, ChannelSetup, DcReading, Edge, InstrumentError, WaveShape
+from ldo_bench.instruments.base import (
+    Capture,
+    ChannelSetup,
+    DcReading,
+    Edge,
+    InstrumentError,
+    WaveShape,
+    default_hysteresis,
+)
 
 log = logging.getLogger(__name__)
 
@@ -177,6 +185,7 @@ class AnalogDiscovery2:
         force: bool = False,
         dio_trigger: tuple[int, Edge] | None = None,
         free_running: bool = False,
+        hysteresis: float | None = None,
     ) -> Capture:
         p, ai = self._p, self.dev.analogIn
         if trigger_channel not in setups:
@@ -219,8 +228,11 @@ class AnalogDiscovery2:
             ai.triggerChannelSet(trigger_channel - 1)
             ai.triggerTypeSet(p.DwfAnalogInTriggerType.Edge)
             ai.triggerLevelSet(trigger_level)
-            # 1 % of range hysteresis, so noise on a slow edge can't retrigger
-            ai.triggerHysteresisSet(0.01 * setups[trigger_channel].range)
+            # hysteresis, so noise on a slow edge can't retrigger. The default (1 % of range) is 0.5 V on
+            # the 50 V range, more than line-tran's 100 mV VIN step: callers with small steps pass their own.
+            ai.triggerHysteresisSet(
+                default_hysteresis(setups[trigger_channel].range) if hysteresis is None else hysteresis
+            )
             ai.triggerConditionSet(p.DwfTriggerSlope.Rise if edge == "rising" else p.DwfTriggerSlope.Fall)
         # Single mode: position = time of the window centre relative to the trigger.
         # E.g. pre_trigger 0.1: centre is 0.4 window after the trigger, so 10 % of samples precede it.
