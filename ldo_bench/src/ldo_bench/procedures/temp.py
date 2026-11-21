@@ -5,8 +5,9 @@ the AD2. Where T holds within stable_delta for stable_window the samples form a 
 plateaus min_spread apart give the tempco from a line through their means, which uses only
 temperature differences (so the AD2's and TMP235's offsets cancel). docs/tests.md has the setup.
 
-run(): EN low (--enable dio), VIN up, EN high; sample every `interval` until `duration` (2 h at
-most) or Ctrl-C, which ends the log and keeps the data; EN low, load off; plateaus and tempco.
+run(): EN low (--enable dio), VIN up, VS_BUFF up on the PSU's other output (Bench.vs_buff_on: it
+powers the TMP235), EN high; sample every `interval` until `duration` (2 h at most) or Ctrl-C, which
+ends the log and keeps the data; EN low, VS_BUFF 0 V, load off; plateaus and tempco.
 Issues: a temperature outside temp_min..temp_max, VOUT off nominal, VREF off vref_nominal. Notes:
 Ctrl-C, no tempco, the supply current rising more than 20 % (condensation).
 """
@@ -114,8 +115,10 @@ def wiring(bench: Bench, tc: TempConfig) -> list[str]:
     lines = [
         *w.psu_on_vin(cfg),
         "Fit JP2 (the BGR drives VREF_IN)",
-        f"Separate supply + (5.0 V) -> {cfg.board.vs_buff} (powers the TMP235 on TEMP (TP7))",
-        f"Separate supply - -> {cfg.board.supply_gnd}",
+        f"PSU OUT{tc.vs_buff_channel} + -> {cfg.board.vs_buff} ({tc.vs_buff_v:g} V, set by this run: "
+        "powers the TMP235 on TEMP (TP7))",
+        f"PSU OUT{tc.vs_buff_channel} - -> {cfg.board.supply_gnd}",
+        "U2's V- wire (the split-supply rework) on GND, not on the PSU",
         w.scope(cfg, "ref", "J13 pin 5 (TMP)"),
         w.scope_vout(cfg),
     ]
@@ -132,7 +135,9 @@ def run(bench: Bench, tc: TempConfig) -> TempResult:
     """Log until tc.duration or Ctrl-C (see the module docstring). Setup problems go in `issues`."""
     a = bench.cfg.ad2
     bench.loadbank.require([tc.load_code])  # dut.i_max with any external load, before power-up
-    bench.confirm_wiring("temperature log", wiring(bench, tc), ref_probe=("tmp", 0), dmm_probe="vref")
+    bench.confirm_wiring(
+        "temperature log", wiring(bench, tc), ref_probe=("tmp", 0), dmm_probe="vref", aux_to="vs_buff"
+    )
     setups = {
         a.vout_channel: ChannelSetup(a.vout.range, a.vout.offset),
         a.ref_channel: ChannelSetup(bench.FINE_RANGE, 0.0),  # TMP235: 0.3-1.3 V, on the fine 5 V range
@@ -140,6 +145,7 @@ def run(bench: Bench, tc: TempConfig) -> TempResult:
     bench.ldo_enable(False)  # --enable dio only: EN held low while VIN comes up
     bench.loadbank.set(tc.load_code)
     bench.vin_from_psu(tc.vin)
+    bench.vs_buff_on(tc.vs_buff_v)
     bench.ldo_enable(True)
     rows: list[dict] = []
     t0 = bench.now()
@@ -159,6 +165,7 @@ def run(bench: Bench, tc: TempConfig) -> TempResult:
             }
             if tc.psu_readback:
                 row["i_psu_a"] = bench.psu.measure_current()
+                row["i_vs_buff_a"] = bench.vs_buff_out.measure_current()
             rows.append(row)
             log.info("%6.0f s  T %6.2f C  VREF %.5f V  VOUT %.4f V", t, row["temp_c"], row["vref_v"], vout_v)
             bench.sleep(tc.interval)
@@ -166,6 +173,7 @@ def run(bench: Bench, tc: TempConfig) -> TempResult:
         stopped_early = True  # Ctrl-C ends the log; the data so far is kept and the bench still shuts down
         log.warning("temp: stopped by Ctrl-C after %d samples", len(rows))
     bench.ldo_enable(False)
+    bench.vs_buff_off()
     bench.loadbank.off()
     return _analyse(bench, tc, rows, stopped_early)
 

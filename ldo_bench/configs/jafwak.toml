@@ -5,7 +5,7 @@
 #   Scope 1+      -> VOUT,  1- -> GND
 #   Scope 2+      -> VIN (DC tests) / B4 (load tran) / VIN (line tran),  2- -> GND
 #   W1            -> VIN_FG SMA (J3) -> BUF634 -> VIN   (line tran only; JP4 to buffer)
-#   PSU (E3648A)  -> VIN_DC (JP4 to DC), or VS_BUFF during line tran
+#   PSU (E3648A)  -> VIN_DC (JP4 to DC), or VS_BUFF during line tran; OUT2 -> VS_BUFF during temp
 
 [dut]
 name = "JAFWAK"
@@ -117,13 +117,18 @@ load_code = 0
 vref_nominal = 1.204         # simulated BGR output; the board measured 1.17 V (2026-11-07)
 drop_fraction = 0.01         # BGR minimum VIN: VREF 1 % below its value at vin_high
 
-[temp]                       # TMP235 (TEMP, TP7) on AD2 scope 2 via J13 pin 5, VREF (TP3) on the DMM, VOUT on scope 1
+[temp]                       # TMP235 (TEMP, TP7) on AD2 scope 2 via J13 pin 5, VREF (TP3) on the DMM, VOUT on scope 1; VS_BUFF from PSU OUT2
 vin = 1.8
 load_code = 1                # 1.0 mA (B0, 1.2 kOhm) as in the first plan; no resistor on J5 needed
 interval = 2.0               # s between samples
 duration = 1800              # s (max 2 h); Ctrl-C ends the log early and keeps the data
 stable_window = 30           # s: a plateau is T within stable_delta for this long (first plan 3.10)
 stable_delta = 0.5           # C
+vs_buff_v = 5.0              # PSU OUT2 + -> VS_BUFF (J4), OUT2 - -> GND: powers the TMP235 (and U2)
+vs_buff_channel = 2
+vs_buff_current_limit = 0.1  # A on OUT2 (approved 2026-11-21)
+vs_buff_ovp = 5.5            # OUT2 OVP (approved 2026-11-21)
+vs_buff_max_current = 0.03   # A: more once up means a miswire or short; OUT2 comes down and the run stops
 
 [load_tran]
 vin = 1.8

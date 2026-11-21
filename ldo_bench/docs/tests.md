@@ -502,7 +502,8 @@ The LDO stays unpowered. W2 feeds U4's input directly with a known 100 mV tone, 
 ### `temp`: temperature log
 - **Wiring:**
   - PSU + -> VIN_DC (J7), PSU - -> GND (J11); JP4 2-3 "DC"; JP2 closed
-  - VS_BUFF (J4) at 5.0 V from a separate supply: it powers the TMP235 on TEMP (TP7). The load bank itself doesn't need it
+  - PSU OUT2 + -> VS_BUFF (J4), OUT2 - -> GND (J11): the run sets it to `temp.vs_buff_v` (5.0 V) once VIN is up. It powers the TMP235 on TEMP (TP7) and U2; the load bank itself doesn't need it
+  - U2's V- wire (the split-supply rework) on GND, not on the PSU
   - Scope 2+ -> J13 pin 5 (TMP), Scope 1+ -> J13 pin 4 (OUTA); both - -> J13 pin 6 (GND)
   - DMM V / COM -> VREF (TP3) / GND (TP2), Hi-Z if the meter has it
   - LDO enabled (J6 1-2 "HI", J8 1-2 and 9-10 "LDO") or `--enable dio`
@@ -511,6 +512,7 @@ The LDO stays unpowered. W2 feeds U4's input directly with a known 100 mV tone, 
 - **Computes:**
   - **Plateaus:** a sample is stable when T held within `stable_delta` (0.5 C) for `stable_window` (30 s). Each run of stable samples is averaged into one point (T, VREF, VOUT).
   - **Tempco:** with two or more plateaus at least `min_spread` (2 C) apart, a line through the plateau means gives VREF and VOUT in ppm/C. It works on temperature differences, so the AD2's offset (~10 mV ≈ 1 C, unverified) mostly cancels. Simulated: 58.9 ppm/C, so room to ~5 C moves VREF by only ~1.4 mV.
+- **VS_BUFF (added 2026-11-21, simulator only):** PSU OUT2 ramps to 5.0 V in `psu.ramp_step` steps after VIN, with a 100 mA current limit and 5.5 V OVP (`temp.vs_buff_current_limit`, `temp.vs_buff_ovp`). Once up, more than `temp.vs_buff_max_current` (30 mA; U2 and the TMP235 draw up to ~15 mA) means a miswire or a short: OUT2 goes back to 0 V and the run stops. Each sample also records OUT2's current (`i_vs_buff_a`). It is refused with `--vref ext` (which also needs OUT2). At the end, and in the shutdown, OUT2 goes to 0 V before the outputs turn off.
 - **Setup checks:** every T within `temp_min`..`temp_max` (−20 to 80 C: scope 2 on J13 pin 5, VS_BUFF powered); VOUT near nominal; VREF within 20 % of `vref_nominal` (DMM on TP3).
 - **Notes:** stopped with Ctrl-C; no tempco (fewer than two plateaus far enough apart); the supply current rising by more than 20 % (condensation on the board).
 - **Options:** `--minutes 30`, `--interval 2`, `--vin`, `--no-dmm` (no VREF), `--enable dio`.

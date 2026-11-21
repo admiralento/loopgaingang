@@ -132,9 +132,9 @@ Command-line options go through the same checks.
   - **Turn-on:** the reference comes on only after VIN, then the run proves VOUT follows a 20 mV step (it stops if not: JP2 is still in).
   - **Limits:** it's never more than 0.3 V above VIN, and it goes to 0 V before VIN does.
   - **line-tran `--vref ad2`:** the AD2's V+ in place of PSU OUT2 (which is U2's −5 V), read back on the DMM on VREF_IN; `--vref-v` sets the level (default 1.204 V). V+ comes on only once VIN is up and measured, and goes off before VIN and U2's rails come down.
-- **Shutdown:** however a run ends (finished, error, Ctrl-C), everything is switched off in order: external reference, LDO enable (with `--enable dio`), wavegen, AD2 V+, load bank, DIO, supply output.
+- **Shutdown:** however a run ends (finished, error, Ctrl-C), everything is switched off in order: external reference, split rails and VS_BUFF (PSU OUT2), LDO enable (with `--enable dio`), wavegen, AD2 V+, load bank, DIO, supply output.
 - **Supply after a run:** the output is off. The setpoint is `psu.idle_voltage` at `psu.current_limit`, so pressing Output On gives the normal VIN (JAFWAK: 1.8 V, 10 mA); without `idle_voltage` it is 0 V (demo board). The idle setpoint is programmed only once the output is confirmed off.
-- **Temperature log:** `temp` runs for at most 2 hours (`temp.duration`); Ctrl-C ends it early, keeps the data and still shuts down.
+- **Temperature log:** `temp` runs for at most 2 hours (`temp.duration`); Ctrl-C ends it early, keeps the data and still shuts down. It powers VS_BUFF (the TMP235) from PSU OUT2 at 5.0 V (100 mA limit, 5.5 V OVP) once VIN is up; more than 30 mA from OUT2 brings it back to 0 V and stops the run, and shutdown sets it to 0 V before the outputs go off.
 
 ## Results: real data only
 
@@ -172,6 +172,7 @@ Each run writes a folder under `results/<test>/`, e.g. `results/load-tran/202611
 | `sa-path-cal` (added 2026-11-20) | simulator only |
 | `sa-check`, the 8591E driver's other commands (added 2026-11-20) | yes (2026-11-20): every command accepted; calibrator −20.52 dBm at 300.003 MHz (−0.52 dB) |
 | `vref-line`, `temp`, `enable-sine --shape square`, `--enable dio` (added 2026-11-13) | simulator only |
+| `temp`: VS_BUFF from PSU OUT2 instead of a separate supply (added 2026-11-21) | simulator only |
 | `line-tran --enable dio` (added 2026-11-17) | simulator only |
 | `enable-current` (added 2026-11-13; replaces `iq --rail en`) | simulator only |
 | `enable-sine --output vout`, `line-reg --split-rails`, `--ext-load-ohm`, vref-line's 10 GOhm / 10 MOhm check (added 2026-11-14) | simulator only |

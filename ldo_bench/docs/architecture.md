@@ -102,6 +102,7 @@ Procedures never program a voltage onto the DUT directly. They call Bench method
 | `ldo_enable(on)` | the same, for `--enable dio` only (no-op when EN is tied on) | fixed by `[enable]` |
 | `loadbank.set(code)` | AD2 DIO → load bank | `dut.i_max`, any `loadbank.external_ohm` included (`LoadBank.require(codes)` checks a run's codes before power-up) |
 | `reference_on()` / `reference_off()` | PSU's other output (`--vref ext`) or AD2 V+ (`--vref ad2`) → VREF_IN | `vref.v_max`, at most `vref.above_vin` above VIN; with V+, VIN measured at least the reference first |
+| `vs_buff_on(v)` / `vs_buff_off()` | PSU's other output (`temp.vs_buff_channel`) → VS_BUFF (J4), which powers the TMP235 and U2 (`temp`) | `psu.v_max`; VIN up first from the PSU; refused while that output is the reference, the split rails or U2's V−; more than `temp.vs_buff_max_current` stops the run |
 | `split_rails_on()` / `split_rails_off()` | PSU's other output → BGR_VDD / OTA_VDD (J1 pins 1 and 13; `line-reg --split-rails`, Method B) | `split_rails.v_max`; VIN up first and at or above `split_rails.vin_floor` while up; more than `max_current` stops the run |
 
 Other things the Bench does:

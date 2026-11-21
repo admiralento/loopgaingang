@@ -116,6 +116,8 @@ class Bench:
       - `vin_from_psu`: PSU on VIN; ceiling min(dut.vin_max, psu.v_max).
       - `buffer_rail`: PSU on the BUF634 supply; ceiling psu.v_max.
       - `psu_output`: PSU with only a meter / the load bank on it; ceiling psu.v_max.
+      - `vs_buff_on` / `vs_buff_off`: the PSU's other output on VS_BUFF (TMP235 and U2) for temp;
+        ceiling psu.v_max, VIN up first, more than temp.vs_buff_max_current stops the run.
       - `vin_from_wavegen` / `vin_sine_from_wavegen`: wavegen on VIN through the BUF634;
         ceiling min(dut.vin_max, 5 V wavegen limit).
     A request above the ceiling raises InstrumentError before anything is programmed. The
@@ -151,7 +153,7 @@ class Bench:
     0 V and turns W1 off last. `buffer_rail` (the single-rail path) is refused with [buffer].
 
     `shutdown()` (also run on leaving `with Bench`) turns things off in this order: external
-    reference 0 V -> LDO enable low (--enable dio) -> with the buffer rails up: W1 to DC 0 V, PSU
+    reference 0 V -> split rails and VS_BUFF 0 V -> LDO enable low (--enable dio) -> with the buffer rails up: W1 to DC 0 V, PSU
     outputs off, negative rail 0 V -> wavegen (both channels) -> AD2 V+ -> load bank -> DIO released -> PSU output
     off -> setpoint psu.idle_voltage at psu.current_limit (0 V without it; only once the output is
     confirmed off) -> close the instruments. Signals into the board go first, so nothing drives an
@@ -223,6 +225,8 @@ class Bench:
             self.vref_out.set_voltage(0.0)
         self.rails_out: SupplyOutput | None = None  # the PSU output on BGR_VDD / OTA_VDD (split_rails_on)
         self._rails_on = False
+        self.vs_buff_out: SupplyOutput | None = None  # the PSU output on VS_BUFF for temp (vs_buff_on)
+        self._vs_buff_up = False
         self._vref_on = False  # driving vref.external_v (not held at 0 V)
         self.vref_proof: dict | None = None  # what reference_on() measured, for the run's records
         self.vref_end: float | None = None  # --vref ad2: VREF_IN on the DMM at the end of the run (V)
@@ -285,7 +289,7 @@ class Bench:
         psu_to: Literal["vin", "rail"] = "vin",
         ch1_probe: Literal["vout", "en_out"] = "vout",
         ldo_on_en_out: bool = False,
-        aux_to: Literal["vref", "rails"] = "vref",
+        aux_to: Literal["vref", "rails", "vs_buff"] = "vref",
         u4_rig: bool = False,
         en_pin: int | None = None,
         chip_powered: bool = True,
@@ -473,6 +477,7 @@ class Bench:
         self._ensure_psu()
         self.reference_off()
         self.split_rails_off()
+        self.vs_buff_off()
         self.psu.output(False)
         self._psu_on = False
         self._vin_level, self._vin_from = None, None
@@ -1051,6 +1056,71 @@ class Bench:
         if issue := _setpoint_issue(out, target, f"split-rails output (OUT{out.channel})"):
             raise InstrumentError(issue)
 
+    def vs_buff_on(self, volts: float) -> None:
+        """Ramp the PSU's other output (temp.vs_buff_channel) onto VS_BUFF (J4) to `volts` (V) for `temp`.
+
+        VS_BUFF powers the TMP235 and U2 (the BUF634, its output not on VIN with JP4 on "DC"). Needs
+        VIN up first from the PSU (both outputs switch on together), at most psu.v_max, and that
+        output free (not --vref ext, the split rails or U2's V-). Once up, its current must be under
+        temp.vs_buff_max_current: more means a miswire or a short, so VS_BUFF goes back to 0 V and
+        the run stops.
+        """
+        tc = self.cfg.temp
+        if tc is None:
+            raise InstrumentError("VS_BUFF from the PSU needs a [temp] section in the config")
+        ch = tc.vs_buff_channel
+        if self.vref_external and self.vref_source == "psu" and self.cfg.vref.psu_channel == ch:
+            raise InstrumentError(f"refusing VS_BUFF with --vref ext: both need PSU OUT{ch}")
+        if self._rails_on or self.rails_out is not None:
+            raise InstrumentError(f"refusing VS_BUFF while the split rails use PSU OUT{ch}")
+        if self._buffer_up or self.vminus_out is not None:
+            raise InstrumentError(f"refusing VS_BUFF while U2's split supply uses PSU OUT{ch}")
+        if not 0 <= volts <= self.cfg.psu.v_max + 1e-9:
+            raise InstrumentError(f"refusing VS_BUFF = {volts} V (limit 0..{self.cfg.psu.v_max} V)")
+        if not self._psu_on or self._vin_from != "psu":
+            raise InstrumentError(
+                "VS_BUFF needs VIN up first, from the PSU (both outputs switch on together)"
+            )
+        if not hasattr(self.psu, "aux"):
+            raise InstrumentError(f"the supply ({self.psu.idn}) has no second output for VS_BUFF")
+        if self.vs_buff_out is None:
+            self.vs_buff_out = self.psu.aux(ch)
+            self.vs_buff_out.setup(current_limit=tc.vs_buff_current_limit, ovp=tc.vs_buff_ovp)
+        self._vs_buff_up = True  # from the first step: shutdown takes it down while it ramps
+        self._vs_buff_ramp(volts)
+        self.sleep(self.cfg.psu.settle_time)
+        i = self.vs_buff_out.measure_current()
+        log.info("VS_BUFF: PSU OUT%d at %.3f V, %.3f mA", ch, volts, i * 1e3)
+        if i > tc.vs_buff_max_current:
+            self.vs_buff_off()
+            raise InstrumentError(
+                f"PSU OUT{ch} sources {i * 1e3:.2f} mA into VS_BUFF (J4) (U2 and the TMP235 draw up to ~15 mA; "
+                f"limit {tc.vs_buff_max_current * 1e3:g} mA): check OUT{ch} goes to VS_BUFF and GND only, "
+                "and U2's V- wire is on GND. VS_BUFF is back at 0 V"
+            )
+
+    def vs_buff_off(self) -> None:
+        """Ramp VS_BUFF (vs_buff_on) back to 0 V; the output stays connected, held at 0 V. Safe in any mode."""
+        if self.vs_buff_out is None:
+            return
+        if self._psu_on:
+            self._vs_buff_ramp(0.0)
+        else:
+            self.vs_buff_out.set_voltage(0.0)
+        self._vs_buff_up = False
+
+    def _vs_buff_ramp(self, target: float) -> None:
+        """Ramp the VS_BUFF output to `target` (V) in psu.ramp_step steps."""
+        out = self.vs_buff_out
+        v = out.get_voltage_setpoint()
+        while abs(target - v) > 1e-9:
+            v = _toward(v, target, self.cfg.psu.ramp_step)
+            out.set_voltage(v)
+            if abs(target - v) > 1e-9:
+                self.sleep(0.02)
+        if issue := _setpoint_issue(out, target, f"VS_BUFF output (OUT{out.channel})"):
+            raise InstrumentError(issue)
+
     def _vout_now(self) -> float:
         """VOUT (V) on the AD2's VOUT channel, averaged over 0.1 s."""
         vout, _ = self.measure_dc(0.1)
@@ -1219,6 +1289,7 @@ class Bench:
             ("external reference 0 V", self._reference_off_for_shutdown),
             # BGR_VDD / OTA_VDD down before VIN (VDD) goes: never powered without VDD
             ("split rails 0 V", lambda: self.rails_out.set_voltage(0.0) if self.rails_out else None),
+            ("VS_BUFF 0 V", lambda: self.vs_buff_out.set_voltage(0.0) if self.vs_buff_out else None),
             ("LDO enable low", lambda: self.set_enable(False) if self._enable_driven else None),
             ("W1 limit back to dut.vin_max", lambda: self.allow_line_tran_w1(False)),
             # split-supply buffer: U2's input stays driven at 0 V until both of its rails are off
@@ -1253,7 +1324,7 @@ class Bench:
         self._psu_on = self._awg_on = self._psu_ready = self._vref_on = self._enable_driven = self._v33_on = (
             False
         )
-        self._buffer_up = self._rails_on = False
+        self._buffer_up = self._rails_on = self._vs_buff_up = False
         self._u4_drive = self._j10_proven = False
         self.vminus_out = None
         self._vin_level, self._vin_from = None, None

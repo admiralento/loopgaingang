@@ -57,6 +57,8 @@ from ldo_bench.instruments.base import (
 # switching current (en_charge per EN_AIN cycle) on top.
 DMM_10MEG = 10e6  # ohm, the 34401A's fixed DC volts input impedance
 RAIL_SHARE = {"total": 1.0, "bgr": 0.15, "vdd": 0.40, "en": 2e-6, "ota": 0.45}
+TMP235_MIN_SUPPLY = 2.3  # V: the TMP235 needs 2.3-5.5 V on VS_BUFF
+VS_BUFF_DRAW = 1.5e-3 + 10e-6  # A from VS_BUFF: U2 (BUF634, low-bandwidth mode) + the TMP235
 
 
 @dataclass
@@ -118,7 +120,9 @@ class LdoModel:
     # temperature (temp logger): the TMP235 on VS_BUFF, read by the AD2 on J13 pin 5
     temp_profile: Callable[[float], float] | None = None  # clock (s) -> board temperature (C); None = 25 C
     clock: float = 0.0  # s, simulated time: Bench.sleep advances it
-    vs_buff_on: bool = True  # VS_BUFF powered (by hand), so the TMP235 runs
+    vs_buff_v: float = 0.0  # V, the PSU's second output setpoint when aux_to == "vs_buff" (temp)
+    vs_buff_wired: bool = True  # that output is on VS_BUFF (J4); False = miswired, the TMP235 is unpowered
+    vs_buff_short: bool = False  # something on VS_BUFF pulls the output into its current limit
     vref_delay: float = 4e-6  # s from the enable edge until VREF starts rising
     vref_tau: float = 8e-6  # s, VREF rise time constant (turn-off falls 4x faster)
     vout_delay: float = 15e-6  # s, after VREF starts
@@ -130,7 +134,9 @@ class LdoModel:
     ch1_probe: str = "vout"  # what the VOUT channel is on: "vout" or "en_out"
     xscope_offset_inb: float = 3e-3  # V, the 54621A's INB channel reads this much high (channel mismatch)
     ldo_on_en_out: bool = False  # J8 on "LDO": the LDO follows EN_OUT (enable-sine --output vout)
-    aux_to: str = "vref"  # the PSU's second output: "vref" (VREF_IN / U2's V-) or "rails" (Method B)
+    aux_to: str = (
+        "vref"  # the PSU's second output: "vref" (VREF_IN / U2's V-), "rails" (Method B), "vs_buff" (temp)
+    )
     rails_v: float = 0.0  # V, that output's setpoint when aux_to == "rails"
     j1_rail_jumpers_out: bool = True  # Method B: J1 1-3 / 13-15 removed (else OUT2 fights VIN via INB)
     awg_wave: dict[int, tuple[str, float, float, float]] = field(
@@ -361,6 +367,15 @@ class LdoModel:
         """Current into the load bank (A)."""
         return self.vout_dc() * self.conductance()
 
+    def tmp235_powered(self) -> bool:
+        """The TMP235 runs: the PSU's second output is on VS_BUFF, output on, at 2.3 V or more."""
+        return (
+            self.aux_to == "vs_buff"
+            and self.vs_buff_wired
+            and self.psu_on
+            and self.vs_buff_v >= TMP235_MIN_SUPPLY
+        )
+
     def ref_value(self) -> float:
         """DC level (V) at whatever ref_probe is on."""
         kind, pin = self.ref_probe
@@ -369,7 +384,7 @@ class LdoModel:
         if kind == "vref":
             return self.bgr_vref()
         if kind == "tmp":  # TMP235: 500 mV at 0 C, 10 mV/C, powered from VS_BUFF
-            return 0.5 + 0.01 * self.temperature if self.vs_buff_on else 0.0
+            return 0.5 + 0.01 * self.temperature if self.tmp235_powered() else 0.0
         if kind == "iin":  # across R13: everything the board draws from VIN
             return self.sense_ohm * (self.load_current() + (self.iq_on if self.enabled else self.iq))
         if kind == "iout":  # across R1: the LDO's output current
@@ -478,19 +493,29 @@ class SimSupplyOutput:
         if self.m.aux_to == "rails":
             self.m.rails_v = volts
             return
+        if self.m.aux_to == "vs_buff":
+            self.m.vs_buff_v = volts
+            return
         self.m.vref_out_v = volts
         if self.m.vref_wired and self.m.jp2_fitted and volts > 0:
             self.m.bgr_backdriven = True
 
     def get_voltage_setpoint(self) -> float:
+        if self.m.aux_to == "vs_buff":
+            return self.m.vs_buff_v
         return self.m.rails_v if self.m.aux_to == "rails" else self.m.vref_out_v
 
     def measure_voltage(self) -> float:
         return self.get_voltage_setpoint() * (1 + self.m.psu_readback_gain) if self.m.psu_on else 0.0
 
     def measure_current(self) -> float:
-        """Method B: what BGR_VDD / OTA_VDD draw, or the current limit if a J1 jumper ties them to INB."""
+        """Method B: what BGR_VDD / OTA_VDD draw, or the current limit if a J1 jumper ties them to INB.
+        temp: what VS_BUFF draws (U2 and the TMP235), or the current limit if it is shorted."""
         m = self.m
+        if m.aux_to == "vs_buff":
+            if not m.psu_on or m.vs_buff_v <= 0 or not m.vs_buff_wired:
+                return 0.0
+            return 0.1 if m.vs_buff_short else VS_BUFF_DRAW
         if m.aux_to != "rails" or not m.psu_on or m.rails_v <= 0:
             return 0.0
         if not m.j1_rail_jumpers_out:

@@ -605,6 +605,27 @@ class TempConfig(_Model):
         0.2, gt=0, lt=1, description="VREF must stay within this fraction of vref_nominal"
     )
     psu_readback: bool = Field(True, description="Also record the supply current (~0.4 s per sample)")
+    # VS_BUFF (J4) from the PSU's other output: it powers the TMP235 (2.3-5.5 V) and U2 (the BUF634)
+    vs_buff_v: float = Field(5.0, gt=0, description="PSU's other output on VS_BUFF (V), at most psu.v_max")
+    vs_buff_channel: int = Field(2, ge=1, le=2, description="PSU output on VS_BUFF (not psu.channel)")
+    vs_buff_current_limit: float = Field(
+        0.1, gt=0, description="Current limit on that output (A) (approved 2026-11-21)"
+    )
+    vs_buff_ovp: float | None = Field(5.5, gt=0, description="OVP on that output (V), above vs_buff_v")
+    vs_buff_max_current: float = Field(
+        0.03,
+        gt=0,
+        description=(
+            "More than this (A) from VS_BUFF once it is up (U2 draws up to ~15 mA, the TMP235 ~10 uA) "
+            "means a miswire or a short: VS_BUFF comes down and the run stops"
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _check(self) -> TempConfig:
+        if self.vs_buff_ovp is not None and self.vs_buff_ovp <= self.vs_buff_v:
+            raise ValueError("temp.vs_buff_ovp must be above temp.vs_buff_v")
+        return self
 
 
 class TransientCaptureConfig(_Model):
@@ -1401,6 +1422,7 @@ class BenchConfig(_Model):
           to put the supply into current limit. psu_hold / psu_sweep: current_limit at most
           psu.current_limit, and their voltages within the ceiling for where the supply goes (`to`).
         - en_sine / en_current: the wave into EN_AIN within dut.vin_max (EN_AIN runs from VIN).
+        - temp VS_BUFF: temp.vs_buff_v within psu.v_max, on the PSU's other output (not psu.channel).
         - enable-pin clashes: tests that drive the enable line (en_sine, startup, iq 'disabled')
           would fight the load bank if an enable DIO pin were also a load bank pin.
         """
@@ -1447,6 +1469,12 @@ class BenchConfig(_Model):
         if self.temp:
             vin_ok("temp.vin", self.temp.vin)
             code_ok("temp.load_code", self.temp.load_code)
+            if self.temp.vs_buff_v > self.psu.v_max:
+                raise ValueError(
+                    f"temp.vs_buff_v = {self.temp.vs_buff_v} V exceeds psu.v_max ({self.psu.v_max} V)"
+                )
+            if self.temp.vs_buff_channel == self.psu.channel:
+                raise ValueError("temp.vs_buff_channel must be the PSU's other output, not psu.channel (VIN)")
         if self.vref_line:
             vl = self.vref_line
             vin_ok("vref_line.vin_high", vl.vin_high)

@@ -179,7 +179,7 @@ class E36xxOutput:
         s.t.write(f"CURR {current_limit:.4f}")
         s._check(f"setting the OUT{self.channel} current limit")
         if ovp is not None:
-            s._set_ovp(ovp, self.channel, "vref.ovp (external reference) or buffer.ovp (U2's V-)")
+            s._set_ovp(ovp, self.channel, "vref.ovp, buffer.ovp, split_rails.ovp or temp.vs_buff_ovp")
         log.info("PSU %s OUT%d set up: I limit %.4f A, OVP %s", s.model, self.channel, current_limit, ovp)
 
     def set_voltage(self, volts: float) -> None:
