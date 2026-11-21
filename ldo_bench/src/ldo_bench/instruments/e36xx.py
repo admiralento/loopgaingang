@@ -172,14 +172,19 @@ class E36xxOutput:
         self.supply = supply
         self.channel = channel
 
-    def setup(self, *, current_limit: float, ovp: float | None) -> None:
+    def setup(self, *, current_limit: float, ovp: float | None, voltage_range: str | None = None) -> None:
         s = self.supply
         s._select(self.channel)
         s.t.write("VOLT 0")
+        if voltage_range:  # before CURR: the E3648A's HIGH range only goes to 2.5 A
+            s.t.write(f"VOLT:RANG {voltage_range}")
+            s._check(f"OUT{self.channel} VOLT:RANG {voltage_range}")
         s.t.write(f"CURR {current_limit:.4f}")
         s._check(f"setting the OUT{self.channel} current limit")
         if ovp is not None:
-            s._set_ovp(ovp, self.channel, "vref.ovp, buffer.ovp, split_rails.ovp or temp.vs_buff_ovp")
+            s._set_ovp(
+                ovp, self.channel, "vref.ovp, buffer.ovp, split_rails.ovp, temp.vs_buff_ovp or heater.ovp"
+            )
         log.info("PSU %s OUT%d set up: I limit %.4f A, OVP %s", s.model, self.channel, current_limit, ovp)
 
     def set_voltage(self, volts: float) -> None:

@@ -1419,9 +1419,16 @@ def enable_startup(
 @app.command("temp")
 def temp(
     config: ConfigOpt = DEFAULT_CONFIG,
-    minutes: Annotated[float | None, typer.Option(help="Log length (min), at most 120")] = None,
+    minutes: Annotated[
+        float | None,
+        typer.Option(help="Log length (min), at most 120 (default temp.duration; 120 with --heater)"),
+    ] = None,
     interval: Annotated[float | None, typer.Option(help="Time between samples (s)")] = None,
     vin: Annotated[float | None, typer.Option(help="Override temp.vin (V)")] = None,
+    heater: Annotated[
+        bool,
+        typer.Option("--heater", help="Hot run: the run ramps the power resistor on PSU OUT2 ([heater])"),
+    ] = False,
     ext_load_ohm: ExtLoadOpt = None,
     out: OutOpt = Path("results"),
     sim: SimOpt = False,
@@ -1433,24 +1440,26 @@ def temp(
     yes: YesOpt = False,
     verbose: VerboseOpt = False,
 ) -> None:
-    """Temperature log: TMP235 (J13 pin 5), VREF (DMM on TP3) and VOUT over time; tempco from stable plateaus.
+    """Temperature log: TMP235 (J13 pin 5), VREF (DMM on TP3) and VOUT over time; plateaus, tempco, VREF's curve.
 
-    Ctrl-C ends the log early and keeps the data.
+    Without --heater: the cold run (ice by hand). With --heater: the hot run, the heater ramped by the run.
+    Ctrl-C ends the log early and keeps the data (and turns the heater off).
     """
+    from ldo_bench.config import TEMP_MAX_DURATION
     from ldo_bench.procedures import temp as proc
 
-    cfg, tc = _override(
-        _ext_load(_load(config, verbose), ext_load_ohm),
-        "temp",
-        duration=None if minutes is None else minutes * 60,
-        interval=interval,
-        vin=vin,
-    )
+    base = _ext_load(_load(config, verbose), ext_load_ohm)
+    if heater and base.heater is None:
+        _fail("--heater needs a [heater] section in the config")
+    # with --heater and no --minutes: the 2 h limit (the heater's profile takes ~80 min)
+    default = TEMP_MAX_DURATION if heater else None
+    duration = minutes * 60 if minutes is not None else default
+    cfg, tc = _override(base, "temp", duration=duration, interval=interval, vin=vin)
     _run(
         cfg,
         config,
         proc,
-        lambda b: proc.run(b, tc),
+        lambda b: proc.run(b, tc, heater=cfg.heater if heater else None),
         out=out,
         sim=sim,
         save_sim=save_sim,
@@ -1463,6 +1472,97 @@ def temp(
 
 
 # --- saved runs -----------------------------------------------------------------
+def _exclude_spec(spec: str, n_runs: int) -> tuple[int, float, float]:
+    """'RUN:START-END' (run number from 1, seconds) -> (run index, start, end); exit 2 if bad."""
+    try:
+        k, rng = spec.split(":", 1)
+        a, b = rng.split("-", 1)
+        idx, start, end = int(k) - 1, float(a), float(b)
+    except ValueError:
+        _fail(f"--exclude {spec!r}: expected RUN:START-END, e.g. 1:40-110 (run 1, 40 s to 110 s)")
+    if not 0 <= idx < n_runs or not start < end:
+        _fail(f"--exclude {spec!r}: run {idx + 1} of {n_runs}, and START below END")
+    return idx, start, end
+
+
+@app.command("temp-curve")
+def temp_curve(
+    runs: Annotated[
+        list[Path],
+        typer.Argument(
+            exists=True, file_okay=False, help="temp run folders (e.g. the cold run, then the hot run)"
+        ),
+    ],
+    config: ConfigOpt = DEFAULT_CONFIG,
+    exclude: Annotated[
+        list[str] | None,
+        typer.Option(
+            help="Leave a time range out: RUN:START-END in s (run 1 = the first folder); repeatable"
+        ),
+    ] = None,
+    out: OutOpt = Path("results"),
+    verbose: VerboseOpt = False,
+) -> None:
+    """VREF against temperature from saved temp runs: curve.csv in a new folder. Touches no instrument.
+
+    The curve settings (bins, max_rate, misreads) come from the config's [temp]; the runs' own folders
+    are only read.
+    """
+    import csv
+    import json
+
+    from ldo_bench.procedures import temp_curve as proc
+    from ldo_bench.results import RunDir
+
+    cfg = _load(config, verbose)
+    tc = _section(cfg, "temp")
+    excl: list[list[tuple[float, float]]] = [[] for _ in runs]
+    for spec in exclude or []:
+        k, a, b = _exclude_spec(spec, len(runs))
+        excl[k].append((a, b))
+    results, metas = [], []
+    for k, path in enumerate(runs):
+        try:
+            meta = json.loads((path / "meta.json").read_text())
+            with (path / "data.csv").open(newline="") as f:
+                rows = [{key: _num(v) for key, v in r.items()} for r in csv.DictReader(f)]
+        except (FileNotFoundError, json.JSONDecodeError, ValueError) as e:
+            _fail(f"{path}: not a temp run folder ({e})")
+        if meta.get("test") != "temp":
+            _fail(f"{path}: a {meta.get('test')!r} run, not temp")
+        need = {"t_s", "temp_c", "vref_v", "vout_v"}
+        if not rows or not need <= rows[0].keys():
+            _fail(f"{path}: data.csv has no {sorted(need - set(rows[0]) if rows else need)} columns")
+        label = f"run{k + 1}:{path.name}"
+        results.append((label, proc.analyse(rows, tc, exclude=excl[k])))
+        metas.append(meta)
+    merged = proc.merge(results)
+    sim = any(bool(m.get("sim")) for m in metas)
+    run = RunDir(out, proc.NAME, metas[0]["config"], simulated=sim, invalid=bool(merged.issues))
+    with _partial_on_error(run):
+        run.write_csv("curve.csv", merged.curve)
+        run.write_csv("bins.csv", merged.bins)
+        run.write_json("summary.json", merged.summary())
+        run.write_meta(
+            idns={},
+            sim=sim,
+            extra={"runs": [str(p) for p in runs], "exclude_s": excl, "curve_settings": tc.model_dump()},
+        )
+        _write_figs(run, {"plot.png": proc.plot(merged, cfg.dut.name)}, sim)
+    typer.echo(merged.report())
+    _saved(run.path, res=merged)
+
+
+def _num(v: str):
+    """A data.csv cell: float where it is a number, True / False for booleans, else the text."""
+    if v in ("True", "False"):
+        return v == "True"
+    try:
+        return float(v)
+    except ValueError:
+        return v
+
+
 @app.command("compare")
 def compare_runs(
     run_a: Annotated[

@@ -16,7 +16,7 @@ Bench automation for characterizing our LDO (the JAFWAK board) and the TPS7A7001
 | Enable thresholds | `enable-sine` | enable comparator VT+, VT-, hysteresis; `--shape square`: EN_AIN → EN_OUT propagation delay (JAFWAK) |
 | Enable switching current | `enable-current` | EN_VDD current (DMM in place of J1 9-11) vs the frequency of a square on EN_AIN, 10 Hz – 1 MHz → charge per cycle (JAFWAK) |
 | Startup | `enable-startup` | VOUT and EN_IN (AD2), input current from the 54621A's INA − INB across R13, after the enable edge (JAFWAK) |
-| Temperature | `temp` | TMP235 (J13 pin 5), VREF and VOUT over time → tempco from stable plateaus (JAFWAK) |
+| Temperature | `temp`, `temp --heater`, `temp-curve` | TMP235 (J13 pin 5), VREF and VOUT over time: a cold run (ice) and a hot run (the run ramps a heater on PSU OUT2) → VREF's curve against T (`curve.csv`, parabola fit), joined by `temp-curve` (JAFWAK) |
 | Bench checks | `discover`, `psu-check`, `loadbank-check`, `smoke` | instruments found, supply accuracy, load bank wiring, quick power-up |
 | Supply control | `psu-hold`, `psu-sweep` | hold a voltage and current limit until Ctrl-C (prints V / I, saves nothing); step the voltage and save V / I |
 | BGR vs external reference | any DC, transient, psrr or iq test with `--vref ext`, then `compare` | the same test with 1.204 V on VREF_IN in place of the BGR (JP2 removed), side by side with the BGR run |
@@ -84,7 +84,9 @@ uv run ldo-bench enable-sine --shape square --freq 1e5     # propagation delay, 
 uv run ldo-bench enable-sine --output vout --shape triangle --freq 0.1   # VOUT tracking EN_AIN (J8 on LDO)
 uv run ldo-bench line-reg --split-rails                  # dropout Method B: BGR_VDD / OTA_VDD on PSU OUT2
 uv run ldo-bench enable-current                          # --fstart 10 --fstop 1e6 (EN_VDD current vs frequency)
-uv run ldo-bench temp                                    # --minutes 30 --interval 2 (Ctrl-C ends it, data kept)
+uv run ldo-bench temp                                    # cold run (ice): --minutes 30 --interval 2 (Ctrl-C ends it, data kept)
+uv run ldo-bench temp --heater                           # hot run: heater on PSU OUT2, 1 C/min to 60 C and back (~80 min)
+uv run ldo-bench temp-curve results/temp/<cold run> results/temp/<hot run>   # curve.csv in a new folder
 uv run ldo-bench enable-startup                          # --window-ms 10 --load 2 (needs the 54621A)
 uv run ldo-bench load-reg --vref ext                     # JP2 removed: PSU OUT2 on VREF_IN
 uv run ldo-bench load-reg --enable dio                   # EN driven from the AD2, not tied on
@@ -132,9 +134,10 @@ Command-line options go through the same checks.
   - **Turn-on:** the reference comes on only after VIN, then the run proves VOUT follows a 20 mV step (it stops if not: JP2 is still in).
   - **Limits:** it's never more than 0.3 V above VIN, and it goes to 0 V before VIN does.
   - **line-tran `--vref ad2`:** the AD2's V+ in place of PSU OUT2 (which is U2's −5 V), read back on the DMM on VREF_IN; `--vref-v` sets the level (default 1.204 V). V+ comes on only once VIN is up and measured, and goes off before VIN and U2's rails come down.
-- **Shutdown:** however a run ends (finished, error, Ctrl-C), everything is switched off in order: external reference, split rails and VS_BUFF (PSU OUT2), LDO enable (with `--enable dio`), wavegen, AD2 V+, load bank, DIO, supply output.
+- **Shutdown:** however a run ends (finished, error, Ctrl-C), everything is switched off in order: heater, external reference, split rails and VS_BUFF (PSU OUT2), LDO enable (with `--enable dio`), wavegen, AD2 V+, load bank, DIO, supply output.
 - **Supply after a run:** the output is off. The setpoint is `psu.idle_voltage` at `psu.current_limit`, so pressing Output On gives the normal VIN (JAFWAK: 1.8 V, 10 mA); without `idle_voltage` it is 0 V (demo board). The idle setpoint is programmed only once the output is confirmed off.
-- **Temperature log:** `temp` runs for at most 2 hours (`temp.duration`); Ctrl-C ends it early, keeps the data and still shuts down. It powers VS_BUFF (the TMP235) from PSU OUT2 at 5.0 V (100 mA limit, 5.5 V OVP) once VIN is up; more than 30 mA from OUT2 brings it back to 0 V and stops the run, and shutdown sets it to 0 V before the outputs go off.
+- **Temperature log:** `temp` runs for at most 2 hours (`temp.duration`); Ctrl-C ends it early, keeps the data and still shuts down. With `temp.vs_buff_source = "psu"` it powers VS_BUFF from PSU OUT2 (5.0 V, 100 mA limit, 5.5 V OVP; more than 30 mA stops the run); JAFWAK uses a separate supply.
+- **Heater (`temp --heater`):** PSU OUT2 on a 1 Ohm power resistor: its resistance is checked at 0.2 V first (0.5-2 Ohm, else the run stops), then at most 9 W / 3.0 V (3.2 A limit, 3.5 V OVP), following 1 C/min to 60 C and back. Above 70 C, with the sensor lost, or with no rise while heating, the heater goes to 0 and the run stops. The heater can't be on without VIN (the outputs switch together), and every shutdown sets it to 0 V first.
 
 ## Results: real data only
 
@@ -172,7 +175,8 @@ Each run writes a folder under `results/<test>/`, e.g. `results/load-tran/202611
 | `sa-path-cal` (added 2026-11-20) | simulator only |
 | `sa-check`, the 8591E driver's other commands (added 2026-11-20) | yes (2026-11-20): every command accepted; calibrator −20.52 dBm at 300.003 MHz (−0.52 dB) |
 | `vref-line`, `temp`, `enable-sine --shape square`, `--enable dio` (added 2026-11-13) | simulator only |
-| `temp`: VS_BUFF from PSU OUT2 instead of a separate supply (added 2026-11-21) | simulator only |
+| `temp`: VS_BUFF from PSU OUT2 instead of a separate supply (added 2026-11-21) | simulator only; JAFWAK now uses `vs_buff_source = "external"` |
+| `temp --heater`, the curve (`curve.csv`), `temp-curve` (added 2026-11-21) | simulator only; the PI gains aren't tuned on the board yet |
 | `line-tran --enable dio` (added 2026-11-17) | simulator only |
 | `enable-current` (added 2026-11-13; replaces `iq --rail en`) | simulator only |
 | `enable-sine --output vout`, `line-reg --split-rails`, `--ext-load-ohm`, vref-line's 10 GOhm / 10 MOhm check (added 2026-11-14) | simulator only |

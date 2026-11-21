@@ -116,11 +116,29 @@ class LdoModel:
     bgr_line: float = 0.5e-3  # V/V, BGR line sensitivity while it has headroom
     bgr_min_vin: float = 1.56  # V, below this VIN the BGR runs out of headroom: VREF falls 1 V/V
     bgr_rout: float = 2e3  # ohm, the BGR's output resistance at TP3 (loaded by a 10 MOhm DMM)
-    bgr_tc: float = 58.9e-6  # 1/C, VREF temperature coefficient (VOUT follows it)
+    bgr_tc: float = 58.9e-6  # 1/C, VREF temperature coefficient at 25 C (VOUT follows it)
+    # 1/C^2, VREF curvature: the bandgap's parabola. -1.1e-6 puts the peak near 52 C, close to the
+    # cooling half of JAFWAK's 2026-11-21 run (peak ~48 C, -1.3 uV/C^2)
+    bgr_tc2: float = -1.1e-6
     # temperature (temp logger): the TMP235 on VS_BUFF, read by the AD2 on J13 pin 5
     temp_profile: Callable[[float], float] | None = None  # clock (s) -> board temperature (C); None = 25 C
+    # heater (temp --heater): the PSU's second output on a power resistor on U1 and the TMP235.
+    # The die: c_th dT/dt = P - (T - t_ambient) / r_th; the TMP235 lags it by tau_sensor (it sits
+    # beside U1). r_th / c_th roughly match 9 W giving ~8 C/min at first (2026-11-21).
+    heater_v: float = 0.0  # V, that output's setpoint when aux_to == "heater"
+    heater_r: float = 1.0  # ohm, what the output sees (3000: OUT2 still on VS_BUFF)
+    heater_wired: bool = True  # False: nothing on OUT2 (open)
+    heater_coupled: bool = True  # False: the resistor isn't on the board (its heat goes elsewhere)
+    t_ambient: float = 22.0  # C
+    r_th: float = 6.0  # C/W, heater to ambient through the board
+    c_th: float = 60.0  # J/C
+    tau_sensor: float = 30.0  # s
+    t_die: float = 22.0  # C, the heated model's state (with aux_to == "heater")
+    t_sensor: float = 22.0  # C, what the TMP235 is at
+    _t_thermal: float = 0.0  # s, the clock the thermal state is at
     clock: float = 0.0  # s, simulated time: Bench.sleep advances it
     vs_buff_v: float = 0.0  # V, the PSU's second output setpoint when aux_to == "vs_buff" (temp)
+    vs_buff_by_hand: bool = False  # a separate supply on VS_BUFF, on (temp.vs_buff_source = "external")
     vs_buff_wired: bool = True  # that output is on VS_BUFF (J4); False = miswired, the TMP235 is unpowered
     vs_buff_short: bool = False  # something on VS_BUFF pulls the output into its current limit
     vref_delay: float = 4e-6  # s from the enable edge until VREF starts rising
@@ -311,12 +329,55 @@ class LdoModel:
             if self.vref_from_vplus:
                 return self.vplus_v
             return self.vref_out_v if self.psu_on else 0.0
-        return self.vout_nominal * (1 + self.bgr_tc * (self.temperature - 25.0))
+        return self.vout_nominal * self.bgr_factor(self.temperature)
+
+    def bgr_factor(self, temp_c: float) -> float:
+        """The BGR's temperature term: 1 + tc (T - 25) + tc2 (T - 25)^2 (T in C)."""
+        d = temp_c - 25.0
+        return 1 + self.bgr_tc * d + self.bgr_tc2 * d * d
+
+    @property
+    def heated(self) -> bool:
+        """The thermal model runs (the heater is wired to the PSU's second output)."""
+        return self.aux_to == "heater" and self.temp_profile is None
+
+    def heater_power(self) -> float:
+        """W into the heater now (0 with the outputs off or nothing on OUT2)."""
+        if self.aux_to != "heater" or not self.psu_on or not self.heater_wired:
+            return 0.0
+        return self.heater_v**2 / self.heater_r
+
+    def _advance_thermal(self) -> None:
+        """Step the die and sensor temperatures up to the clock (1 s steps, power held since last time)."""
+        p = self.heater_power() if self.heater_coupled else 0.0
+        while self._t_thermal < self.clock - 1e-9:
+            dt = min(1.0, self.clock - self._t_thermal)
+            self.t_die += dt * (p - (self.t_die - self.t_ambient) / self.r_th) / self.c_th
+            self.t_sensor += dt * (self.t_die - self.t_sensor) / self.tau_sensor
+            self._t_thermal += dt
+
+    def set_heater_v(self, volts: float) -> None:
+        """The heater output's new setpoint (V): the thermal state catches up first."""
+        self._advance_thermal()
+        self.heater_v = volts
 
     @property
     def temperature(self) -> float:
-        """Board temperature (C) now, from temp_profile (25 C when unset)."""
-        return 25.0 if self.temp_profile is None else float(self.temp_profile(self.clock))
+        """Die temperature (C) now: temp_profile, the heated model, or 25 C."""
+        if self.temp_profile is not None:
+            return float(self.temp_profile(self.clock))
+        if self.heated:
+            self._advance_thermal()
+            return self.t_die
+        return 25.0
+
+    @property
+    def sensor_temperature(self) -> float:
+        """What the TMP235 is at (C): the die temperature, lagging it when the heated model runs."""
+        if self.heated:
+            self._advance_thermal()
+            return self.t_sensor
+        return self.temperature
 
     def bgr_vref(self) -> float:
         """BGR output at TP3 (V): vref_nominal with its line and temperature terms, falling 1 V/V
@@ -324,7 +385,7 @@ class LdoModel:
         vin = self.vin
         if vin <= 0 or not self.enabled:
             return 0.0
-        v = self.vref_nominal * (1 + self.bgr_tc * (self.temperature - 25.0)) + self.bgr_line * (vin - 1.8)
+        v = self.vref_nominal * self.bgr_factor(self.temperature) + self.bgr_line * (vin - 1.8)
         if vin < self.bgr_min_vin:
             v -= self.bgr_min_vin - vin
         return max(0.0, v)
@@ -368,13 +429,12 @@ class LdoModel:
         return self.vout_dc() * self.conductance()
 
     def tmp235_powered(self) -> bool:
-        """The TMP235 runs: the PSU's second output is on VS_BUFF, output on, at 2.3 V or more."""
-        return (
-            self.aux_to == "vs_buff"
-            and self.vs_buff_wired
-            and self.psu_on
-            and self.vs_buff_v >= TMP235_MIN_SUPPLY
-        )
+        """The TMP235 runs: VS_BUFF from a separate supply, or the PSU's second output on and at 2.3 V+."""
+        if not self.vs_buff_wired:
+            return False
+        if self.vs_buff_by_hand:
+            return True
+        return self.aux_to == "vs_buff" and self.psu_on and self.vs_buff_v >= TMP235_MIN_SUPPLY
 
     def ref_value(self) -> float:
         """DC level (V) at whatever ref_probe is on."""
@@ -384,7 +444,7 @@ class LdoModel:
         if kind == "vref":
             return self.bgr_vref()
         if kind == "tmp":  # TMP235: 500 mV at 0 C, 10 mV/C, powered from VS_BUFF
-            return 0.5 + 0.01 * self.temperature if self.tmp235_powered() else 0.0
+            return 0.5 + 0.01 * self.sensor_temperature if self.tmp235_powered() else 0.0
         if kind == "iin":  # across R13: everything the board draws from VIN
             return self.sense_ohm * (self.load_current() + (self.iq_on if self.enabled else self.iq))
         if kind == "iout":  # across R1: the LDO's output current
@@ -486,7 +546,7 @@ class SimSupplyOutput:
         self.m = model
         self.channel = channel
 
-    def setup(self, *, current_limit: float, ovp: float | None) -> None:
+    def setup(self, *, current_limit: float, ovp: float | None, voltage_range: str | None = None) -> None:
         self.set_voltage(0.0)
 
     def set_voltage(self, volts: float) -> None:
@@ -496,6 +556,9 @@ class SimSupplyOutput:
         if self.m.aux_to == "vs_buff":
             self.m.vs_buff_v = volts
             return
+        if self.m.aux_to == "heater":
+            self.m.set_heater_v(volts)
+            return
         self.m.vref_out_v = volts
         if self.m.vref_wired and self.m.jp2_fitted and volts > 0:
             self.m.bgr_backdriven = True
@@ -503,6 +566,8 @@ class SimSupplyOutput:
     def get_voltage_setpoint(self) -> float:
         if self.m.aux_to == "vs_buff":
             return self.m.vs_buff_v
+        if self.m.aux_to == "heater":
+            return self.m.heater_v
         return self.m.rails_v if self.m.aux_to == "rails" else self.m.vref_out_v
 
     def measure_voltage(self) -> float:
@@ -512,6 +577,8 @@ class SimSupplyOutput:
         """Method B: what BGR_VDD / OTA_VDD draw, or the current limit if a J1 jumper ties them to INB.
         temp: what VS_BUFF draws (U2 and the TMP235), or the current limit if it is shorted."""
         m = self.m
+        if m.aux_to == "heater":
+            return m.heater_v / m.heater_r if (m.psu_on and m.heater_wired) else 0.0
         if m.aux_to == "vs_buff":
             if not m.psu_on or m.vs_buff_v <= 0 or not m.vs_buff_wired:
                 return 0.0

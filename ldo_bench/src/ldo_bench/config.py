@@ -605,7 +605,11 @@ class TempConfig(_Model):
         0.2, gt=0, lt=1, description="VREF must stay within this fraction of vref_nominal"
     )
     psu_readback: bool = Field(True, description="Also record the supply current (~0.4 s per sample)")
-    # VS_BUFF (J4) from the PSU's other output: it powers the TMP235 (2.3-5.5 V) and U2 (the BUF634)
+    # VS_BUFF (J4) powers the TMP235 (2.3-5.5 V) and U2 (the BUF634): a separate supply set by hand
+    # ("external"), or the PSU's other output ("psu", set by the run; not with --heater, which needs it)
+    vs_buff_source: Literal["external", "psu"] = Field(
+        "external", description="What powers VS_BUFF: a separate supply by hand, or the PSU's other output"
+    )
     vs_buff_v: float = Field(5.0, gt=0, description="PSU's other output on VS_BUFF (V), at most psu.v_max")
     vs_buff_channel: int = Field(2, ge=1, le=2, description="PSU output on VS_BUFF (not psu.channel)")
     vs_buff_current_limit: float = Field(
@@ -620,11 +624,91 @@ class TempConfig(_Model):
             "means a miswire or a short: VS_BUFF comes down and the run stops"
         ),
     )
+    # the VREF-against-temperature curve (procedures/temp_curve.py, curve.csv)
+    curve_bin: float = Field(0.5, gt=0, description="Temperature bin width for curve.csv (C)")
+    max_rate: float = Field(
+        1.5,
+        gt=0,
+        description="Samples ramping faster than this (C/min) stay out of the curve (sensor lag); above heater.rate",
+    )
+    rate_window: float = Field(
+        60.0, gt=0, description="Each sample's rate is a line fit over this window (s)"
+    )
+    direction_threshold: float = Field(
+        0.05, gt=0, description="Slower than this (C/min) counts as steady, not heating or cooling"
+    )
+    misread_tolerance: float = Field(
+        0.005,
+        gt=0,
+        description="VREF (DMM) off VOUT (AD2) by this much more than usual (V) is a DMM misread",
+    )
+    misread_max_fraction: float = Field(
+        0.01, gt=0, lt=1, description="More misreads than this fraction of the samples is a setup issue"
+    )
+    spread_note: float = Field(
+        0.5e-3, gt=0, description="A bin whose VREF spread (std) is above this (V) gets a note"
+    )
 
     @model_validator(mode="after")
     def _check(self) -> TempConfig:
         if self.vs_buff_ovp is not None and self.vs_buff_ovp <= self.vs_buff_v:
             raise ValueError("temp.vs_buff_ovp must be above temp.vs_buff_v")
+        return self
+
+
+class HeaterConfig(_Model):
+    """[heater] (temp --heater): a power resistor on the PSU's other output heats U1 and the TMP235.
+
+    The run checks the heater's resistance at check_v, then a PI loop on the TMP235 reading follows a
+    target that ramps at `rate` from the starting temperature up to t_high, holds `hold`, and ramps
+    back down to the start + end_above_start; then the heater is off and the run ends. Above t_cutoff,
+    a TMP235 reading outside temp.temp_min..temp_max, or no rise while the target is stall_error
+    ahead for stall_window, the heater goes to 0 and the run stops. The outputs switch on and off
+    together, so the heater is never on without VIN, and every shutdown turns it off.
+    Limits approved 2026-11-21: 9 W, 3.0 V, 3.2 A, OVP 3.5 V, 60 C target, 70 C cutoff, 1 C/min.
+    """
+
+    channel: int = Field(2, ge=1, le=2, description="PSU output on the heater (not psu.channel)")
+    voltage_range: Literal["LOW", "HIGH"] | None = Field(
+        "LOW", description="That output's range (E3648A LOW: 8 V / 5 A, needed above 2.5 A)"
+    )
+    resistance: float = Field(1.0, gt=0, description="The heater's nominal resistance (ohm)")
+    r_min: float = Field(0.5, gt=0, description="Measured below this (ohm): a short; the run stops")
+    r_max: float = Field(2.0, gt=0, description="Measured above this (ohm): not the heater; the run stops")
+    check_v: float = Field(0.2, gt=0, description="Voltage for the resistance check (V)")
+    max_power: float = Field(9.0, gt=0, description="Never more than this into the heater (W)")
+    v_max: float = Field(3.0, gt=0, description="Never more than this on the heater (V)")
+    current_limit: float = Field(3.2, gt=0, description="Current limit on the heater's output (A)")
+    ovp: float | None = Field(3.5, gt=0, description="OVP on the heater's output (V), above v_max")
+    rate: float = Field(1.0, gt=0, description="Target ramp rate up and down (C/min)")
+    t_high: float = Field(60.0, description="Top of the ramp (C)")
+    hold: float = Field(300.0, ge=0, description="Time at t_high (s)")
+    end_above_start: float = Field(2.0, ge=0, description="The down ramp ends this far above the start (C)")
+    t_cutoff: float = Field(
+        70.0, description="A TMP235 reading above this (C) turns the heater off and stops"
+    )
+    kp: float = Field(1.5, ge=0, description="Proportional gain (W/C)")
+    ki: float = Field(0.01, ge=0, description="Integral gain (W/(C s))")
+    stall_window: float = Field(180.0, gt=0, description="No-rise check window (s)")
+    stall_error: float = Field(
+        3.0, gt=0, description="The target this far ahead (C) for the whole window ..."
+    )
+    stall_rise: float = Field(1.0, gt=0, description="... and T rose less than this (C): stop")
+
+    @model_validator(mode="after")
+    def _check(self) -> HeaterConfig:
+        if not self.r_min < self.resistance < self.r_max:
+            raise ValueError("heater.resistance must be between heater.r_min and heater.r_max")
+        if self.check_v >= self.v_max:
+            raise ValueError("heater.check_v must be below heater.v_max")
+        if self.ovp is not None and self.ovp <= self.v_max:
+            raise ValueError("heater.ovp must be above heater.v_max")
+        if self.current_limit * self.resistance < min(self.v_max, (self.max_power * self.resistance) ** 0.5):
+            raise ValueError(
+                "heater.current_limit is too low to reach max_power / v_max at the nominal resistance"
+            )
+        if self.t_high >= self.t_cutoff:
+            raise ValueError("heater.t_high must be below heater.t_cutoff")
         return self
 
 
@@ -1316,6 +1400,7 @@ class BenchConfig(_Model):
     line_reg: LineRegConfig | None = None
     vref_line: VrefLineConfig | None = None
     temp: TempConfig | None = None
+    heater: HeaterConfig | None = None
     load_tran: LoadTranConfig | None = None
     line_tran: LineTranConfig | None = None
     enable: EnableConfig = EnableConfig()
@@ -1423,6 +1508,7 @@ class BenchConfig(_Model):
           psu.current_limit, and their voltages within the ceiling for where the supply goes (`to`).
         - en_sine / en_current: the wave into EN_AIN within dut.vin_max (EN_AIN runs from VIN).
         - temp VS_BUFF: temp.vs_buff_v within psu.v_max, on the PSU's other output (not psu.channel).
+        - heater: on the PSU's other output, heater.v_max within psu.v_max, t_cutoff within temp.temp_max.
         - enable-pin clashes: tests that drive the enable line (en_sine, startup, iq 'disabled')
           would fight the load bank if an enable DIO pin were also a load bank pin.
         """
@@ -1475,6 +1561,15 @@ class BenchConfig(_Model):
                 )
             if self.temp.vs_buff_channel == self.psu.channel:
                 raise ValueError("temp.vs_buff_channel must be the PSU's other output, not psu.channel (VIN)")
+        if self.heater:
+            if self.heater.channel == self.psu.channel:
+                raise ValueError("heater.channel must be the PSU's other output, not psu.channel (VIN)")
+            if self.heater.v_max > self.psu.v_max:
+                raise ValueError(f"heater.v_max exceeds psu.v_max ({self.psu.v_max} V)")
+            if self.temp and self.heater.t_cutoff > self.temp.temp_max:
+                raise ValueError("heater.t_cutoff must be at most temp.temp_max")
+            if self.temp and self.heater.rate >= self.temp.max_rate:
+                raise ValueError("heater.rate must be below temp.max_rate, or the curve leaves the ramp out")
         if self.vref_line:
             vl = self.vref_line
             vin_ok("vref_line.vin_high", vl.vin_high)

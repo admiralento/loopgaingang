@@ -118,6 +118,9 @@ class Bench:
       - `psu_output`: PSU with only a meter / the load bank on it; ceiling psu.v_max.
       - `vs_buff_on` / `vs_buff_off`: the PSU's other output on VS_BUFF (TMP235 and U2) for temp;
         ceiling psu.v_max, VIN up first, more than temp.vs_buff_max_current stops the run.
+      - `heater_on` / `heater_set` / `heater_off` (temp --heater): the PSU's other output on a power
+        resistor on the board; resistance checked at heater.check_v first, then at most
+        heater.max_power / heater.v_max. Not a voltage on the DUT, but it heats it.
       - `vin_from_wavegen` / `vin_sine_from_wavegen`: wavegen on VIN through the BUF634;
         ceiling min(dut.vin_max, 5 V wavegen limit).
     A request above the ceiling raises InstrumentError before anything is programmed. The
@@ -152,7 +155,7 @@ class Bench:
     (a floating input sends U2's output to a rail); `buffer_rails_off()` takes them down with W1 at
     0 V and turns W1 off last. `buffer_rail` (the single-rail path) is refused with [buffer].
 
-    `shutdown()` (also run on leaving `with Bench`) turns things off in this order: external
+    `shutdown()` (also run on leaving `with Bench`) turns things off in this order: heater 0 V -> external
     reference 0 V -> split rails and VS_BUFF 0 V -> LDO enable low (--enable dio) -> with the buffer rails up: W1 to DC 0 V, PSU
     outputs off, negative rail 0 V -> wavegen (both channels) -> AD2 V+ -> load bank -> DIO released -> PSU output
     off -> setpoint psu.idle_voltage at psu.current_limit (0 V without it; only once the output is
@@ -227,6 +230,8 @@ class Bench:
         self._rails_on = False
         self.vs_buff_out: SupplyOutput | None = None  # the PSU output on VS_BUFF for temp (vs_buff_on)
         self._vs_buff_up = False
+        self.heater_out: SupplyOutput | None = None  # the PSU output on the heater (temp --heater)
+        self.heater_r: float | None = None  # ohm, measured by heater_on()
         self._vref_on = False  # driving vref.external_v (not held at 0 V)
         self.vref_proof: dict | None = None  # what reference_on() measured, for the run's records
         self.vref_end: float | None = None  # --vref ad2: VREF_IN on the DMM at the end of the run (V)
@@ -289,7 +294,8 @@ class Bench:
         psu_to: Literal["vin", "rail"] = "vin",
         ch1_probe: Literal["vout", "en_out"] = "vout",
         ldo_on_en_out: bool = False,
-        aux_to: Literal["vref", "rails", "vs_buff"] = "vref",
+        aux_to: Literal["vref", "rails", "vs_buff", "heater"] = "vref",
+        vs_buff_by_hand: bool = False,
         u4_rig: bool = False,
         en_pin: int | None = None,
         chip_powered: bool = True,
@@ -319,6 +325,7 @@ class Bench:
             self.sim_model.ch1_probe = ch1_probe
             self.sim_model.ldo_on_en_out = ldo_on_en_out
             self.sim_model.aux_to = aux_to
+            self.sim_model.vs_buff_by_hand = vs_buff_by_hand
             self.sim_model.en_pin = en_pin
         if u4_rig and self.sim_model is not None:  # sa-path-cal: the simulated operator took J10 out
             self.sim_model.u4_rig = True
@@ -478,6 +485,7 @@ class Bench:
         self.reference_off()
         self.split_rails_off()
         self.vs_buff_off()
+        self.heater_off()
         self.psu.output(False)
         self._psu_on = False
         self._vin_level, self._vin_from = None, None
@@ -1075,6 +1083,8 @@ class Bench:
             raise InstrumentError(f"refusing VS_BUFF while the split rails use PSU OUT{ch}")
         if self._buffer_up or self.vminus_out is not None:
             raise InstrumentError(f"refusing VS_BUFF while U2's split supply uses PSU OUT{ch}")
+        if self.heater_out is not None and self.heater_out.channel == ch:
+            raise InstrumentError(f"refusing VS_BUFF while the heater uses PSU OUT{ch}")
         if not 0 <= volts <= self.cfg.psu.v_max + 1e-9:
             raise InstrumentError(f"refusing VS_BUFF = {volts} V (limit 0..{self.cfg.psu.v_max} V)")
         if not self._psu_on or self._vin_from != "psu":
@@ -1108,6 +1118,73 @@ class Bench:
         else:
             self.vs_buff_out.set_voltage(0.0)
         self._vs_buff_up = False
+
+    # --- Heater (temp --heater) --------------------------------------------------
+    def heater_on(self) -> float:
+        """Set up the heater's output ([heater]) and check its resistance; return it (ohm).
+
+        Needs VIN up first from the PSU (both outputs switch on together) and that output free (not
+        the external reference, the split rails, U2's V- or VS_BUFF). The output gets heater.voltage_range,
+        heater.current_limit and heater.ovp, then heater.check_v; V / I outside heater.r_min..r_max
+        (open, shorted, or not the heater: VS_BUFF reads kOhm) puts it back to 0 V and stops the run.
+        """
+        hc = self.cfg.heater
+        if hc is None:
+            raise InstrumentError("--heater needs a [heater] section in the config")
+        ch = hc.channel
+        if self.vref_external and self.vref_source == "psu" and self.cfg.vref.psu_channel == ch:
+            raise InstrumentError(f"refusing the heater with --vref ext: both need PSU OUT{ch}")
+        users = {
+            "the split rails": self.rails_out,
+            "U2's split supply": self.vminus_out,
+            "VS_BUFF": self.vs_buff_out,
+        }
+        for name, out in users.items():
+            if out is not None and out.channel == ch:
+                raise InstrumentError(f"refusing the heater while {name} uses PSU OUT{ch}")
+        if not self._psu_on or self._vin_from != "psu":
+            raise InstrumentError(
+                "the heater needs VIN up first, from the PSU (both outputs switch on together)"
+            )
+        if not hasattr(self.psu, "aux"):
+            raise InstrumentError(f"the supply ({self.psu.idn}) has no second output for the heater")
+        if self.heater_out is None:
+            self.heater_out = self.psu.aux(ch)
+            self.heater_out.setup(current_limit=hc.current_limit, ovp=hc.ovp, voltage_range=hc.voltage_range)
+        out = self.heater_out
+        out.set_voltage(hc.check_v)
+        self.sleep(self.cfg.psu.settle_time)
+        i, v = out.measure_current(), out.measure_voltage()
+        out.set_voltage(0.0)
+        r = v / i if i > 0 else float("inf")
+        if not hc.r_min <= r <= hc.r_max:
+            raise InstrumentError(
+                f"heater check: PSU OUT{ch} reads {r:.3g} Ohm ({v:.3f} V, {i * 1e3:.3f} mA), outside the heater's "
+                f"resistance {hc.r_min:g}-{hc.r_max:g} Ohm. Too high: the heater is open, or OUT{ch} is on something "
+                f"else (VS_BUFF draws almost nothing at {hc.check_v:g} V); too low: a short. OUT{ch} + -> one heater "
+                f"lead, OUT{ch} - -> the other. OUT{ch} is back at 0 V"
+            )
+        self.heater_r = r
+        log.info("Heater: PSU OUT%d, %.3f Ohm at %.2f V", ch, r, v)
+        return r
+
+    def heater_set(self, watts: float) -> float:
+        """Heater to `watts` (W), clamped to 0..heater.max_power and heater.v_max; returns the W set
+        (V^2 / the resistance heater_on() measured)."""
+        hc = self.cfg.heater
+        if self.heater_out is None or self.heater_r is None:
+            raise InstrumentError("heater_set before heater_on")
+        if not self._psu_on:
+            raise InstrumentError("refusing the heater with the PSU outputs off")
+        p = min(max(watts, 0.0), hc.max_power)
+        v = min((p * self.heater_r) ** 0.5, hc.v_max)
+        self.heater_out.set_voltage(v)
+        return v * v / self.heater_r
+
+    def heater_off(self) -> None:
+        """Heater to 0 V (the output stays connected, held at 0 V). Safe in any mode."""
+        if self.heater_out is not None:
+            self.heater_out.set_voltage(0.0)
 
     def _vs_buff_ramp(self, target: float) -> None:
         """Ramp the VS_BUFF output to `target` (V) in psu.ramp_step steps."""
@@ -1286,6 +1363,7 @@ class Bench:
         shutdown_errors). Safe to call more than once.
         """
         steps: list[tuple[str, Callable[[], None]]] = [
+            ("heater 0 V", self.heater_off),  # first: stop the heat
             ("external reference 0 V", self._reference_off_for_shutdown),
             # BGR_VDD / OTA_VDD down before VIN (VDD) goes: never powered without VDD
             ("split rails 0 V", lambda: self.rails_out.set_voltage(0.0) if self.rails_out else None),

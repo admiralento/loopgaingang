@@ -499,24 +499,35 @@ The LDO stays unpowered. W2 feeds U4's input directly with a known 100 mV tone, 
 
 ## Temperature (JAFWAK)
 
-### `temp`: temperature log
-- **Wiring:**
-  - PSU + -> VIN_DC (J7), PSU - -> GND (J11); JP4 2-3 "DC"; JP2 closed
-  - PSU OUT2 + -> VS_BUFF (J4), OUT2 - -> GND (J11): the run sets it to `temp.vs_buff_v` (5.0 V) once VIN is up. It powers the TMP235 on TEMP (TP7) and U2; the load bank itself doesn't need it
+### `temp`: temperature log (cold run and hot run)
+VREF against temperature comes from two runs, each under the same opaque box: a **cold run** (ice, by hand) and a **hot run** (`--heater`: the run ramps a power resistor). `temp-curve` then joins them. The wiring prompt of each run lists its own setup steps.
+
+- **Wiring (both runs):**
+  - PSU OUT1 + -> VIN_DC (J7), OUT1 - -> GND (J11); JP4 2-3 "DC"; JP2 closed
+  - Separate supply + (5.0 V) -> VS_BUFF (J4), - -> GND (J11): it powers the TMP235 on TEMP (TP7) and U2, and must be on before you confirm (`temp.vs_buff_source = "external"`, JAFWAK since 2026-11-21). With `"psu"` the run powers VS_BUFF from PSU OUT2 instead (100 mA limit, 5.5 V OVP, more than 30 mA stops the run); not with `--heater`, which needs OUT2
   - U2's V- wire (the split-supply rework) on GND, not on the PSU
   - Scope 2+ -> J13 pin 5 (TMP), Scope 1+ -> J13 pin 4 (OUTA); both - -> J13 pin 6 (GND)
-  - DMM V / COM -> VREF (TP3) / GND (TP2), Hi-Z if the meter has it
+  - DMM V / COM -> VREF (TP3) / GND (TP2) (the run sets 10 GOhm)
   - LDO enabled (J6 1-2 "HI", J8 1-2 and 9-10 "LDO") or `--enable dio`
-  - Load: `temp.load_code = 1` (1.0 mA through B0, 1.2 kOhm), the 1 mA of the first plan; J10 "LOAD" and DIO 0-4
-- **Does:** with the LDO on, samples every `interval` (2 s) for `duration` (30 min, at most 2 h): T from the TMP235 on the AD2's 5 V range, T = (V − 0.500 V) / 0.010 V/C; VREF on the DMM; VOUT on the AD2; the supply current. Ctrl-C ends the log early, keeps the data and still shuts down. First bring-up plan, Test 3.10: start at room temperature, then put ice in a sealed bag on U1.
+  - Load: `temp.load_code = 1` (1.0 mA through B0), constant for the whole run; J10 "LOAD" and DIO 0-4
+- **Cold run** (`temp`): heater off the board; ice in a sealed bag with a dry paper towel under it, on U1 and the TMP235 together. Start at room temperature, put the ice on about 3 min in, leave it until T stops falling, take it off and let the board warm back up under the box; Ctrl-C ends it. The fast drop when the ice goes on is over `max_rate` and stays out of the curve.
+- **Hot run** (`temp --heater`, added 2026-11-21, simulator only): PSU OUT2 + / - -> the 1 Ohm 10 W resistor's two leads, nothing else on OUT2, neither lead touching the board; the resistor on U1 and the TMP235, a couple of layers of paper between; no ice. `--minutes` defaults to 120 here.
+  - **Check:** OUT2 gets `heater.voltage_range` (LOW), 3.2 A, OVP 3.5 V, then 0.2 V: outside 0.5-2 Ohm (open, still on VS_BUFF, shorted) it goes back to 0 V and the run stops.
+  - **Ramp:** a PI loop (`kp`, `ki`, tuned on the simulator only) follows a target from the starting temperature up at 1 C/min to 60 C, 5 min there, down at 1 C/min to the start + 2 C (~80 min from 22 C); then the heater is off and the run ends. Power at most 9 W, voltage at most 3.0 V (V = sqrt(P x the measured R)). A profile that doesn't fit in `--minutes` is refused before heating. Each sample records `target_c`, `heater_w`, `heater_i_a`, `phase`.
+  - **Interlocks** (heater to 0 W, log stopped, run `_INVALID`): T above `t_cutoff` (70 C); T outside `temp_min`..`temp_max` (sensor lost); the target 3 C+ ahead for 3 min while T rose under 1 C (heater not on the board). The outputs switch together, so the heater is never on without VIN; every shutdown (error, Ctrl-C) sets it to 0 V first.
+  - **Limits approved 2026-11-21:** 9 W, 3.0 V, 3.2 A, OVP 3.5 V, 60 C target, 70 C cutoff, 1 C/min.
+- **Does:** samples every `interval` (2 s; ~2.9 s on the bench with the readbacks): T from the TMP235 on the AD2's 5 V range, T = (V - 0.500 V) / 0.010 V/C; VREF on the DMM; VOUT on the AD2; the supply current. Ctrl-C ends the log early, keeps the data and still shuts down.
 - **Computes:**
-  - **Plateaus:** a sample is stable when T held within `stable_delta` (0.5 C) for `stable_window` (30 s). Each run of stable samples is averaged into one point (T, VREF, VOUT).
-  - **Tempco:** with two or more plateaus at least `min_spread` (2 C) apart, a line through the plateau means gives VREF and VOUT in ppm/C. It works on temperature differences, so the AD2's offset (~10 mV ≈ 1 C, unverified) mostly cancels. Simulated: 58.9 ppm/C, so room to ~5 C moves VREF by only ~1.4 mV.
-- **VS_BUFF (added 2026-11-21, simulator only):** PSU OUT2 ramps to 5.0 V in `psu.ramp_step` steps after VIN, with a 100 mA current limit and 5.5 V OVP (`temp.vs_buff_current_limit`, `temp.vs_buff_ovp`). Once up, more than `temp.vs_buff_max_current` (30 mA; U2 and the TMP235 draw up to ~15 mA) means a miswire or a short: OUT2 goes back to 0 V and the run stops. Each sample also records OUT2's current (`i_vs_buff_a`). It is refused with `--vref ext` (which also needs OUT2). At the end, and in the shutdown, OUT2 goes to 0 V before the outputs turn off.
-- **Setup checks:** every T within `temp_min`..`temp_max` (−20 to 80 C: scope 2 on J13 pin 5, VS_BUFF powered); VOUT near nominal; VREF within 20 % of `vref_nominal` (DMM on TP3).
-- **Notes:** stopped with Ctrl-C; no tempco (fewer than two plateaus far enough apart); the supply current rising by more than 20 % (condensation on the board).
-- **Options:** `--minutes 30`, `--interval 2`, `--vin`, `--no-dmm` (no VREF), `--enable dio`.
-- **Config:** `[temp]`.
+  - **Plateaus:** a sample is stable when T held within `stable_delta` (0.5 C) for `stable_window` (30 s); a run of stable samples lasting at least `stable_window` is averaged into one point. Two plateaus `min_spread` (2 C) apart give a straight-line tempco.
+  - **Curve** (`curve.csv`, `bins.csv`; `procedures/temp_curve.py`): each sample's rate (a line over `rate_window`, 60 s) and direction (heating / cooling / steady below 0.05 C/min). Samples faster than `max_rate` (1.5 C/min, above the heater's 1 C/min), DMM misreads and excluded time ranges stay out. The rest are binned every `curve_bin` (0.5 C) per direction (`bins.csv`), and `curve.csv` averages the directions in each bin: the TMP235 sits beside U1, so it reads low while heating and high while cooling, and the average cancels most of that lag. A parabola VREF = v25 + b (T - 25) + c (T - 25)^2 gives the peak, the curvature (ppm/C^2) and the tempco at 25 C; the box tempco is (max - min) / (mean x span).
+  - **Misreads:** VREF off VOUT by more than `misread_tolerance` (5 mV) beyond their usual difference, with VOUT normal, is the DMM's, not VREF's: left out and listed. VREF and VOUT moving together is the reference itself and stays in (a bin whose VREF spread is over 0.5 mV gets a note: look at the log, and exclude the range with `temp-curve --exclude` if it was a disturbance).
+- **Setup checks:** every T within `temp_min`..`temp_max` (-20 to 80 C); VOUT near nominal; VREF within 20 % of `vref_nominal` (misreads aside); misreads at most `misread_max_fraction` (1 %) of the samples.
+- **Notes:** Ctrl-C; no tempco; misreads; wide bins; fast samples left out; the supply current rising by more than 20 % (condensation); the heater's summary.
+- **Options:** `--minutes`, `--interval 2`, `--vin`, `--no-dmm` (no VREF, no curve), `--enable dio`, `--heater`.
+- **Config:** `[temp]`, `[heater]`.
+
+### `temp-curve`: join the cold and hot runs
+`uv run ldo-bench temp-curve <cold run> <hot run> [--exclude RUN:START-END ...]` reads each folder's `data.csv` (never changes it), redoes the curve with the config's `[temp]` settings, and writes a new folder `results/temp-curve/<stamp>_<board>_temp-curve[_SIM]`: `curve.csv` (per bin, the mean of the runs that have it), `bins.csv` (every run's bins per direction), `summary.json` (fit, overlaps, each run's misreads and exclusions), `plot.png`. Where the runs overlap in temperature, the mean VREF difference between them is reported, not corrected: a large one means the setup change moved VREF. `--exclude 1:40-110` leaves out run 1's samples from 40 s to 110 s (an operator's choice, listed in the summary). Touches no instrument.
 
 ## External load: `--ext-load-ohm`
 

@@ -33,7 +33,9 @@ def test_temp_on_sim_gives_the_tempco(jafwak):
     with open_bench(jafwak, sim=True) as b:
         b.sim_model.temp_profile = step_profile
         res = temp.run(b, tc)
-        tc_sim = b.sim_model.bgr_tc
+        m = b.sim_model
+        # the line through 25 C and 5 C on VREF = V25 (1 + tc d + tc2 d^2), d = T - 25
+        tc_sim = m.bgr_tc - 20 * m.bgr_tc2
     assert not res.issues, res.issues
     s = res.summary()
     assert s["plateaus"] == 2
@@ -88,7 +90,7 @@ def test_wiring_names_the_board_points(jafwak):
         text = "\n".join(temp.wiring(b, jafwak.temp))
     for s in (
         "J13 pin 5 (TMP)",
-        "PSU OUT2 + -> VS_BUFF (J4)",
+        "Separate supply + (5.0 V) -> VS_BUFF (J4)",
         "VREF (TP3)",
         "J13 pin 4 (OUTA)",
         "VIN_DC (J7)",
@@ -97,7 +99,13 @@ def test_wiring_names_the_board_points(jafwak):
     # the 1 mA comes from load code 1 (B0, 1.2 kOhm), not a resistor fitted by hand
     assert jafwak.temp.load_code == 1 and "AD2 DIO 0 -> J13 pin 7 (B0)" in text
     assert "Optional" not in text
-    assert "Separate supply" not in text  # VS_BUFF comes from PSU OUT2 now
+    assert "PSU OUT2 + -> VS_BUFF" not in text  # temp.vs_buff_source = "external" on JAFWAK (2026-11-21)
+
+
+def test_wiring_with_vs_buff_on_out2(jafwak_out2):
+    with open_bench(jafwak_out2, sim=True) as b:
+        text = "\n".join(temp.wiring(b, jafwak_out2.temp))
+    assert "PSU OUT2 + -> VS_BUFF (J4)" in text and "Separate supply" not in text
 
 
 def test_duration_is_capped(jafwak):
@@ -108,6 +116,12 @@ def test_duration_is_capped(jafwak):
 
 
 # --- VS_BUFF from PSU OUT2 (powers the TMP235) ----------------------------------------
+@pytest.fixture
+def jafwak_out2(jafwak):
+    """JAFWAK with temp.vs_buff_source = "psu": VS_BUFF from PSU OUT2 instead of a separate supply."""
+    return jafwak.model_copy(update={"temp": jafwak.temp.model_copy(update={"vs_buff_source": "psu"})})
+
+
 def watch_out2(b) -> list:
     """Spy on set_voltage of every PSU second output the run opens; returns the call log."""
     calls: list = []
@@ -122,24 +136,24 @@ def watch_out2(b) -> list:
     return calls
 
 
-def test_temp_powers_vs_buff_from_out2(jafwak):
-    tc = jafwak.temp
-    with open_bench(jafwak, sim=True) as b:
+def test_temp_powers_vs_buff_from_out2(jafwak_out2):
+    tc = jafwak_out2.temp
+    with open_bench(jafwak_out2, sim=True) as b:
         calls = watch_out2(b)
         res = temp.run(b, tc.model_copy(update={"duration": 60, "interval": 5}))
     assert not res.issues, res.issues
     levels = [a[0] for n, a, _ in calls if n == f"OUT{tc.vs_buff_channel}"]
     assert max(levels) == pytest.approx(tc.vs_buff_v) and levels[-1] == 0.0  # up, then back to 0 V
-    assert all(np.diff(levels[: levels.index(max(levels)) + 1]) <= jafwak.psu.ramp_step + 1e-9)  # ramped
+    assert all(np.diff(levels[: levels.index(max(levels)) + 1]) <= jafwak_out2.psu.ramp_step + 1e-9)  # ramped
     assert "i_vs_buff_a" in res.rows[0]
 
 
-def test_vs_buff_overcurrent_stops_the_run(jafwak):
-    with open_bench(jafwak, sim=True) as b:
+def test_vs_buff_overcurrent_stops_the_run(jafwak_out2):
+    with open_bench(jafwak_out2, sim=True) as b:
         miswire(b, vs_buff_short=True)
         calls = watch_out2(b)
         with pytest.raises(InstrumentError, match="VS_BUFF"):
-            temp.run(b, jafwak.temp.model_copy(update={"duration": 30, "interval": 5}))
+            temp.run(b, jafwak_out2.temp.model_copy(update={"duration": 30, "interval": 5}))
         assert calls[-1][1][0] == 0.0  # OUT2 back at 0 V before the error
 
 
@@ -197,3 +211,17 @@ def test_vs_buff_config_checks(jafwak, update, match):
     data["temp"] |= update
     with pytest.raises(ValidationError, match=match):
         BenchConfig.model_validate(data)
+
+
+def test_a_steady_ramp_is_not_a_plateau(jafwak):
+    """A 1 C/min ramp sits right at stable_delta / stable_window (0.5 C in 30 s): noise must not make
+    it a string of short plateaus (seen in the simulated hot run, 2026-11-21)."""
+    with open_bench(jafwak, sim=True) as b:
+        b.sim_model.temp_profile = lambda t: 20 + t / 60 + 0.02 * np.sin(t)
+        res = temp.run(b, jafwak.temp.model_copy(update={"duration": 1200, "interval": 2}))
+    assert res.points == []
+
+
+def test_curve_keeps_a_1c_per_min_ramp(jafwak):
+    """The heater ramps at 1 C/min: max_rate must sit above that, or noise drops half the ramp."""
+    assert jafwak.temp.max_rate > jafwak.heater.rate

@@ -21,6 +21,18 @@ New, for Tests 5 onward (not run yet): `enable-sine --output vout` (Test 5), `li
 (Test 7, Method B). The 1 mA the plan got from 1.2 kOhm on J5 is now load code 1, so `--ext-load-ohm`
 isn't needed for Tests 6-8; load-tran steps 1 <-> 20.04 mA (codes 1 <-> 22).
 
+## 2026-11-21: first `temp` on JAFWAK (heater by hand); `temp --heater` and `temp-curve` (simulator only)
+
+**Run:** `results/temp/20261121-133155_JAFWAK_temp_INVALID` (30 min, 621 samples every ~2.9 s, load code 1, VS_BUFF from PSU OUT2, the 1 Ohm 10 W resistor at 9 W (3 A) from a separate supply in direct contact with U1 and the TMP235, then off).
+
+- **Range:** 20.2 to 62.7 C. Heating was 5-8 C/min (peaks near 46 C/min), cooling 3 C/min tapering to 0.3 C/min.
+- **VS_BUFF from OUT2 worked:** OUT2 sourced 0.4-0.7 mA (rising with T; 9.7 mA on the first sample), far under the 30 mA trip.
+- **Two VREF drops, VOUT with them** (so the reference itself, not the DMM): to ~1.063 V (-134 mV) at 40-100 s and to ~1.173 V (-24 mV) at 280-420 s, each recovering within 1-2 min. They don't follow the temperature. Not explained: placing the heater, its supply switching on (ground coupling), pressure on the package, or light are the candidates. An opaque box over the board is in the run instructions now.
+- **Three DMM misreads** at 545, 548 and 551 s (VREF 1.180, 1.457, 1.055 V with VOUT at 1.1976 V). One was over the 20 % VREF check, which made the run `_INVALID`. Misreads are now left out and listed instead (an issue only above 1 % of samples).
+- **The cooling half fits a parabola** (56 to 22.5 C): about -1.3 uV/C^2, peak near 48 C, 41 uV rms against 110 uV for a straight line.
+- **`temp-curve` on it:** with everything in, 388 ppm/C and 3.7 mV rms (the drops). With 30-130 s and 270-430 s excluded (`results/temp-curve/20261121-141523_JAFWAK_temp-curve`): peak 43.3 C, -1.17 ppm/C^2, +42.6 ppm/C at 25 C, box 16.0 ppm/C over 20.8-62.7 C, 59 uV rms. Heating and cooling at different rates, so the sensor lag isn't averaged out here.
+- **Added, simulator only:** `temp --heater` (PSU OUT2 on the resistor, PI ramp 1 C/min to 60 C and back, 9 W / 3.0 V / 3.2 A / OVP 3.5 V / 70 C cutoff, approved), cold and hot run instructions in the wiring prompt, `temp.vs_buff_source` (JAFWAK: a separate supply for both runs), the curve (`curve.csv`, `bins.csv`) and `temp-curve`. Simulated hot run: `results/temp/20261121-141230_JAFWAK_temp_SIM` (peak 52.0 C against the model's 51.8 C).
+
 ## 2026-11-20: HP 8591E on GPIB, first `sa-check`; `line-tran --vref ad2` (simulator only)
 
 - **8591E found** on the UsbGpib adapter, `USB0::1003::8293::HP8591E::0::INSTR`. Empty reply to `*IDN?`; `ID?` → `HP8591E`, `REV?` → `940822`, `SER?` → `3728`.

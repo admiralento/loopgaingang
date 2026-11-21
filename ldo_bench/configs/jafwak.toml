@@ -124,11 +124,40 @@ interval = 2.0               # s between samples
 duration = 1800              # s (max 2 h); Ctrl-C ends the log early and keeps the data
 stable_window = 30           # s: a plateau is T within stable_delta for this long (first plan 3.10)
 stable_delta = 0.5           # C
-vs_buff_v = 5.0              # PSU OUT2 + -> VS_BUFF (J4), OUT2 - -> GND: powers the TMP235 (and U2)
+vs_buff_source = "external"  # VS_BUFF (TMP235, U2) on a separate supply by hand, both runs (2026-11-21); "psu" = OUT2
+vs_buff_v = 5.0              # with "psu": PSU OUT2 + -> VS_BUFF (J4), OUT2 - -> GND
 vs_buff_channel = 2
 vs_buff_current_limit = 0.1  # A on OUT2 (approved 2026-11-21)
 vs_buff_ovp = 5.5            # OUT2 OVP (approved 2026-11-21)
 vs_buff_max_current = 0.03   # A: more once up means a miswire or short; OUT2 comes down and the run stops
+# curve.csv (VREF against T; temp-curve)
+curve_bin = 0.5              # C
+max_rate = 1.5               # C/min: faster samples stay out of the curve (sensor lag); above heater.rate (1 C/min)
+rate_window = 60             # s
+misread_tolerance = 0.005    # V: VREF (DMM) off VOUT (AD2) by more than usual = a DMM misread, left out and listed
+misread_max_fraction = 0.01  # more than 1 % misreads = a setup issue (_INVALID)
+
+[heater]                     # temp --heater: 1 Ohm 10 W ceramic resistor on PSU OUT2, on U1 and the TMP235 (paper between)
+channel = 2
+voltage_range = "LOW"        # OUT2 8 V / 5 A range (above 2.5 A)
+resistance = 1.0             # ohm, nominal
+r_min = 0.5                  # the 0.2 V check: outside 0.5..2 Ohm stops the run (OUT2 still on VS_BUFF reads kOhm)
+r_max = 2.0
+check_v = 0.2
+max_power = 9.0              # W (approved 2026-11-21)
+v_max = 3.0                  # V (approved 2026-11-21)
+current_limit = 3.2          # A (approved 2026-11-21)
+ovp = 3.5                    # V (approved 2026-11-21)
+rate = 1.0                   # C/min up and down (approved 2026-11-21)
+t_high = 60.0                # C, top of the ramp (approved 2026-11-21)
+hold = 300                   # s at t_high
+end_above_start = 2.0        # C: the down ramp ends here above the start
+t_cutoff = 70.0              # C: heater off, run stops (approved 2026-11-21)
+kp = 1.5                     # W/C   (PI gains: tuned on the simulator only)
+ki = 0.01                    # W/(C s)
+stall_window = 180           # s: target 3 C ahead for 3 min and T rose < 1 C = heater not on the board
+stall_error = 3.0
+stall_rise = 1.0
 
 [load_tran]
 vin = 1.8

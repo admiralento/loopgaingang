@@ -10,7 +10,12 @@ from helpers import config_path, invoke
 
 from ldo_bench.cli import app
 
-NOT_RUNS = {"check-config", "discover", "compare"}  # these don't run a test (compare is in test_vref)
+NOT_RUNS = {
+    "check-config",
+    "discover",
+    "compare",
+    "temp-curve",
+}  # no test run (compare: test_vref; temp-curve: test_temp_curve)
 COMMANDS = sorted((c.name or c.callback.__name__.replace("_", "-")) for c in app.registered_commands)
 TESTS = [c for c in COMMANDS if c not in NOT_RUNS]
 BOARDS = ["jafwak", "demo_board"]

@@ -133,8 +133,9 @@ class SupplyOutput(Protocol):
 
     channel: int  # 1-based output number
 
-    def setup(self, *, current_limit: float, ovp: float | None) -> None:
-        """Current limit (A) and OVP (V, None for none) on this output, then 0 V. Raises if refused."""
+    def setup(self, *, current_limit: float, ovp: float | None, voltage_range: str | None = None) -> None:
+        """Current limit (A), OVP (V, None for none) and range (None: as is) on this output, then 0 V.
+        Raises if refused."""
         ...
 
     def set_voltage(self, volts: float) -> None:

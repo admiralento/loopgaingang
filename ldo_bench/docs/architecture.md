@@ -57,7 +57,7 @@ ldo_bench/
 │   │   ├── agilent546xx.py Agilent 54621A cross-check scope
 │   │   ├── hp859x.py       HP 8591E spectrum analyzer (8590 command set, ID? not *IDN?)
 │   │   └── sim.py          the simulated bench (LdoModel and fake instruments)
-│   └── procedures/         one module per test (see below), plus transient.py shared by the transient tests
+│   └── procedures/         one module per test (see below), plus transient.py shared by the transient tests and temp_curve.py (VREF against T, shared by temp and temp-curve)
 └── tests/                  pytest: drivers against fake serial/VISA links, every procedure on the simulator
     ├── conftest.py         fixtures (configs, boards, both buffer paths) and the no-real-bus guard
     ├── helpers.py          miswire(), spy(), config_path(), invoke() for the tests
@@ -102,8 +102,11 @@ Procedures never program a voltage onto the DUT directly. They call Bench method
 | `ldo_enable(on)` | the same, for `--enable dio` only (no-op when EN is tied on) | fixed by `[enable]` |
 | `loadbank.set(code)` | AD2 DIO → load bank | `dut.i_max`, any `loadbank.external_ohm` included (`LoadBank.require(codes)` checks a run's codes before power-up) |
 | `reference_on()` / `reference_off()` | PSU's other output (`--vref ext`) or AD2 V+ (`--vref ad2`) → VREF_IN | `vref.v_max`, at most `vref.above_vin` above VIN; with V+, VIN measured at least the reference first |
+| `heater_on()` / `heater_set(w)` / `heater_off()` | PSU's other output (`heater.channel`) -> the power resistor on U1 and the TMP235 (`temp --heater`); not a voltage on the DUT, but it heats it | resistance within `heater.r_min`..`r_max` at `check_v` first; at most `heater.max_power` and `heater.v_max`; VIN up first; refused while that output is the reference, the split rails, U2's V- or VS_BUFF; 0 V first in every shutdown |
 | `vs_buff_on(v)` / `vs_buff_off()` | PSU's other output (`temp.vs_buff_channel`) → VS_BUFF (J4), which powers the TMP235 and U2 (`temp`) | `psu.v_max`; VIN up first from the PSU; refused while that output is the reference, the split rails or U2's V−; more than `temp.vs_buff_max_current` stops the run |
 | `split_rails_on()` / `split_rails_off()` | PSU's other output → BGR_VDD / OTA_VDD (J1 pins 1 and 13; `line-reg --split-rails`, Method B) | `split_rails.v_max`; VIN up first and at or above `split_rails.vin_floor` while up; more than `max_current` stops the run |
+
+The heater loop itself (target ramp, PI, the t_cutoff / sensor / no-rise interlocks) is in `procedures/temp.py`; the curve (rates, misreads, bins, parabola fit, merging runs) in `procedures/temp_curve.py`, which `temp` and `ldo-bench temp-curve` share. The simulator heats a two-node model (die, then the TMP235 lagging it) when the heater is wired, and the BGR has a curvature term (`bgr_tc2`).
 
 Other things the Bench does:
 - **Current limit:** a procedure whose section has `high_current` calls `set_psu_limit(high=...)` right after the wiring prompt (psu-hold / psu-sweep pass `amps=`); otherwise the first PSU use sets `psu.current_limit`. It is logged and saved in `meta.json` (`psu_current_limit_a`, from `Bench.psu_current_limit`). A later request for a different limit is refused: the limit never changes with the output on.
