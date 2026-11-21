@@ -1,6 +1,7 @@
 """AD2 driver logic that can be checked without hardware (fake pydwf device)."""
 
 import numpy as np
+import pytest
 
 from ldo_bench.instruments.ad2 import AnalogDiscovery2, _find_crossing
 
@@ -188,3 +189,21 @@ def test_set_dc_after_a_square_is_dc_again():
     ad.set_dc(1, 0.0)
     assert ao.calls["nodeFunctionSet"][2] == p.DwfAnalogOutFunction.DC
     assert ao.calls["nodeOffsetSet"][2] == 0.0
+
+
+def test_load_library_without_waveforms_raises_instrument_error(monkeypatch):
+    """No dwf.dll: pydwf raises AttributeError (ctypes.cdll.dwf), which must become an InstrumentError.
+
+    Seen on Windows 2026-11-21: discover crashed with a traceback instead of the install hint.
+    """
+    import pydwf
+
+    from ldo_bench.instruments import ad2
+    from ldo_bench.instruments.base import InstrumentError
+
+    def no_runtime():
+        raise AttributeError("dwf")
+
+    monkeypatch.setattr(pydwf, "DwfLibrary", no_runtime)
+    with pytest.raises(InstrumentError, match="WaveForms"):
+        ad2.load_library()

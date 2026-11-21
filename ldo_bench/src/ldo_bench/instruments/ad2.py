@@ -58,7 +58,9 @@ def load_library():
     pydwf = _pydwf()
     try:
         return pydwf.DwfLibrary()
-    except pydwf.PyDwfError as e:
+    # Without the runtime, pydwf raises AttributeError on Windows (ctypes.cdll.dwf) and OSError on
+    # macOS (LoadLibrary), not PyDwfError.
+    except (pydwf.PyDwfError, AttributeError, OSError) as e:
         raise InstrumentError(
             "could not load the Digilent WaveForms runtime. Install WaveForms from digilent.com "
             "(it provides dwf.dll / dwf.framework)."
