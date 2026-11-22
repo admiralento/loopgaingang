@@ -1,0 +1,523 @@
+{
+  "test": "temp-curve",
+  "started": "2026-11-21T20:01:21",
+  "finished": "2026-11-21T20:01:21",
+  "sim": false,
+  "instruments": {},
+  "config_file": null,
+  "config": {
+    "dut": {
+      "name": "JAFWAK",
+      "vout_nominal": 1.2,
+      "vin_max": 1.9,
+      "vout_tolerance": 0.2,
+      "i_max": 0.021
+    },
+    "psu": {
+      "resource": "",
+      "baud": 9600,
+      "parity": "none",
+      "stopbits": 2,
+      "flow": "dsr-pacing",
+      "gpib_address": 5,
+      "channel": 1,
+      "voltage_range": null,
+      "current_limit": 0.01,
+      "high_current_limit": 0.06,
+      "ovp": 6.0,
+      "v_max": 5.5,
+      "idle_voltage": 1.8,
+      "ramp_step": 0.25,
+      "settle_time": 0.3
+    },
+    "ad2": {
+      "serial": "",
+      "vout_channel": 1,
+      "ref_channel": 2,
+      "vout": {
+        "range": 5.0,
+        "offset": 0.0
+      },
+      "ref": {
+        "range": 50.0,
+        "offset": 0.0
+      },
+      "wavegen_channel": 1,
+      "vin_offset_error": 0.01,
+      "vin_gain_error": 0.005
+    },
+    "dmm": {
+      "resource": "",
+      "baud": 9600,
+      "parity": "even",
+      "stopbits": 2,
+      "flow": "dsr-pacing",
+      "enabled": true,
+      "nplc": 10,
+      "range": null,
+      "samples": 1
+    },
+    "xscope": {
+      "resource": "",
+      "baud": 9600,
+      "parity": "none",
+      "stopbits": 1,
+      "flow": "dsrdtr",
+      "enabled": true,
+      "vout_channel": 1,
+      "ref_channel": 2,
+      "vout_range": 0.16,
+      "points": 2000,
+      "timeout": 60.0
+    },
+    "sa": {
+      "enabled": true,
+      "resource": "",
+      "timeout": 5.0,
+      "cal_frequency": 300000000.0,
+      "cal_level": -20.0,
+      "cal_tolerance_db": 1.0,
+      "cal_span": 1000000.0,
+      "cal_rbw": 3000.0,
+      "floor_frequency": 1000000.0
+    },
+    "loadbank": {
+      "dio_pins": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "resistors": [
+        1200.0,
+        680.0,
+        330.0,
+        150.0,
+        82.0
+      ],
+      "switch_resistance": 0.0,
+      "active_high": true,
+      "external_ohm": null
+    },
+    "analysis": {
+      "settle_fraction": 0.1,
+      "smooth_time": 1e-06,
+      "peak_window": 2e-05,
+      "blank_time": 5e-07,
+      "settle_reference": "pre"
+    },
+    "psu_check": {
+      "points": [
+        0.5,
+        1.0,
+        1.5,
+        2.0,
+        2.5,
+        3.0,
+        4.0,
+        5.0
+      ],
+      "readings": 3,
+      "settle_time": 0.5
+    },
+    "loadbank_check": {
+      "voltage": 1.2,
+      "current_from": "dmm",
+      "dmm_range": 1.0,
+      "readings": 3,
+      "settle_time": 0.2,
+      "tolerance": 0.1,
+      "abs_tolerance": 0.0003,
+      "dmm_abs_tolerance": 5e-05,
+      "high_current": true
+    },
+    "smoke": {
+      "high_current": true
+    },
+    "psu_hold": {
+      "current_limit": null,
+      "to": "vin",
+      "v_tolerance": 0.05,
+      "near_limit": 0.9,
+      "voltage": 1.8,
+      "interval": 1.0,
+      "max_minutes": 60.0
+    },
+    "psu_sweep": {
+      "current_limit": null,
+      "to": "vin",
+      "v_tolerance": 0.05,
+      "near_limit": 0.9,
+      "start": 0.0,
+      "stop": 1.8,
+      "step": 0.05,
+      "dwell": 0.5,
+      "updown": false
+    },
+    "load_reg": {
+      "vin": 1.8,
+      "codes": [],
+      "settle_time": 0.05,
+      "dc_window": 0.1,
+      "psu_readback": true,
+      "high_current": true
+    },
+    "line_reg": {
+      "vin_start": 1.25,
+      "vin_stop": 1.9,
+      "vin_step": 0.01,
+      "load_code": 22,
+      "fit_vin_min": null,
+      "dropout_fraction": 0.01,
+      "dc_window": 0.1,
+      "psu_readback": true,
+      "vin_source": "ad2",
+      "high_current": true
+    },
+    "vref_line": {
+      "vin_high": 1.9,
+      "vin_low": 1.4,
+      "vin_step": 0.02,
+      "load_code": 0,
+      "vref_nominal": 1.204,
+      "vref_tolerance": 0.2,
+      "drop_fraction": 0.01,
+      "settle_time": 0.2,
+      "dc_window": 0.1,
+      "vin_source": "ad2"
+    },
+    "temp": {
+      "vin": 1.8,
+      "load_code": 1,
+      "interval": 2.0,
+      "duration": 7200.0,
+      "stable_window": 30.0,
+      "stable_delta": 0.5,
+      "min_spread": 2.0,
+      "dc_window": 0.1,
+      "tmp_offset": 0.5,
+      "tmp_slope": 0.01,
+      "temp_min": -20.0,
+      "temp_max": 80.0,
+      "vref_nominal": 1.204,
+      "vref_tolerance": 0.2,
+      "psu_readback": true,
+      "vs_buff_source": "external",
+      "vs_buff_v": 5.0,
+      "vs_buff_channel": 2,
+      "vs_buff_current_limit": 0.1,
+      "vs_buff_ovp": 5.5,
+      "vs_buff_max_current": 0.03,
+      "curve_bin": 0.5,
+      "max_rate": 1.5,
+      "rate_window": 60.0,
+      "direction_threshold": 0.05,
+      "misread_tolerance": 0.005,
+      "misread_max_fraction": 0.01,
+      "spread_note": 0.0005
+    },
+    "heater": {
+      "channel": 2,
+      "voltage_range": "LOW",
+      "resistance": 1.0,
+      "r_min": 0.5,
+      "r_max": 2.0,
+      "check_v": 0.2,
+      "max_power": 9.0,
+      "v_max": 3.0,
+      "current_limit": 3.2,
+      "ovp": 3.5,
+      "rate": 1.0,
+      "t_high": 60.0,
+      "hold": 300.0,
+      "end_above_start": 2.0,
+      "t_cutoff": 70.0,
+      "kp": 1.5,
+      "ki": 0.01,
+      "stall_window": 180.0,
+      "stall_error": 3.0,
+      "stall_rise": 1.0
+    },
+    "load_tran": {
+      "sample_rate": 10000000.0,
+      "n_samples": 8192,
+      "pre_trigger": 0.2,
+      "averages": 64,
+      "edges": [
+        "rising",
+        "falling"
+      ],
+      "timeout": 5.0,
+      "rest_time": 0.02,
+      "plot_window": null,
+      "vin": 1.8,
+      "code_low": 1,
+      "code_high": 22,
+      "trigger_pin": null,
+      "dio_high_level": 3.3,
+      "high_current": true
+    },
+    "line_tran": {
+      "proof_levels": [
+        0.1,
+        0.3
+      ],
+      "sample_rate": 10000000.0,
+      "n_samples": 8192,
+      "pre_trigger": 0.2,
+      "averages": 16,
+      "edges": [
+        "rising",
+        "falling"
+      ],
+      "timeout": 5.0,
+      "rest_time": 0.02,
+      "plot_window": null,
+      "psu_voltage": 5.0,
+      "vin_low": 1.75,
+      "vin_high": 1.85,
+      "load_code": 22,
+      "buffer_headroom": 2.0,
+      "w1_max": 1.95,
+      "settle_window": 0.02,
+      "square_hz": 20.0
+    },
+    "enable": {
+      "dio_pin": 5,
+      "dio_pin_n": 6,
+      "v33": 3.3,
+      "settle_time": 0.2
+    },
+    "board": {
+      "vin_dc": "VIN_DC (J7)",
+      "supply_gnd": "GND (J11)",
+      "ext_load": "VOUT (J5) to GND (J12)",
+      "dc_jumpers": [
+        "JP4 2-3 \"DC\" (VIN from VIN_DC; nothing on VIN_FG (J3))"
+      ],
+      "vin_probe": "J13 pin 1 (INA)",
+      "vout_probe": "J13 pin 4 (OUTA)",
+      "probe_gnd": "J13 pin 6 (GND)",
+      "enable_ldo_in": "EN_IN (J8 1-2, LDO side)",
+      "dmm_vout": "OUTA (TP4)",
+      "dmm_gnd": "GND (TP12)",
+      "bank_bits": [
+        "J13 pin 7 (B0)",
+        "J13 pin 9 (B1)",
+        "J13 pin 11 (B2)",
+        "J13 pin 13 (B3)",
+        "J13 pin 15 (B4)"
+      ],
+      "bank_supply": [],
+      "bank_jumpers": [
+        "J10 \"LOAD\" (VOUT -> load cell)"
+      ],
+      "ad2_gnd": "J13 pin 8 (GND)",
+      "vs_buff": "VS_BUFF (J4)",
+      "buffer_input": "VIN_FG (J3)",
+      "buffer_jumpers": [
+        "JP4 1-2 \"FG\" (VIN from U2; nothing on VIN_DC (J7))"
+      ],
+      "enable_in": "J13 pin 12 (EN)",
+      "enable_in_n": "J13 pin 10 (~EN)",
+      "enable_vio": "J13 pin 14 (VIO)",
+      "enable_jumpers": [
+        "J6 7-8 \"EN\" (EN_AIN from the AD2; nothing else on J6)",
+        "J8 1-2 \"LDO\" (EN_OUT -> EN_IN)",
+        "J8 9-10 \"LDO\" (~EN_OUT -> ~EN_IN)"
+      ],
+      "static_enable_jumpers": [
+        "J6 1-2 \"HI\" (EN_AIN = VIN; nothing else on J6)",
+        "J8 1-2 \"LDO\" (EN_OUT -> EN_IN)",
+        "J8 9-10 \"LDO\" (~EN_OUT -> ~EN_IN)"
+      ],
+      "standard_jumpers": [
+        "J1 1-3 (BGR_VDD from INB)",
+        "J1 5-7 (VDD from INB)",
+        "J1 9-11 (EN_VDD from INB)",
+        "J1 13-15 (OTA_VDD from INB)",
+        "JP2 (the BGR drives VREF_IN)"
+      ]
+    },
+    "en_sine": {
+      "vin": 1.8,
+      "shape": "sine",
+      "frequency": 1000.0,
+      "low": 0.0,
+      "high": null,
+      "cycles": 4.0,
+      "n_samples": 8192,
+      "captures": 8,
+      "wavegen_channel": 1,
+      "timeout": 5.0,
+      "output": "en_out"
+    },
+    "en_current": {
+      "vin": 1.8,
+      "fstart": 10.0,
+      "fstop": 1000000.0,
+      "low": 0.0,
+      "high": null,
+      "readings": 5,
+      "settle_time": 0.5,
+      "dmm_range": 0.01,
+      "nplc": null,
+      "wavegen_channel": 1,
+      "swing_tolerance": 0.3
+    },
+    "startup": {
+      "vin": 1.8,
+      "load_code": 5,
+      "edges": [
+        "rising",
+        "falling"
+      ],
+      "window": 0.01,
+      "n_samples": 8192,
+      "pre_trigger": 0.1,
+      "averages": 8,
+      "off_time": 0.05,
+      "on_time": 0.05,
+      "en_in_range": 5.0,
+      "sense_ohm": 0.1,
+      "xscope_ina_channel": 1,
+      "xscope_inb_channel": 2,
+      "xscope_shunt_range": 0.16,
+      "xscope_trigger_high": 1.8,
+      "settle_fraction": 0.02,
+      "timeout": 5.0
+    },
+    "iq": {
+      "method": "shunt",
+      "rail": "total",
+      "sense_ohm": 0.1,
+      "vin_start": 1.4,
+      "vin_stop": 1.9,
+      "vin_step": 0.1,
+      "states": [
+        "enabled",
+        "disabled"
+      ],
+      "readings": 5,
+      "settle_time": 0.5,
+      "dmm_range": null,
+      "nplc": null,
+      "check_code": 5,
+      "check_tolerance": 0.15
+    },
+    "psrr": {
+      "proof_levels": [
+        0.1,
+        0.3
+      ],
+      "psu_voltage": 5.0,
+      "vin": 1.8,
+      "amplitude": 0.05,
+      "f_start": 100.0,
+      "f_stop": 1000000.0,
+      "points_per_decade": 3,
+      "load_code": 22,
+      "averages": 4,
+      "cycles": 20.0,
+      "n_samples": 8192,
+      "max_sample_rate": 100000000.0,
+      "settle_cycles": 20.0,
+      "level_tolerance": 0.15,
+      "buffer_headroom": 2.0,
+      "timeout": 10.0,
+      "meter": "ad2",
+      "sa_from": 30000.0,
+      "sa_cal_to": 100000.0,
+      "sa_cal_averages": 128,
+      "sa_cal_margin_db": 20.0,
+      "sa_path_tolerance_db": 2.0
+    },
+    "vref": {
+      "external_v": 1.204,
+      "bgr_measured": 1.17,
+      "psu_channel": 2,
+      "v_max": 1.3,
+      "current_limit": 0.005,
+      "ovp": 1.5,
+      "above_vin": 0.3,
+      "proof_step": 0.02,
+      "proof_follow": 0.5,
+      "settle_time": 0.3
+    },
+    "buffer": {
+      "v_minus": 5.0,
+      "channel": 2,
+      "current_limit": 0.02,
+      "ovp": 6.0,
+      "rail_current_limit": 0.1,
+      "ramp_step": 0.1,
+      "vin_window": [
+        -0.1,
+        0.3
+      ]
+    },
+    "split_rails": {
+      "psu_channel": 2,
+      "voltage": 1.8,
+      "v_max": 1.9,
+      "current_limit": 0.005,
+      "ovp": 2.2,
+      "max_current": 0.001,
+      "vin_floor": 1.0,
+      "settle_time": 0.3
+    }
+  },
+  "git": {
+    "commit": "7cf1364ba92c42dcd308241fe6fe0084d21b1fc9",
+    "dirty": false
+  },
+  "versions": {
+    "python": "3.12.16",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "ldo-bench": "0.1.0",
+    "numpy": "2.5.4",
+    "pyvisa": "1.16.2",
+    "pyvisa-py": "0.8.1",
+    "pydwf": "1.1.19",
+    "matplotlib": "3.11.2"
+  },
+  "runs": [
+    "results\\temp\\20261121-184824_JAFWAK_temp_cold",
+    "results\\temp\\20261121-195144_JAFWAK_temp_hot"
+  ],
+  "exclude_s": [
+    [],
+    []
+  ],
+  "curve_settings": {
+    "vin": 1.8,
+    "load_code": 1,
+    "interval": 2.0,
+    "duration": 1800.0,
+    "stable_window": 30.0,
+    "stable_delta": 0.5,
+    "min_spread": 2.0,
+    "dc_window": 0.1,
+    "tmp_offset": 0.5,
+    "tmp_slope": 0.01,
+    "temp_min": -20.0,
+    "temp_max": 80.0,
+    "vref_nominal": 1.204,
+    "vref_tolerance": 0.2,
+    "psu_readback": true,
+    "vs_buff_source": "external",
+    "vs_buff_v": 5.0,
+    "vs_buff_channel": 2,
+    "vs_buff_current_limit": 0.1,
+    "vs_buff_ovp": 5.5,
+    "vs_buff_max_current": 0.03,
+    "curve_bin": 0.5,
+    "max_rate": 1.5,
+    "rate_window": 60.0,
+    "direction_threshold": 0.05,
+    "misread_tolerance": 0.005,
+    "misread_max_fraction": 0.01,
+    "spread_note": 0.0005
+  }
+}

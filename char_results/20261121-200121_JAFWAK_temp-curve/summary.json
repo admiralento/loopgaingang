@@ -1,0 +1,82 @@
+{
+  "valid": true,
+  "issues": [],
+  "notes": [
+    "run1:20261121-184824_JAFWAK_temp_cold: 67 samples ramping faster than max_rate (1.5 C/min) left out of the curve",
+    "the runs don't overlap in temperature: their agreement can't be checked"
+  ],
+  "fit": {
+    "v25_v": 1.197215994012768,
+    "b_v_per_c": 6.372709444507431e-05,
+    "c_v_per_c2": -1.509895620219101e-06,
+    "tc_at_25_ppm_per_c": 53.22940452163278,
+    "curvature_ppm_per_c2": -1.261172276155708,
+    "peak_c": 46.10314567169446,
+    "peak_v": 1.1978884150914222,
+    "peak_in_range": true,
+    "shape": "peak",
+    "residual_rms_v": 4.803981449287351e-05,
+    "t_min_c": 13.226610079339192,
+    "t_max_c": 60.38737768186186,
+    "box_tc_ppm_per_c": 28.752213030050562,
+    "bins": 92
+  },
+  "overlaps": [],
+  "bins": 92,
+  "runs": [
+    {
+      "label": "run1:20261121-184824_JAFWAK_temp_cold",
+      "fit": {
+        "v25_v": 1.1972092026119154,
+        "b_v_per_c": 7.817440454114555e-05,
+        "c_v_per_c2": 5.145364087067535e-07,
+        "tc_at_25_ppm_per_c": 65.29719648879644,
+        "curvature_ppm_per_c2": 0.4297798643580461,
+        "peak_c": -50.965862879976484,
+        "peak_v": 1.1942399095638672,
+        "peak_in_range": false,
+        "shape": "valley",
+        "residual_rms_v": 1.4191845612055083e-05,
+        "t_min_c": 13.226610079339192,
+        "t_max_c": 21.13983131679383,
+        "box_tc_ppm_per_c": 62.47039916234078,
+        "bins": 13
+      },
+      "bins": 13,
+      "samples_in_curve": 634,
+      "misreads": 0,
+      "misread_t_s": [],
+      "exclude_s": [],
+      "issues": [],
+      "notes": [
+        "67 samples ramping faster than max_rate (1.5 C/min) left out of the curve"
+      ]
+    },
+    {
+      "label": "run2:20261121-195144_JAFWAK_temp_hot",
+      "fit": {
+        "v25_v": 1.1971599552265206,
+        "b_v_per_c": 7.299987668854656e-05,
+        "c_v_per_c2": -1.7633606863075475e-06,
+        "tc_at_25_ppm_per_c": 60.97754637535791,
+        "curvature_ppm_per_c2": -1.4729532829837206,
+        "peak_c": 45.69907684099708,
+        "peak_v": 1.1979154702550003,
+        "peak_in_range": true,
+        "shape": "peak",
+        "residual_rms_v": 3.328274937240129e-05,
+        "t_min_c": 21.551590384229588,
+        "t_max_c": 60.38737768186186,
+        "box_tc_ppm_per_c": 20.511409130992106,
+        "bins": 79
+      },
+      "bins": 79,
+      "samples_in_curve": 1188,
+      "misreads": 0,
+      "misread_t_s": [],
+      "exclude_s": [],
+      "issues": [],
+      "notes": []
+    }
+  ]
+}

@@ -1,0 +1,104 @@
+{
+  "valid": true,
+  "issues": [],
+  "notes": [
+    "the log was stopped with Ctrl-C after 701 samples",
+    "67 samples ramping faster than max_rate (1.5 C/min) left out of the curve"
+  ],
+  "samples": 701,
+  "duration_s": 3465.219000000041,
+  "stopped_early": true,
+  "plateaus": 7,
+  "plateau_points": [
+    {
+      "temp_c": 21.181127782301704,
+      "vref_v": 1.196908737878788,
+      "vout_v": 1.1969433680686092,
+      "t_start_s": 29.28200000000652,
+      "t_end_s": 202.40700000000652,
+      "samples": 66
+    },
+    {
+      "temp_c": 15.902357765801696,
+      "vref_v": 1.1965466711538464,
+      "vout_v": 1.1964951405555686,
+      "t_start_s": 356.98499999998603,
+      "t_end_s": 492.89100000006147,
+      "samples": 52
+    },
+    {
+      "temp_c": 14.53291686660197,
+      "vref_v": 1.1964551424242427,
+      "vout_v": 1.1963864027908817,
+      "t_start_s": 590.625,
+      "t_end_s": 763.875,
+      "samples": 66
+    },
+    {
+      "temp_c": 13.722478056662998,
+      "vref_v": 1.1964097628140702,
+      "vout_v": 1.1962204646823356,
+      "t_start_s": 1077.0470000000205,
+      "t_end_s": 1605.0470000000205,
+      "samples": 199
+    },
+    {
+      "temp_c": 13.307917122657008,
+      "vref_v": 1.1963334076923078,
+      "vout_v": 1.1961131300101768,
+      "t_start_s": 2159.609999999986,
+      "t_end_s": 2191.563000000082,
+      "samples": 13
+    },
+    {
+      "temp_c": 18.344561109230277,
+      "vref_v": 1.1967142759999998,
+      "vout_v": 1.1964351939694557,
+      "t_start_s": 2351.3910000000615,
+      "t_end_s": 2415.4070000000065,
+      "samples": 25
+    },
+    {
+      "temp_c": 21.129188531364605,
+      "vref_v": 1.1969191712871285,
+      "vout_v": 1.1965801581938669,
+      "t_start_s": 3199.5470000000205,
+      "t_end_s": 3465.219000000041,
+      "samples": 101
+    }
+  ],
+  "vref_tc_ppm_per_c": 59.046087067266605,
+  "vout_tc_ppm_per_c": 57.69598224353342,
+  "curve": {
+    "fit": {
+      "v25_v": 1.1972092026119154,
+      "b_v_per_c": 7.817440454114555e-05,
+      "c_v_per_c2": 5.145364087067535e-07,
+      "tc_at_25_ppm_per_c": 65.29719648879644,
+      "curvature_ppm_per_c2": 0.4297798643580461,
+      "peak_c": -50.965862879976484,
+      "peak_v": 1.1942399095638672,
+      "peak_in_range": false,
+      "shape": "valley",
+      "residual_rms_v": 1.4191845612055083e-05,
+      "t_min_c": 13.226610079339192,
+      "t_max_c": 21.13983131679383,
+      "box_tc_ppm_per_c": 62.47039916234078,
+      "bins": 13
+    },
+    "bins": 13,
+    "samples_in_curve": 634,
+    "misreads": 0,
+    "misread_t_s": [],
+    "exclude_s": [],
+    "issues": [],
+    "notes": [
+      "67 samples ramping faster than max_rate (1.5 C/min) left out of the curve"
+    ]
+  },
+  "heater": null,
+  "vref": {
+    "source": "bgr",
+    "bgr_measured_v": 1.17
+  }
+}
