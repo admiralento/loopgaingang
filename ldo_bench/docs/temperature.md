@@ -43,8 +43,10 @@ seen on 2026-11-21; they can change.
 2. **Next ~15-20 min:** ice on. It cools the board to roughly 5-10 °C; take it off once T stops
    falling. The fast drop when the ice goes on is over 1.5 °C/min and stays out of the curve.
 3. **Next ~40-60 min:** the board warms back up under the box. This slows as it nears room temperature.
-4. **Ctrl-C** once T is within about 1 °C of room temperature. That gives an overlap with the hot
-   run, which starts at room temperature. The data is kept and the bench shuts down normally.
+4. **Ctrl-C** while T is still a degree or two below room temperature, and start the hot run straight
+   away. The hot run then begins inside the cold run's range, so the two overlap and `temp-curve` can
+   check the join (on 2026-11-21 they missed by 0.4 °C). The data is kept and the bench shuts down
+   normally.
 
 `--minutes 90` is only the upper limit; up to `--minutes 120` is allowed.
 
@@ -54,7 +56,10 @@ seen on 2026-11-21; they can change.
   ramp down at 1 °C/min to the start + 2 °C (~36 min). Then the heater turns off and the run ends.
 - **Length:** `--minutes` defaults to 120 (the 2 h maximum). The run refuses to start if the profile
   won't fit.
-- **Start:** at room temperature. The run won't start within 5 °C of 60 °C.
+- **Start:** straight after the cold run, the box and board left as they are apart from swapping the
+  ice for the heater. The run won't start within 5 °C of 60 °C.
+- **Let it finish:** the down ramp gives the cooling half that cancels the sensor lag. On 2026-11-21 it
+  was stopped at 44 °C, so below that the hot run had heating samples only.
 - **Interlocks:** the heater goes to 0 W and the log stops if T goes above 70 °C, if the TMP235 reading is
   lost, or if the board doesn't warm while the heater is on (heater not on the board). Ctrl-C stops it
   too, and every shutdown turns the heater off first.
@@ -133,8 +138,11 @@ spread gets a note.
 **The first run** (2026-11-21, heater by hand at 9 W) is in [bench-log.md](bench-log.md). With its two
 VREF drops excluded, it gave a peak near 43 °C, −1.17 ppm/°C² and 16 ppm/°C box tempco over 21-63 °C.
 
-## Not yet verified on the board
+## On the board so far
 
-- The heater's PI gains were tuned on the simulator only. Watch the first minutes of the first hot run.
-- Whether the E3648A accepts OUT2's LOW range, 3.2 A limit and 3.5 V OVP. If it refuses, the run stops
-  before anything heats.
+- **2026-11-21 evening:** the first cold and hot runs, both valid ([bench-log.md](bench-log.md)). The
+  E3648A accepted OUT2's LOW range, 3.2 A limit and 3.5 V OVP; the heater measured 1.12 Ω; the PI loop
+  stayed within 0.7 °C of its target with the gains tuned on the simulator, at up to 6.6 W.
+- **Lesson:** the two runs didn't overlap (cold ended at 21.1 °C, hot started at 21.5 °C), so
+  `temp-curve` couldn't check the join. Start the hot run straight after the cold run, while the board is
+  still a degree or two below room temperature, and let it finish its down ramp (it was stopped at 44 °C).

@@ -177,7 +177,7 @@ Each run writes a folder under `results/<test>/`, e.g. `results/load-tran/202611
 | `sa-check`, the 8591E driver's other commands (added 2026-11-20) | yes (2026-11-20): every command accepted; calibrator −20.52 dBm at 300.003 MHz (−0.52 dB) |
 | `vref-line`, `temp`, `enable-sine --shape square`, `--enable dio` (added 2026-11-13) | simulator only |
 | `temp`: VS_BUFF from PSU OUT2 instead of a separate supply (added 2026-11-21) | simulator only; JAFWAK now uses `vs_buff_source = "external"` |
-| `temp --heater`, the curve (`curve.csv`), `temp-curve` (added 2026-11-21) | simulator only; the PI gains aren't tuned on the board yet |
+| `temp --heater`, the curve (`curve.csv`), `temp-curve` (added 2026-11-21) | yes (2026-11-21 evening): cold and hot runs valid, heater within 0.7 C of its target with the simulator's gains; results in `char_results/`, see bench-log |
 | `line-tran --enable dio` (added 2026-11-17) | simulator only |
 | `enable-current` (added 2026-11-13; replaces `iq --rail en`) | simulator only |
 | `enable-sine --output vout`, `line-reg --split-rails`, `--ext-load-ohm`, vref-line's 10 GOhm / 10 MOhm check (added 2026-11-14) | simulator only |

@@ -21,6 +21,16 @@ New, for Tests 5 onward (not run yet): `enable-sine --output vout` (Test 5), `li
 (Test 7, Method B). The 1 mA the plan got from 1.2 kOhm on J5 is now load code 1, so `--ext-load-ohm`
 isn't needed for Tests 6-8; load-tran steps 1 <-> 20.04 mA (codes 1 <-> 22).
 
+## 2026-11-21 (evening): `temp` cold run and `temp --heater` hot run on JAFWAK, joined by `temp-curve`
+
+Results in `char_results/` (moved there from `results/` by hand). VS_BUFF from a separate supply; load code 1 (1 mA) throughout; an opaque box over the board.
+
+- **Cold run** (`20261121-184824_JAFWAK_temp_cold`, valid): 701 samples over 57.8 min, ended with Ctrl-C. Ice took the board from 21.2 C down to 13.2 C and it warmed back to 21.2 C. 67 samples ramped faster than 1.5 C/min and stayed out of the curve; no misreads. VREF 1.19630-1.19698 V. Plateaus: 7, straight-line tempco +59.0 ppm/C. Its own parabola fit is meaningless (8 C of span, "peak" at -51 C).
+- **Hot run** (`20261121-195144_JAFWAK_temp_hot`, valid): the first heater run on the board. Heater measured **1.120 Ohm** at 0.2 V (nominal 1 Ohm). The E3648A accepted OUT2's LOW range, 3.2 A limit and 3.5 V OVP. It ramped from 21.5 C to **60.4 C** at up to **6.57 W** (of 9 W allowed), held, and was stopped with Ctrl-C after 59.4 min, 16 min into the down ramp at 44.3 C (`profile_done: false`; no interlock tripped). **The PI loop followed the target closely with the simulator's gains:** 0.10-0.38 C below it on the up ramp, -0.31 to +0.44 C at the hold, 0.01-0.68 C above it on the way down. No misreads. VREF 1.19693-1.19803 V. Fit: peak 45.7 C, -1.47 ppm/C^2, box 20.5 ppm/C over 21.6-60.4 C.
+- **No VREF drops this time.** VREF stayed within 0.7 mV (cold) and 1.1 mV (hot), against the -24 and -134 mV drops of the afternoon run. Differences from then: the box over the board, the heater controlled from OUT2 rather than set by hand, nothing moved during the runs.
+- **`temp-curve`** (`20261121-200121_JAFWAK_temp-curve`, valid, nothing excluded): peak **46.1 C**, **-1.26 ppm/C^2**, box **28.8 ppm/C** over 13.2-60.4 C. **The runs don't overlap**: the cold run ended at 21.1 C and the hot run started at 21.5 C, so no 0.5 C bin has both and any VREF shift between the two setups can't be checked. Next time, end the cold run and start the hot run while the board is still a degree or two below room temperature, so the hot run begins inside the cold run's range.
+- **Down ramp partial:** the hot run's curve has heating samples from 21.5 to 60.4 C but cooling only from 60.4 down to 44.3 C, so the lag averaging only covers 44-60 C; below 44 C the hot run's points are heating-only.
+
 ## 2026-11-21: first `temp` on JAFWAK (heater by hand); `temp --heater` and `temp-curve` (simulator only)
 
 **Run:** `results/temp/20261121-133155_JAFWAK_temp_INVALID` (30 min, 621 samples every ~2.9 s, load code 1, VS_BUFF from PSU OUT2, the 1 Ohm 10 W resistor at 9 W (3 A) from a separate supply in direct contact with U1 and the TMP235, then off).
